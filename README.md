@@ -114,7 +114,8 @@ asset, authority, budget, and transaction boundaries to their tests.
 upstream update conventions.
 
 The web and backend are [running on Railway](docs/implementation/railway-production.md),
-with domain configuration pending and fundraising and inference disabled. The
+at [telligence.money](https://telligence.money), with fundraising and inference
+disabled. The
 implementation has not been audited. The funded Venice bootstrap, vault credit
 recognition, capped inference, signer revocation, and complete unwind must be
 demonstrated before accepting public contributions.

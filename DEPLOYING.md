@@ -20,9 +20,19 @@ broadcast transactions or spend provider credit.
 
 Build the service image from the repository root: it includes the generated
 ABIs under `packages/contracts/`. Setting Railway's service root to
-`services/` would omit those files. Use the per-service Railway configuration
-under `services/*/railway.toml` and the `web/railway.json` web configuration.
-Set web's Railway root directory to `/web`; keep backend root at `/`.
+`services/` would omit those files. Keep backend root at `/`.
+
+The web service deploys GitHub repository `mejango/telligence`, branch `main`,
+with these explicit Railway settings: root `/web`, Dockerfile `Dockerfile`,
+watch path `/web/**`, healthcheck `/api/healthz`, and port `3000`. Leave custom
+build/start commands unset so the Dockerfile controls them. Watch paths remain
+relative to the repository root.
+
+No Railway config-file override is active. The retained `web/railway.json` and
+`services/*/railway.toml` describe legacy settings; their presence does not make
+them authoritative for a new service. Railway rejected the deprecated
+`railwayConfigFile` setting for this deployment. Configure and verify effective
+service settings directly. See [Railway's config-as-code notice](https://docs.railway.com/config-as-code).
 
 Use separate Railway `dev` and `production` environments with independently
 generated secrets, databases, public origins, manifests, and provider identities.
@@ -65,8 +75,11 @@ production secrets must be generated and managed independently.
 Other public web values remain documented in `web/.env.example`: Bendystraw
 origins, public Para application key/environment, optional WalletConnect project
 ID, and the immutable revision. Public build values are compiled into browser
-JavaScript. `NEXT_PUBLIC_VERSION` comes from Railway's
-`RAILWAY_GIT_COMMIT_SHA`, or from an explicit commit SHA in image builds.
+JavaScript. For GitHub deployments, leave `NEXT_PUBLIC_VERSION` unset: the
+Dockerfile uses `RAILWAY_GIT_COMMIT_SHA` at build and runtime. A manual override
+would take precedence and could label later releases with an old revision.
+Explicit version values are for standalone image or CLI uploads that lack a
+GitHub source SHA; remove such overrides when connecting GitHub autodeploys.
 
 `MODEL_POLICY_JSON` has the form `{ "models": { "model-id": { ...limits } } }`.
 Each model supplies integer `inputMicroUsdPerMillion`,

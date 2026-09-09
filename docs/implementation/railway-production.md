@@ -6,37 +6,75 @@ The public web origin is configured as `https://telligence.money`. The working
 Railway preview is https://web-production-24f6d.up.railway.app. The gateway API
 base is https://gateway-production-389d.up.railway.app/api/v1.
 
-## Released web artifact
+## Released GitHub web artifact
 
-The final web deployment is `SUCCESS`. Its `/api/healthz` returned HTTP 200 with
-the exact source revision below after deployment.
+The GitHub web deployment is `SUCCESS`. The public site's `/api/healthz`
+returned HTTP 200 with the exact Git commit below after deployment.
 
 | Identity | Value |
 | --- | --- |
 | Service | `6a3a5f99-b549-40fd-92f6-11b308671ef6` |
+| Deployment | `082d64ab-1512-45e1-b93a-1c07222d8336` |
+| Created | `2026-09-09T23:14:47.971Z` |
+| Git commit | `72673c735f6df7f71187e3a25d930ed06f268297` |
+| Image digest | `sha256:278dc0663141600c154167703089ce9c58157955d212a9a3be1ce6a506213366` |
+
+The previous verified CLI release is retained here for rollback identification:
+
+| Identity | Value |
+| --- | --- |
 | Deployment | `34ce895e-a41e-44af-b13b-0a79febec9cb` |
 | Source revision | `source-9c811232397ff34b7a7c71692545f0f7a7897c5aba028c39b7c8c81ae08063b5` |
 | Image digest | `sha256:452d0592f7a91b25902b6d1172af34880aeadd38c1bf259f7bd66cc9b8522b01` |
 
-The source identifier records the uploaded web context; it is not a Git commit.
-The previous web release used
+That CLI source identifier records the uploaded web context; it is not a Git
+commit. An earlier CLI release used
 `source-c5723220c4423def002e27482a5f8a88cc719a70eb769d10be08e29690713da5`.
 Rolling back to that release also restores the sign-in hydration issue described
 below. Backend deployment identities are recorded separately.
 
-## Domain connection pending
+## GitHub deployment transition
 
-Railway has both custom domains attached to web port 3000. Authoritative
-Namecheap DNS still points to the former Railway hostname and old ownership
-record; both domains report unverified and certificates validating ownership.
-The required Namecheap changes are:
+The web service is now connected to `mejango/telligence`, branch `main`. Its
+first GitHub build failed because root `/` had no `Dockerfile`; the web image
+requires the `web/` build context. The corrected settings were applied directly:
 
-| Type | Host | Value | Action |
-| --- | --- | --- | --- |
-| ALIAS | `@` | `hybpwzrj.up.railway.app` | Replace the existing apex CNAME. |
-| CNAME | `www` | `nwi7odx9.up.railway.app` | Replace the old routing value. |
-| TXT | `_railway-verify` | `railway-verify=851aacbdec7a3557516d278c918a73db6f144de77a1f95991ff74a0e9cf762a7` | Replace the old Railway verification value. |
-| TXT | `_railway-verify.www` | `railway-verify=851cf77c1112801329aa1de589f508048962556c68e18425bca39fc61f74359f` | Add. |
+| Setting | Value |
+| --- | --- |
+| Root directory | `/web` |
+| Builder / Dockerfile | `DOCKERFILE` / `Dockerfile` |
+| Watch path, relative to repository root | `/web/**` |
+| Healthcheck / port | `/api/healthz` / `3000` |
+| Custom build/start commands | Unset; use the Dockerfile |
+| Railway config-file override | None |
+| Manual `NEXT_PUBLIC_VERSION` | Removed |
+
+The Dockerfile now falls back to GitHub's `RAILWAY_GIT_COMMIT_SHA` for both the
+built application and runtime revision. The earlier CLI source identifier must
+not remain as a version override. Railway rejected setting `railwayConfigFile`
+as deprecated; the retained `web/railway.json` is a legacy reference, not the
+active configuration authority. See [Railway's notice](https://docs.railway.com/config-as-code).
+
+A CLI `railway redeploy` retained the earlier deployment's root and manifest.
+A fresh `serviceInstanceDeployV2` deployment applied the corrected service
+settings and succeeded with the GitHub artifact recorded above. The public
+configuration proxy also returned HTTP 200 with `ready:false`, as expected
+while compute deployment remains unconfigured.
+
+## Domain connection verified
+
+Both custom domains are active on web port 3000 with normal TLS verification.
+`https://telligence.money/api/healthz` returned HTTP 200 and the verified Git
+commit recorded above. `https://www.telligence.money/create?check=repo`
+returned HTTP 308 to exactly `https://telligence.money/create?check=repo`.
+These checks verify domain routing, certificates, and the served revision.
+
+Namecheap routing configuration reference:
+
+| Type | Host | Value |
+| --- | --- | --- |
+| ALIAS | `@` | `hybpwzrj.up.railway.app` |
+| CNAME | `www` | `nwi7odx9.up.railway.app` |
 
 Existing email MX and SPF records are independent and must be preserved. The
 application redirects www to the apex, retaining paths and query parameters.
@@ -88,9 +126,15 @@ A cold-page probe of the initial release found that a sign-in click before
 hydration could be ignored. The button now stays disabled until its handler is
 ready. The [SSR-to-hydration regression first failed](railway-signin-hydration-red.log);
 [all 21 focused wallet tests then passed](railway-signin-hydration-green.log).
-TypeScript, lint, and formatting passed. On the final deployed revision, a fresh
+TypeScript, lint, and formatting passed. On the CLI revision recorded above, a fresh
 page's first enabled Sign in click opened the email dialog with its input enabled
 and no exception. No credentials were submitted during that check.
+
+The GitHub revision recorded above passed live checks at 1280px and 390px on
+`https://telligence.money`: homepage HTTP 200 and heading, create-page heading,
+and the first enabled Sign in click opening the dialog with its email/phone
+input enabled. Both widths had no horizontal overflow or uncaught exceptions.
+No signup or credentials were submitted.
 
 The gateway reports ready database health; the web reaches it through
 `gateway.railway.internal`. The project directory contains no seeded projects.
