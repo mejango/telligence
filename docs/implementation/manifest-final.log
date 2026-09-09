@@ -1,0 +1,29 @@
+✔ manifest rejects unsupported networks, substituted token addresses and unpinned staking upgrades (0.718166ms)
+✔ changed staking implementation fails before signing even when proxy code stays constant (0.402625ms)
+✔ invalid deadline is rejected before any simulation or signing (0.187542ms)
+✔ final allocation evidence requires the bound vault, exact amount and verified historical state (1.078834ms)
+✔ pending production is distributed through the stock controller before cashing out (0.481667ms)
+✔ immature cooldown never initiates another cooldown or buys new capacity (0.113042ms)
+✔ stored transaction must recover its signer and match the exact typed Base operation (21.313375ms)
+✔ builds runtime-compatible pins from exactly one safe Base block and matches immutable-masked artifacts (2.785334ms)
+✔ rejects an RPC on another chain before any state reads (0.248166ms)
+✔ requires an identified safe block and refuses latest fallback (0.17625ms)
+✔ detects a reorg while pinning instead of mixing two block states (0.495292ms)
+✔ rejects a factory pointing at a different explicitly reviewed Revnet deployer (0.112166ms)
+✔ rejects substituted VVV staking and DIEM identities (0.279042ms)
+✔ checks staking assets and all token decimal contexts (0.450666ms)
+✔ rejects missing bytecode for every pinned component (1.770541ms)
+✔ rejects an unexpected implementation even when staking proxy bytecode is unchanged (0.268458ms)
+✔ rejects unrelated deployed factory and adapter bytecode (0.488583ms)
+✔ rejects bad artifact targets links and unsafe immutable ranges (2.268708ms)
+✔ requires reviewed policy bounds and emits no unknown fields from its JSON input (0.627083ms)
+✔ requires explicit addresses policy and output and rejects duplicate unknown or signing flags (0.181166ms)
+✔ writes the reviewed manifest exclusively and never overwrites an existing release (3.784ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 21
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 233.847291

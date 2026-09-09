@@ -1,0 +1,505 @@
+Compiling 2 files with Solc 0.8.28
+Solc 0.8.28 finished in 30.13s
+Compiler run successful!
+
+Ran 1 test for test/integration/StockV6Accounting.t.sol:StockV6AccountingTest
+[PASS] test_stockV6_acceptsVVV_distributesProduction_andAddsBalanceWithoutMinting() (gas: 1774442)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 10.66ms (1.21ms CPU time)
+
+Ran 4 tests for test/economics/OperatorSplitEconomics.t.sol:OperatorSplitEconomicsTest
+[PASS] test_CreatorCanCashOutFundedBackingBeforeAnyRevenue() (gas: 6686807)
+Logs:
+  creator_before_revenue,creator_vvv=4358615625000000000,compute_vvv=0,treasury_vvv=95423351600000000000,fees_vvv=218032775000000000
+
+[PASS] test_CreatorExitOrderChangesComputeAndTreasuryWhileVVVConserves() (gas: 13867349)
+Logs:
+  creator_then_compute,creator_vvv=4358615625000000000,compute_vvv=26608801593660000000,treasury_vvv=67582271928447920001,fees_vvv=1450310852892079999
+  compute_then_creator,creator_vvv=5893436545290937500,compute_vvv=24107850000000000000,treasury_vvv=68586001265830551251,fees_vvv=1412712188878511249
+
+[PASS] test_FundingIssues40Compute10Creator50SupporterWithoutCreatorPayment() (gas: 6124341)
+[PASS] test_RewardsAndRecoveredPrincipalReturnWithoutMintingOrCreatorSkim() (gas: 7516685)
+Logs:
+  creator_after_3_vvv_reward_and_recovery,creator_vvv=8030149287517500000,compute_vvv=0,treasury_vvv=93452406752144770001,fees_vvv=1517443960337729999
+
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 38.02ms (14.12ms CPU time)
+
+Ran 14 tests for test/integration/TelligenceLifecycle.t.sol:TelligenceLifecycleTest
+[PASS] test_boundPolicyCannotBeReclaimedByCreatorOrStranger() (gas: 27056)
+[PASS] test_creatorCannotUseStockOperatorPermissionsToRedirectProduction() (gas: 85735)
+[PASS] test_factoryPinsOperatorVVVAndProductionRecipientsAcrossEveryStage() (gas: 247140)
+[PASS] test_factoryPreservesCreatorAttributionThroughStockCreationFeeRouting() (gas: 6010797)
+[PASS] test_factoryRejectsLaunchOnWrongChain() (gas: 31641)
+[PASS] test_factoryRejectsUnsafeFutureStageAtomically() (gas: 4296062)
+[PASS] test_factoryRejectsZeroEconomicFloorBeforeCreatingProject() (gas: 107456)
+[PASS] test_factoryRequiresAndForwardsExactStockCreationFee() (gas: 5967728)
+[PASS] test_failedAllocationLeavesFundingAndProductionSafelyCommittedForRetry() (gas: 1238889)
+[PASS] test_lateProductionBurnsWithoutReopeningComputeOrReducingTreasury() (gas: 587344)
+[PASS] test_projectRewardsAndVaultCallbacksRemainIsolated() (gas: 7201924)
+[PASS] test_secondAllocationPreservesImplicitRewardsUntilExplicitNoMintReturn() (gas: 1211496)
+[PASS] test_supportFundsRealRevnet_thenProductionBuildsCompute_andYieldReturnsWithoutMinting() (gas: 1143508)
+[PASS] test_winddownReturnsPrincipalToSameRevnetWithoutMintingOrPrivilegedKeeper() (gas: 1276596)
+Suite result: ok. 14 passed; 0 failed; 0 skipped; finished in 37.10ms (17.71ms CPU time)
+
+Ran 4 tests for test/unit/TelligenceDateTime.t.sol:TelligenceDateTimeTest
+[PASS] testFuzzArbitraryBytesNeverRevert(bytes) (runs: 256, μ: 764, ~: 760)
+[PASS] testKnownUtcEpochVectors() (gas: 147329)
+[PASS] testRejectsInvalidCalendarFields() (gas: 178840)
+[PASS] testRejectsNoncanonicalTimestampBytes() (gas: 22295)
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 42.37ms (35.86ms CPU time)
+
+Ran 15 tests for test/unit/ProjectPolicy.t.sol:ProjectPolicyTest
+[PASS] testFuzz_CashoutFloorRoundsUp(uint96) (runs: 256, μ: 185971, ~: 185978)
+Logs:
+  Bound result 90000000000000010439
+
+[PASS] test_AllocationUsesImmutableMintFloorAndClearsApproval() (gas: 148622)
+[PASS] test_CadenceCannotBeBypassedByAnotherKeeper() (gas: 113249)
+[PASS] test_ExcessVVVHasPermissionlessReturnOnlyPath() (gas: 218304)
+[PASS] test_LifetimeCapCannotBeExceeded() (gas: 55665)
+[PASS] test_OnlyFactoryCanBindAndBindingCannotChange() (gas: 20379)
+[PASS] test_OnlyVaultCanInvokeReturnCallback() (gas: 16312)
+[PASS] test_PauseDoesNotPreventRecovery() (gas: 75930)
+[PASS] test_PreexistingDonationCannotSatisfyCashoutFloor() (gas: 131832)
+[PASS] test_RaisedFloorCannotBeLoweredByCreatorOrKeeper() (gas: 27055)
+[PASS] test_ReceivesAMMCashoutWithZeroTerminalReturn() (gas: 102218)
+[PASS] test_RejectsExpiredAndUnboundedDeadlines() (gas: 33355)
+[PASS] test_RejectsInflatedTerminalReturnWithoutRealReceivedVVV() (gas: 93715)
+[PASS] test_RejectsTinyKeeperSelectedBatch() (gas: 28586)
+[PASS] test_WinddownStopsCashoutsAndAllocationButPermitsReturns() (gas: 204108)
+Suite result: ok. 15 passed; 0 failed; 0 skipped; finished in 65.12ms (56.40ms CPU time)
+
+Ran 24 tests for test/TelligenceComputeVault.t.sol:TelligenceComputeVaultTest
+[PASS] testFuzz_AllocationConservesPrincipalAndRecovery(uint96) (runs: 256, μ: 575515, ~: 575530)
+Logs:
+  Bound result 997000000000000014995
+
+[PASS] test_AllocateKeepsEveryPositionInVaultAndClearsApprovals() (gas: 329036)
+[PASS] test_BadStakingReceiptRevertsAtomically() (gas: 246687)
+[PASS] test_ClosingPermanentlyDisablesSignerWithoutReenable() (gas: 76492)
+[PASS] test_CompleteWinddownUsesAggregateDebtWithoutRoundingDust() (gas: 683713)
+[PASS] test_ConstructorRejectsEOAPolicyAndUnsafeNotice() (gas: 280997)
+[PASS] test_ConstructorRejectsWrongChainAndMismatchedAssets() (gas: 774362)
+[PASS] test_DonatedDiemCannotInflateMintDebtOrPreventRecovery() (gas: 572688)
+[PASS] test_DonatedStakeAfterClosureRecoversWithoutReactivatingCompute() (gas: 787563)
+[PASS] test_EmptyVaultCanCloseWithoutCallingZeroUnstake() (gas: 108242)
+[PASS] test_InferenceSignerHasNoAssetOrPolicyAuthority() (gas: 326851)
+[PASS] test_MintFailureRollsBackVVVAndPosition() (gas: 274923)
+[PASS] test_NoticeExpiryRejectsFreshValidSignaturesWithoutKeeper() (gas: 160672)
+[PASS] test_NoticeFreezesAllocationAndCannotRestartOrSkip() (gas: 378038)
+[PASS] test_PauseBlocksAllocationButNotRewardsOrWinddown() (gas: 683408)
+[PASS] test_ProjectIsolationIncludesAllocationAndRecoveredPrincipal() (gas: 3775009)
+[PASS] test_ProviderCooldownsReadFromPositionsAndCannotReset() (gas: 594835)
+[PASS] test_RejectsAllocationBeyondImmutableCap() (gas: 340683)
+[PASS] test_RejectsUnauthorizedAllocationAndShutdown() (gas: 22253)
+[PASS] test_RejectsZeroAmountOrMinimum() (gas: 74791)
+[PASS] test_ReturnCallbackCannotReenter() (gas: 114731)
+[PASS] test_ReturnFailureCanRetryWithoutLossOrDuplicate() (gas: 184963)
+[PASS] test_RewardsImplicitlyClaimedDuringStakeAreNotReallocated() (gas: 530049)
+[PASS] test_SlippageFailureRollsBackAllSteps() (gas: 249060)
+Suite result: ok. 24 passed; 0 failed; 0 skipped; finished in 168.89ms (165.53ms CPU time)
+
+Ran 37 tests for test/TelligenceVeniceAuth.t.sol:TelligenceVeniceAuthTest
+[PASS] testAcceptsBoundedProviderClockSkew() (gas: 121674)
+[PASS] testAcceptsCanonicalVeniceChallenge() (gas: 121425)
+[PASS] testAcceptsEachPermittedResource() (gas: 474787)
+[PASS] testAcceptsRuntimeGeneratedSignatureVector() (gas: 153712)
+[PASS] testFuzzAcceptsBoundedAlphanumericNonce(uint8) (runs: 256, μ: 132179, ~: 126926)
+Logs:
+  Bound result 61
+
+[PASS] testFuzzRejectsArbitraryEnvelope(bytes32,bytes) (runs: 256, μ: 12176, ~: 12170)
+[PASS] testFuzzRejectsSingleByteMutation(uint256,uint8) (runs: 256, μ: 54129, ~: 41951)
+Logs:
+  Bound result 11
+
+[PASS] testHostedSignerCannotAdministerAuthentication() (gas: 14805)
+[PASS] testLifecycleCutoffRejectsOtherwiseValidAuthentication() (gas: 128561)
+[PASS] testPermanentShutdownCannotBeReversed() (gas: 53751)
+[PASS] testPolicyRotationInvalidatesEnvelopes() (gas: 167963)
+[PASS] testReenablingSameSignerDoesNotRestoreSignatures() (gas: 173296)
+[PASS] testRejectsChangedGeneration() (gas: 47031)
+[PASS] testRejectsCrossVaultReplay() (gas: 1553348)
+[PASS] testRejectsExpiredChallenge() (gas: 96313)
+[PASS] testRejectsFarFutureChallenge() (gas: 96220)
+[PASS] testRejectsFinancialDigest() (gas: 116414)
+[PASS] testRejectsHighSSignature() (gas: 121312)
+[PASS] testRejectsHugeDynamicOffsetWithoutReverting() (gas: 37395)
+[PASS] testRejectsInnerSignatureForAnotherChain() (gas: 124585)
+[PASS] testRejectsInnerSignatureForAnotherDomainName() (gas: 124834)
+[PASS] testRejectsInnerSignatureForAnotherVault() (gas: 125003)
+[PASS] testRejectsInvalidCalendarDate() (gas: 87594)
+[PASS] testRejectsInvalidTimestampDelimiter() (gas: 75820)
+[PASS] testRejectsLifetimeOverFiveMinutes() (gas: 95329)
+[PASS] testRejectsNonceLineInjection() (gas: 49586)
+[PASS] testRejectsNonzeroPadding() (gas: 38124)
+[PASS] testRejectsRawSignature() (gas: 12596)
+[PASS] testRejectsReversedDates() (gas: 95338)
+[PASS] testRejectsTimestampWithoutMilliseconds() (gas: 38015)
+[PASS] testRejectsUnrecognizedResource() (gas: 56037)
+[PASS] testRejectsWrongChain() (gas: 36778)
+[PASS] testRejectsWrongSigner() (gas: 120583)
+[PASS] testRejectsZeroLifetime() (gas: 95404)
+[PASS] testRejectsZeroPolicy() (gas: 40495)
+[PASS] testRotationDoesNotEnableAuthentication() (gas: 23772)
+[PASS] testZeroSignerStartsDisabledAndMustBeConfiguredBeforeEnabling() (gas: 1567280)
+Suite result: ok. 37 passed; 0 failed; 0 skipped; finished in 200.24ms (327.54ms CPU time)
+
+Ran 11 tests for test/integration/TelligenceOperatorSplit.t.sol:TelligenceOperatorSplitTest
+[PASS] testFuzz_fractionalRoutingProtectsComputeAndConservesEveryIssuedUnit(uint16,uint96) (runs: 256, μ: 6224244, ~: 6228335)
+Logs:
+  Bound result 2
+  Bound result 3
+
+[PASS] test_creatorAllocationDoesNotReplaceComputeOrRewardRecoveryAuthority() (gas: 6239606)
+[PASS] test_delayedDistributionAcrossStageCannotChangeCreatorToComputeRatio() (gas: 6676582)
+[PASS] test_factoryRejectsNoSupporterShareAndOverflowingInputsAtomically() (gas: 12811039)
+[PASS] test_factoryRequiresPositiveComputeEvenWithOperatorAllocation() (gas: 4277417)
+[PASS] test_fractionalSplitDustFollowsStockOwnerAndCanBeBurnedPermissionlessly() (gas: 6245392)
+[PASS] test_lockedSplitCannotBeChangedEvenThroughExistingStockOperatorPermission() (gas: 5808387)
+[PASS] test_oneBasisPointSupporterShareRemainsPossible() (gas: 6195632)
+[PASS] test_policyHashCommitsCreatorRecipientAndNewPolicyVersion() (gas: 5755224)
+[PASS] test_stagedRoutingRejectsChangingBeneficiaryRatios() (gas: 4284967)
+[PASS] test_zeroOperatorKeepsOriginalSingleRecipientAndSupporterIssuance() (gas: 6106379)
+Suite result: ok. 11 passed; 0 failed; 0 skipped; finished in 338.11ms (337.41ms CPU time)
+
+Ran 5 tests for test/economics/ComputeEconomics.t.sol:ComputeEconomicsTest
+[PASS] test_DefaultWithoutVVVFeeTerminal_UsesDifferentActualFeeBranch() (gas: 3620228)
+Logs:
+  no_fee_terminal,4000,6000,100000000000000000000,24960000000000000000,75040000000000000000,0
+
+[PASS] test_DirectIssuanceMatrix_ActualNetVVVAndConservationAcrossScales() (gas: 98545443)
+Logs:
+  matrix,2000,0,1000000000000000000,200000000000000000,800000000000000000,0
+  matrix,2000,0,100000000000000000000,20000000000000000000,80000000000000000000,0
+  matrix,2000,0,10000000000000000000000,2000000000000000000000,8000000000000000000000,0
+  matrix,2000,6000,1000000000000000000,98294625000000000,896930335500000000,4775039500000000
+  matrix,2000,6000,100000000000000000000,9829462500000000000,89693033550000000000,477503950000000000
+  matrix,2000,6000,10000000000000000000000,982946250000000000000,8969303355000000000000,47750395000000000000
+  matrix,2000,9000,1000000000000000000,52379437500000000,945657423750000000,1963138750000000
+  matrix,2000,9000,100000000000000000000,5237943750000000000,94565742375000000000,196313875000000000
+  matrix,2000,9000,10000000000000000000000,523794375000000000000,9456574237500000000000,19631387500000000000
+  matrix,4000,0,1000000000000000000,400000000000000000,600000000000000000,0
+  matrix,4000,0,100000000000000000000,40000000000000000000,60000000000000000000,0
+  matrix,4000,0,10000000000000000000000,4000000000000000000000,6000000000000000000000,0
+  matrix,4000,6000,1000000000000000000,241078500000000000,747683068000000000,11238432000000000
+  matrix,4000,6000,100000000000000000000,24107850000000000000,74768306800000000000,1123843200000000000
+  matrix,4000,6000,10000000000000000000000,2410785000000000000000,7476830680000000000000,112384320000000000000
+  matrix,4000,9000,1000000000000000000,171492750000000000,822560403000000000,5946847000000000
+  matrix,4000,9000,100000000000000000000,17149275000000000000,82256040300000000000,594684700000000000
+  matrix,4000,9000,10000000000000000000000,1714927500000000000000,8225604030000000000000,59468470000000000000
+  matrix,6000,0,1000000000000000000,600000000000000000,400000000000000000,0
+  matrix,6000,0,100000000000000000000,60000000000000000000,40000000000000000000,0
+  matrix,6000,0,10000000000000000000000,6000000000000000000000,4000000000000000000000,0
+  matrix,6000,6000,1000000000000000000,428351625000000000,552121276000000000,19527099000000000
+  matrix,6000,6000,100000000000000000000,42835162500000000000,55212127600000000000,1952709900000000000
+  matrix,6000,6000,10000000000000000000000,4283516250000000000000,5521212760000000000000,195270990000000000000
+  matrix,6000,9000,1000000000000000000,357339937500000000,630463581250000000,12196481250000000
+  matrix,6000,9000,100000000000000000000,35733993750000000000,63046358125000000000,1219648125000000000
+  matrix,6000,9000,10000000000000000000000,3573399375000000000000,6304635812500000000000,121964812500000000000
+
+[PASS] test_LifetimeCapReturnsExcessAndBurnsLateProduction() (gas: 5417872)
+Logs:
+  allocation_cap_10_vvv,4000,6000,100000000000000000000,10000000000000000000,88876156800000000000,1123843200000000000
+
+[PASS] test_MinimumBatchAndOutputFloorCanDelayActivationWithoutLosingFunding() (gas: 5275328)
+Logs:
+  below_minimum_batch,4000,6000,1000000000000000000,0,1000000000000000000,0
+  unmet_output_floor,4000,6000,3000000000000000000,0,3000000000000000000,0
+
+[PASS] test_RepeatedFundingAndBatchSizeHaveObservableNonlinearImpact() (gas: 18341869)
+Logs:
+  one_funding_one_batch,4000,6000,100000000000000000000,24107850000000000000,74768306800000000000,1123843200000000000
+  ten_fundings_ten_batches,4000,6000,100000000000000000000,21562536295371372334,77372586328590618343,1064877376038009327
+  one_funding_four_batches,4000,6000,100000000000000000000,19725116921250297788,79294752038918862214,980131039830839999
+
+Suite result: ok. 5 passed; 0 failed; 0 skipped; finished in 1.18s (165.56ms CPU time)
+
+Ran 5 tests for test/integration/TelligenceInvariant.t.sol:TelligenceInvariantTest
+[PASS] invariant_allGeneratedVVVRemainsInTreasuryOrItsOwnBacking() (runs: 64, calls: 3200, reverts: 0)
+
+╭----------------------------+-------------------+-------+---------+----------╮
+| Contract                   | Selector          | Calls | Reverts | Discards |
++=============================================================================+
+| TelligenceLifecycleHandler | advanceWinddown   | 486   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | allocate          | 585   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | convertProduction | 542   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | fund              | 497   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | pause             | 517   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | returnReward      | 573   | 0       | 0        |
+╰----------------------------+-------------------+-------+---------+----------╯
+
+Logs:
+  Bound result 10000000000000000000
+  Bound result 0
+  Bound result 1000000000000000000
+  Bound result 35973393732942365
+  Bound result 1245262154
+  Bound result 12772
+  Bound result 499335298585441760
+  Bound result 99999000000000005792
+  Bound result 1
+  Bound result 18001613863
+  Bound result 143036303919929336
+  Bound result 17947
+  Bound result 165329
+  Bound result 99999000000008663330
+  Bound result 808490
+  Bound result 28513230404141216728
+  Bound result 192
+  Bound result 1000
+  Bound result 98930
+  Bound result 13243
+  Bound result 2469
+  Bound result 11427
+  Bound result 26833
+  Bound result 99999007548975924937
+  Bound result 7772480656763
+  Bound result 41
+  Bound result 537576
+  Bound result 3276739235019226641
+  Bound result 4264337593543950333
+  Bound result 46
+  Bound result 11620
+  Bound result 3600
+  Bound result 99999000000000013818
+  Bound result 320749
+  Bound result 99999000000000020076
+  Bound result 27
+  Bound result 8453
+
+[PASS] invariant_lifetimeAllocationIsBoundedAndAgreesAcrossPolicyAndVault() (runs: 64, calls: 3200, reverts: 0)
+
+╭----------------------------+-------------------+-------+---------+----------╮
+| Contract                   | Selector          | Calls | Reverts | Discards |
++=============================================================================+
+| TelligenceLifecycleHandler | advanceWinddown   | 486   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | allocate          | 585   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | convertProduction | 542   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | fund              | 497   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | pause             | 517   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | returnReward      | 573   | 0       | 0        |
+╰----------------------------+-------------------+-------+---------+----------╯
+
+Logs:
+  Bound result 10000000000000000000
+  Bound result 0
+  Bound result 1000000000000000000
+  Bound result 35973393732942365
+  Bound result 1245262154
+  Bound result 12772
+  Bound result 499335298585441760
+  Bound result 99999000000000000523
+  Bound result 1
+  Bound result 18001613863
+  Bound result 143036303919929336
+  Bound result 1647073089
+  Bound result 165329
+  Bound result 99999000000008663330
+  Bound result 808490
+  Bound result 28513230404141216728
+  Bound result 192
+  Bound result 1000
+  Bound result 98930
+  Bound result 13242
+  Bound result 2469
+  Bound result 11436
+  Bound result 26833
+  Bound result 99999007548975924937
+  Bound result 7772480656763
+  Bound result 41
+  Bound result 537576
+  Bound result 3276739235019226641
+  Bound result 4264337593543950333
+  Bound result 46
+  Bound result 11619
+  Bound result 3600
+  Bound result 99999000000000012587
+  Bound result 320749
+  Bound result 99999000001970946817
+  Bound result 27
+  Bound result 8453
+
+[PASS] invariant_noStandingAssetApprovalSurvivesATransaction() (runs: 64, calls: 3200, reverts: 0)
+
+╭----------------------------+-------------------+-------+---------+----------╮
+| Contract                   | Selector          | Calls | Reverts | Discards |
++=============================================================================+
+| TelligenceLifecycleHandler | advanceWinddown   | 486   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | allocate          | 585   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | convertProduction | 542   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | fund              | 497   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | pause             | 517   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | returnReward      | 573   | 0       | 0        |
+╰----------------------------+-------------------+-------+---------+----------╯
+
+Logs:
+  Bound result 10000000000000000000
+  Bound result 0
+  Bound result 1000000000000000000
+  Bound result 35973393732942365
+  Bound result 1245262154
+  Bound result 12772
+  Bound result 499335298585441760
+  Bound result 99999000000000000523
+  Bound result 1
+  Bound result 18001613863
+  Bound result 143036303919929336
+  Bound result 1647073089
+  Bound result 165329
+  Bound result 99999000000008663330
+  Bound result 808490
+  Bound result 28513230404141216728
+  Bound result 192
+  Bound result 1000
+  Bound result 98930
+  Bound result 13242
+  Bound result 2469
+  Bound result 11436
+  Bound result 26833
+  Bound result 99999007548975924937
+  Bound result 7772480656763
+  Bound result 41
+  Bound result 537576
+  Bound result 3276739235019226641
+  Bound result 4264337593543950333
+  Bound result 46
+  Bound result 11619
+  Bound result 3600
+  Bound result 99999000000000012587
+  Bound result 320749
+  Bound result 99999000001970946817
+  Bound result 27
+  Bound result 8453
+
+[PASS] invariant_projectIdentityAndProductionDestinationCannotChange() (runs: 64, calls: 3200, reverts: 0)
+
+╭----------------------------+-------------------+-------+---------+----------╮
+| Contract                   | Selector          | Calls | Reverts | Discards |
++=============================================================================+
+| TelligenceLifecycleHandler | advanceWinddown   | 486   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | allocate          | 585   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | convertProduction | 542   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | fund              | 497   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | pause             | 517   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | returnReward      | 573   | 0       | 0        |
+╰----------------------------+-------------------+-------+---------+----------╯
+
+Logs:
+  Bound result 10000000000000000000
+  Bound result 0
+  Bound result 1000000000000000000
+  Bound result 35973393732942365
+  Bound result 1245262154
+  Bound result 12772
+  Bound result 499335298585441760
+  Bound result 99999000000000000523
+  Bound result 1
+  Bound result 18001613863
+  Bound result 143036303919929336
+  Bound result 1647073089
+  Bound result 165329
+  Bound result 99999000000008663330
+  Bound result 808490
+  Bound result 28513230404141216728
+  Bound result 192
+  Bound result 1000
+  Bound result 98930
+  Bound result 13242
+  Bound result 2469
+  Bound result 11436
+  Bound result 26833
+  Bound result 99999007548975924937
+  Bound result 7772480656763
+  Bound result 41
+  Bound result 537576
+  Bound result 3276739235019226641
+  Bound result 4264337593543950333
+  Bound result 46
+  Bound result 11619
+  Bound result 3600
+  Bound result 99999000000000012587
+  Bound result 320749
+  Bound result 99999000001970946817
+  Bound result 27
+  Bound result 8453
+
+[PASS] invariant_retainedDiemAlwaysCoversTheVaultsMintObligation() (runs: 64, calls: 3200, reverts: 0)
+
+╭----------------------------+-------------------+-------+---------+----------╮
+| Contract                   | Selector          | Calls | Reverts | Discards |
++=============================================================================+
+| TelligenceLifecycleHandler | advanceWinddown   | 486   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | allocate          | 585   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | convertProduction | 542   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | fund              | 497   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | pause             | 517   | 0       | 0        |
+|----------------------------+-------------------+-------+---------+----------|
+| TelligenceLifecycleHandler | returnReward      | 573   | 0       | 0        |
+╰----------------------------+-------------------+-------+---------+----------╯
+
+Logs:
+  Bound result 10000000000000000000
+  Bound result 0
+  Bound result 1000000000000000000
+  Bound result 35973393732942365
+  Bound result 1245262154
+  Bound result 12772
+  Bound result 499335298585441760
+  Bound result 99999000000000000523
+  Bound result 1
+  Bound result 18001613863
+  Bound result 143036303919929336
+  Bound result 1647073089
+  Bound result 165329
+  Bound result 99999000000008663330
+  Bound result 808490
+  Bound result 28513230404141216728
+  Bound result 192
+  Bound result 1000
+  Bound result 98930
+  Bound result 13242
+  Bound result 2469
+  Bound result 11436
+  Bound result 26833
+  Bound result 99999007548975924937
+  Bound result 7772480656763
+  Bound result 41
+  Bound result 537576
+  Bound result 3276739235019226641
+  Bound result 4264337593543950333
+  Bound result 46
+  Bound result 11619
+  Bound result 3600
+  Bound result 99999000000000012587
+  Bound result 320749
+  Bound result 99999000001970946817
+  Bound result 27
+  Bound result 8453
+
+Suite result: ok. 5 passed; 0 failed; 0 skipped; finished in 1.43s (5.89s CPU time)
+
+Ran 10 test suites in 1.44s (3.51s CPU time): 120 tests passed, 0 failed, 0 skipped (120 total tests)

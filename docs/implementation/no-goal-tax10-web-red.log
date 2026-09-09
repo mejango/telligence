@@ -1,0 +1,67 @@
+npm notice run @telligence/web@0.0.1 test
+npm notice run vitest run test/telligence/screens.test.tsx test/telligence-launch.test.ts
+
+ RUN  v4.1.10 <repo>/web
+
+ ❯ test/telligence-launch.test.ts (16 tests | 1 failed) 8ms
+     × builds one Base stage with reviewed production economics and explicit fixed limits 5ms
+ ❯ test/telligence/screens.test.tsx (7 tests | 1 failed) 130ms
+     × requires purpose and concrete terms acknowledgement before enabling launch 9ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/telligence-launch.test.ts > compute project launch > builds one Base stage with reviewed production economics and explicit fixed limits
+AssertionError: expected [ { …(7) } ] to deeply equal [ { …(7) } ]
+
+- Expected
++ Received
+
+@@ -1,8 +1,8 @@
+  [
+    {
+-     "cashOutTaxRate": 1000,
++     "cashOutTaxRate": 6000,
+      "initialIssuance": 1000000000000000000n,
+      "issuanceCutFrequency": 0,
+      "issuanceCutPercent": 0,
+      "operatorSplitPercent": 0,
+      "splitPercent": 4000,
+
+ ❯ test/telligence-launch.test.ts:47:24
+     45|     expect(tx.chainId).toBe(8453);
+     46|     expect(tx.value).toBe(123n);
+     47|     expect(tx.args[1]).toEqual([
+       |                        ^
+     48|       {
+     49|         startsAtOrAfter: 2000000600,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  test/telligence/screens.test.tsx > compute launch > requires purpose and concrete terms acknowledgement before enabling launch
+Error: expect(element).not.toBeInTheDocument()
+
+expected document not to contain element, found <input
+  aria-describedby="compute-target-help"
+  aria-invalid="false"
+  class="flex w-full border-melon-300 bg-melon-25 px-3 py-2 file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-zinc-500 hover:border-melon-400 focus-visible:border-melon-600 focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50 h-12 border-0 text-lg tabular-nums"
+  id="compute-targetDailyCreditUsd"
+  inputmode="decimal"
+  placeholder="Not sure yet"
+  value=""
+/> instead
+ ❯ test/telligence/screens.test.tsx:147:63
+    145|     });
+    146|     render(<ComputeCreateForm />);
+    147|     expect(screen.queryByLabelText(/Daily compute goal/)).not.toBeInTh…
+       |                                                               ^
+    148|     expect(screen.getByRole("button", { name: "Review" })).toBeEnabled…
+    149|     fireEvent.click(screen.getByRole("button", { name: "Review" }));
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  2 failed | 21 passed (23)
+   Start at  18:23:16
+   Duration  1.38s (transform 200ms, setup 269ms, import 781ms, tests 138ms, environment 983ms)
+

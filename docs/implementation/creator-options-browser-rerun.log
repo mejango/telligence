@@ -1,0 +1,35 @@
+npm notice run @telligence/web@0.0.1 npx
+npm notice run 'playwright' test test/e2e/dialog-overlay-shape.spec.ts --workers=4 --retries=0
+[WebServer] npm notice run @telligence/web@0.0.1 browser:fixture
+[WebServer] npm notice run node scripts/browser-fixture-server.mjs
+[WebServer] (node:5942) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] npm notice run @telligence/web@0.0.1 standalone:stage
+[WebServer] npm notice run node scripts/stage-standalone.mjs
+[WebServer] npm notice run @telligence/web@0.0.1 start:standalone
+[WebServer] npm notice run npm run env:check:runtime && node .next/standalone/server.js
+[WebServer] npm notice run @telligence/web@0.0.1 env:check:runtime
+[WebServer] npm notice run node --env-file-if-exists=.env.local scripts/validate-env.mjs runtime
+[WebServer] .env.local not found. Continuing without it.
+[WebServer] (node:6066) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 5 tests using 4 workers
+
+(node:6068) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:6070) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:6067) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:6069) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  3 [mobile-390] › test/e2e/dialog-overlay-shape.spec.ts:34:5 › an open dialog inerts the page, stacks, and restores it on close (1.2s)
+  ✓  4 [desktop-1280] › test/e2e/dialog-overlay-shape.spec.ts:34:5 › an open dialog inerts the page, stacks, and restores it on close (1.2s)
+(node:6092) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [tablet-768] › test/e2e/dialog-overlay-shape.spec.ts:34:5 › an open dialog inerts the page, stacks, and restores it on close (1.6s)
+  ✓  2 [wide-1100] › test/e2e/dialog-overlay-shape.spec.ts:34:5 › an open dialog inerts the page, stacks, and restores it on close (1.7s)
+  ✓  5 [narrow-320] › test/e2e/dialog-overlay-shape.spec.ts:34:5 › an open dialog inerts the page, stacks, and restores it on close (522ms)
+
+  5 passed (4.6s)

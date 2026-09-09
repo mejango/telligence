@@ -1,0 +1,64 @@
+telligence-optional-target-red.log (failure and result excerpts)
+✖ registration accepts omitted target as metadata without setting a spending cap (128.886833ms)
+✖ registration accepts explicitly null target as metadata without setting a spending cap (6.07975ms)
+✖ registration accepts a positive decimal target as metadata without setting a spending cap (18.102959ms)
+✔ malformed, zero and noncanonical targets are rejected without claiming a preparation (60.067125ms)
+✖ a target does not cap inference; keys still share verified remaining capacity and reservations (18.991875ms)
+✖ an unset project cap retains key limits, provider daily limit and readiness gates (5.778959ms)
+✖ migration preserves legacy target and enforced cap while allowing independently absent metadata (52.706083ms)
+✖ existing explicit project caps still constrain key creation and combined usage (5.507292ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 1
+ℹ fail 7
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 705.481
+✖ failing tests:
+✖ registration accepts omitted target as metadata without setting a spending cap (128.886833ms)
+  AssertionError [ERR_ASSERTION]: {"error":{"code":"invalid_amount","message":"Use a decimal dollar amount with at most six fractional digits."}}
+✖ registration accepts explicitly null target as metadata without setting a spending cap (6.07975ms)
+  AssertionError [ERR_ASSERTION]: {"error":{"code":"invalid_amount","message":"Use a decimal dollar amount with at most six fractional digits."}}
+✖ registration accepts a positive decimal target as metadata without setting a spending cap (18.102959ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+✖ a target does not cap inference; keys still share verified remaining capacity and reservations (18.991875ms)
+  AssertionError [ERR_ASSERTION]: {"error":{"code":"invalid_limit","message":"Key limit must fit the project daily budget."}}
+✖ an unset project cap retains key limits, provider daily limit and readiness gates (5.778959ms)
+  AssertionError [ERR_ASSERTION]: {"error":{"code":"invalid_amount","message":"Use a decimal dollar amount with at most six fractional digits."}}
+✖ migration preserves legacy target and enforced cap while allowing independently absent metadata (52.706083ms)
+✖ existing explicit project caps still constrain key creation and combined usage (5.507292ms)
+  AssertionError [ERR_ASSERTION]: {"error":{"code":"invalid_amount","message":"Use a decimal dollar amount with at most six fractional digits."}}
+
+telligence-optional-ui-red.log (failure and result excerpts)
+ FAIL  test/telligence-launch-lifecycle.test.tsx > wallet-action:telligence-launch compute launch wallet lifecycle > preserves the optional target "" across metadata and confirmed registration
+AssertionError: expected "vi.fn()" to be called with arguments: [ '/compute/project-7/keys' ]
+ FAIL  test/telligence/screens.test.tsx > compute project > shows verified credit without inventing a target for projects that did not set one
+TestingLibraryElementError: Unable to find role="heading" and name "Public archive"
+ FAIL  test/telligence/screens.test.tsx > compute launch > requires purpose and concrete terms acknowledgement before enabling launch
+TestingLibraryElementError: Unable to find a label with the text of: Daily compute goal (optional)
+ Test Files  2 failed (2)
+      Tests  3 failed | 24 passed (27)
+
+telligence-operator-form-red.log (failure and result excerpts)
+ FAIL  test/telligence/screens.test.tsx > compute launch > requires purpose and concrete terms acknowledgement before enabling launch
+TestingLibraryElementError: Unable to find a label with the text of: Operator token share
+ Test Files  1 failed (1)
+      Tests  1 failed | 6 passed (7)
+
+telligence-operator-version-red.log (failure and result excerpts)
+ FAIL  test/telligence-launch.test.ts > compute project launch > refuses the legacy factory ABI even for operator share 0
+ FAIL  test/telligence-launch.test.ts > compute project launch > refuses the legacy factory ABI even for operator share 2500
+AssertionError: expected [Function] to throw an error
+ FAIL  test/telligence-transactions.test.ts > Telligence transaction boundary > supports existing deployments but requires version 2 for new launches
+AssertionError: expected [Function] to not throw an error but 'TypeError: (0 , __vite_ssr_import_1__…' was thrown
+ FAIL  test/telligence/policy-review.test.ts > immutable launch policy review > requires a complete ready Base deployment and exact bounded policy values
+AssertionError: expected { ready: true, chainId: 8453, …(4) } to deeply equal { ready: true, …(6) }
+ FAIL  test/telligence/policy-review.test.ts > immutable launch policy review > does not review a new launch against an unsupported factory version: undefined
+ FAIL  test/telligence/policy-review.test.ts > immutable launch policy review > does not review a new launch against an unsupported factory version: null
+ FAIL  test/telligence/policy-review.test.ts > immutable launch policy review > does not review a new launch against an unsupported factory version: "1"
+ FAIL  test/telligence/policy-review.test.ts > immutable launch policy review > does not review a new launch against an unsupported factory version: "3"
+ FAIL  test/telligence/policy-review.test.ts > immutable launch policy review > does not review a new launch against an unsupported factory version: 2
+AssertionError: expected [Function] to throw an error
+ Test Files  3 failed (3)
+      Tests  9 failed | 21 passed (30)

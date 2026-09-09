@@ -1,0 +1,11 @@
+npm notice run @telligence/web@0.0.1 npx
+npm notice run 'vitest' run test/telligence/screens.test.tsx test/telligence-keys.test.tsx
+
+ RUN  v4.1.10 /private/tmp/telligence-build/web
+
+
+ Test Files  2 passed (2)
+      Tests  19 passed (19)
+   Start at  14:32:08
+   Duration  1.51s (transform 330ms, setup 365ms, import 805ms, tests 358ms, environment 1.02s)
+

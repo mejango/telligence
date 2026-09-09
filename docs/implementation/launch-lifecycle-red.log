@@ -1,0 +1,485 @@
+
+ RUN  v4.1.10 /private/tmp/telligence-build/web
+
+ ❯ test/telligence-launch-lifecycle.test.tsx (13 tests | 6 failed) 4175ms
+     × stops before signer preparation if the account changes during configuration 1009ms
+     × reads a launch saved by another tab before offering a new transaction 8ms
+     × blocks corrupt saved submission data rather than discarding recovery state 1006ms
+     × rejects changed financial policy before preparing or requesting a wallet write 1006ms
+     × requires the reviewed financial preset before a new launch 27ms
+     × rejects a malformed signer preparation before the wallet boundary 1005ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 6 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/telligence-launch-lifecycle.test.tsx > compute launch wallet lifecycle > stops before signer preparation if the account changes during configuration
+TestingLibraryElementError: Unable to find role="alert"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"space-y-4"[39m
+    [36m>[39m
+      [36m<button[39m
+        [33mclass[39m=[32m"w-full sm:w-auto"[39m
+      [36m>[39m
+        [0mLaunch compute project[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"space-y-4"[39m
+    [36m>[39m
+      [36m<button[39m
+        [33mclass[39m=[32m"w-full sm:w-auto"[39m
+      [36m>[39m
+        [0mLaunch compute project[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ waitForWrapper ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ test/telligence-launch-lifecycle.test.tsx:116:25
+    114|     mocks.address = OTHER;
+    115|     await act(async () => pendingConfig.resolve(CONFIG));
+    116|     expect(await screen.findByRole("alert")).toHaveTextContent("wallet…
+       |                         ^
+    117|     expect(mocks.write).not.toHaveBeenCalled();
+    118|     expect(callsTo("/v1/projects/prepare")).toHaveLength(0);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+ FAIL  test/telligence-launch-lifecycle.test.tsx > compute launch wallet lifecycle > reads a launch saved by another tab before offering a new transaction
+AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times
+
+Received:
+
+  1st vi.fn() call:
+
+    Array [
+      Object {
+        "abi": Array [
+          Object {
+            "inputs": Array [
+              Object {
+                "components": Array [
+                  Object {
+                    "name": "name",
+                    "type": "string",
+                  },
+                  Object {
+                    "name": "ticker",
+                    "type": "string",
+                  },
+                  Object {
+                    "name": "uri",
+                    "type": "string",
+                  },
+                  Object {
+                    "name": "salt",
+                    "type": "bytes32",
+                  },
+                ],
+                "name": "description",
+                "type": "tuple",
+              },
+              Object {
+                "components": Array [
+                  Object {
+                    "name": "startsAtOrAfter",
+                    "type": "uint48",
+                  },
+                  Object {
+                    "name": "splitPercent",
+                    "type": "uint16",
+                  },
+                  Object {
+                    "name": "initialIssuance",
+                    "type": "uint112",
+                  },
+                  Object {
+                    "name": "issuanceCutFrequency",
+                    "type": "uint32",
+                  },
+                  Object {
+                    "name": "issuanceCutPercent",
+                    "type": "uint32",
+                  },
+                  Object {
+                    "name": "cashOutTaxRate",
+                    "type": "uint16",
+                  },
+                ],
+                "name": "stages",
+                "type": "tuple[]",
+              },
+              Object {
+                "components": Array [
+                  Object {
+                    "name": "conversionCadence",
+                    "type": "uint48",
+                  },
+                  Object {
+                    "name": "minBatchTokens",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "maxBatchTokens",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "minVVVPerProjectToken",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "minDiemPerVVV",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "maxPrincipal",
+                    "type": "uint128",
+                  },
+                ],
+                "name": "policyConfig",
+                "type": "tuple",
+              },
+              Object {
+                "name": "recovery",
+                "type": "address",
+              },
+              Object {
+                "name": "inferenceSigner",
+                "type": "address",
+              },
+            ],
+            "name": "deployFor",
+            "outputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+              Object {
+                "name": "policy",
+                "type": "address",
+              },
+              Object {
+                "name": "vault",
+                "type": "address",
+              },
+            ],
+            "stateMutability": "payable",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [],
+            "name": "REV_DEPLOYER",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "policyOf",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "vaultOf",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "creatorOf",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "policyHashOf",
+            "outputs": Array [
+              Object {
+                "type": "bytes32",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "indexed": true,
+                "name": "revnetId",
+                "type": "uint256",
+              },
+              Object {
+                "indexed": true,
+                "name": "creator",
+                "type": "address",
+              },
+              Object {
+                "name": "policy",
+                "type": "address",
+              },
+              Object {
+                "name": "vault",
+                "type": "address",
+              },
+              Object {
+                "name": "policyHash",
+                "type": "bytes32",
+              },
+            ],
+            "name": "DeployProject",
+            "type": "event",
+          },
+        ],
+        "address": "0x3333333333333333333333333333333333333333",
+        "args": Array [
+          Object {
+            "name": "Public archive",
+            "salt": "0x02dcfb21fc2d331d1f2aef52c171eef34daa3b6238409277fd632c9bbb7d2069",
+            "ticker": "COMPUTE",
+            "uri": "ipfs://bafyproject",
+          },
+          Array [
+            Object {
+              "cashOutTaxRate": 6000,
+              "initialIssuance": 1000000000000000000n,
+              "issuanceCutFrequency": 0,
+              "issuanceCutPercent": 0,
+              "splitPercent": 4000,
+              "startsAtOrAfter": 1800000600,
+            },
+          ],
+          Object {
+            "conversionCadence": 3600,
+            "maxBatchTokens": 100000000000000000000n,
+            "maxPrincipal": 1000000000000000000000n,
+            "minBatchTokens": 1000000000000000000n,
+            "minDiemPerVVV": 1000n,
+            "minVVVPerProjectToken": 1000n,
+          },
+          "0x1111111111111111111111111111111111111111",
+          "0x2222222222222222222222222222222222222222",
+        ],
+        "chainId": 8453,
+        "functionName": "deployFor",
+        "value": 5n,
+      },
+    ]
+
+
+Number of calls: 1
+
+ ❯ test/telligence-launch-lifecycle.test.tsx:141:29
+    139|     clickLaunch();
+    140|     await waitFor(() => expect(mocks.push).toHaveBeenCalled());
+    141|     expect(mocks.write).not.toHaveBeenCalled();
+       |                             ^
+    142|     expect(callsTo("/v1/projects/prepare")).toHaveLength(0);
+    143|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+ FAIL  test/telligence-launch-lifecycle.test.tsx > compute launch wallet lifecycle > blocks corrupt saved submission data rather than discarding recovery state
+TestingLibraryElementError: Unable to find role="alert"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"space-y-4"[39m
+    [36m>[39m
+      [36m<button[39m
+        [33mclass[39m=[32m"w-full sm:w-auto"[39m
+      [36m>[39m
+        [0mLaunch compute project[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"space-y-4"[39m
+    [36m>[39m
+      [36m<button[39m
+        [33mclass[39m=[32m"w-full sm:w-auto"[39m
+      [36m>[39m
+        [0mLaunch compute project[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ waitForWrapper ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ test/telligence-launch-lifecycle.test.tsx:148:25
+    146|     localStorage.setItem(pendingLaunchKey(CREATOR), "{broken");
+    147|     render(component()); clickLaunch();
+    148|     expect(await screen.findByRole("alert")).toHaveTextContent(/saved …
+       |                         ^
+    149|     expect(mocks.write).not.toHaveBeenCalled();
+    150|     expect(callsTo("/v1/projects/prepare")).toHaveLength(0);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯
+
+ FAIL  test/telligence-launch-lifecycle.test.tsx > compute launch wallet lifecycle > rejects changed financial policy before preparing or requesting a wallet write
+TestingLibraryElementError: Unable to find role="alert"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"space-y-4"[39m
+    [36m>[39m
+      [36m<button[39m
+        [33mclass[39m=[32m"w-full sm:w-auto"[39m
+      [36m>[39m
+        [0mLaunch compute project[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"space-y-4"[39m
+    [36m>[39m
+      [36m<button[39m
+        [33mclass[39m=[32m"w-full sm:w-auto"[39m
+      [36m>[39m
+        [0mLaunch compute project[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ waitForWrapper ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ test/telligence-launch-lifecycle.test.tsx:157:25
+    155|     mocks.gateway.mockResolvedValueOnce({ ...CONFIG, launchPolicy: { .…
+    156|     render(component()); clickLaunch();
+    157|     expect(await screen.findByRole("alert")).toHaveTextContent(/policy…
+       |                         ^
+    158|     expect(mocks.write).not.toHaveBeenCalled();
+    159|     expect(callsTo("/v1/projects/prepare")).toHaveLength(0);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯
+
+ FAIL  test/telligence-launch-lifecycle.test.tsx > compute launch wallet lifecycle > requires the reviewed financial preset before a new launch
+Error: expect(element).toBeDisabled()
+
+Received element is not disabled:
+  <button
+  class="w-full sm:w-auto"
+/>
+ ❯ test/telligence-launch-lifecycle.test.tsx:164:40
+    162|   it("requires the reviewed financial preset before a new launch", () …
+    163|     render(component(null));
+    164|     expect(screen.getByRole("button")).toBeDisabled();
+       |                                        ^
+    165|   });
+    166|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯
+
+ FAIL  test/telligence-launch-lifecycle.test.tsx > compute launch wallet lifecycle > rejects a malformed signer preparation before the wallet boundary
+TestingLibraryElementError: Unable to find role="alert"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"space-y-4"[39m
+    [36m>[39m
+      [36m<button[39m
+        [33mclass[39m=[32m"w-full sm:w-auto"[39m
+      [36m>[39m
+        [0mLaunch compute project[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"space-y-4"[39m
+    [36m>[39m
+      [36m<button[39m
+        [33mclass[39m=[32m"w-full sm:w-auto"[39m
+      [36m>[39m
+        [0mLaunch compute project[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ waitForWrapper ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ test/telligence-launch-lifecycle.test.tsx:171:25
+    169|     mocks.gateway.mockImplementation(async (...args) => args[0] === "/…
+    170|     render(component()); clickLaunch();
+    171|     expect(await screen.findByRole("alert")).toHaveTextContent(/prepar…
+       |                         ^
+    172|     expect(mocks.write).not.toHaveBeenCalled();
+    173|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  6 failed | 7 passed (13)
+   Start at  13:53:53
+   Duration  4.71s (transform 45ms, setup 70ms, import 149ms, tests 4.17s, environment 252ms)
+

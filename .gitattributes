@@ -1,0 +1,3 @@
+# Preserve the exact upstream source snapshots and raw test evidence.
+contracts/lib/** -whitespace
+docs/implementation/*.log -whitespace

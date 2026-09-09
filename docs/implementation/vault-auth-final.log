@@ -1,0 +1,88 @@
+Compiling 10 files with Solc 0.8.28
+Solc 0.8.28 finished in 8.04s
+Compiler run successful!
+
+Ran 24 tests for test/TelligenceComputeVault.t.sol:TelligenceComputeVaultTest
+[PASS] testFuzz_AllocationConservesPrincipalAndRecovery(uint96) (runs: 4096, μ: 575511, ~: 575530)
+[PASS] test_AllocateKeepsEveryPositionInVaultAndClearsApprovals() (gas: 329036)
+[PASS] test_BadStakingReceiptRevertsAtomically() (gas: 246687)
+[PASS] test_ClosingPermanentlyDisablesSignerWithoutReenable() (gas: 76492)
+[PASS] test_CompleteWinddownUsesAggregateDebtWithoutRoundingDust() (gas: 683713)
+[PASS] test_ConstructorRejectsEOAPolicyAndUnsafeNotice() (gas: 280997)
+[PASS] test_ConstructorRejectsWrongChainAndMismatchedAssets() (gas: 774362)
+[PASS] test_DonatedDiemCannotInflateMintDebtOrPreventRecovery() (gas: 572688)
+[PASS] test_DonatedStakeAfterClosureRecoversWithoutReactivatingCompute() (gas: 787563)
+[PASS] test_EmptyVaultCanCloseWithoutCallingZeroUnstake() (gas: 108242)
+[PASS] test_InferenceSignerHasNoAssetOrPolicyAuthority() (gas: 326851)
+[PASS] test_MintFailureRollsBackVVVAndPosition() (gas: 274923)
+[PASS] test_NoticeExpiryRejectsFreshValidSignaturesWithoutKeeper() (gas: 160672)
+[PASS] test_NoticeFreezesAllocationAndCannotRestartOrSkip() (gas: 378038)
+[PASS] test_PauseBlocksAllocationButNotRewardsOrWinddown() (gas: 683408)
+[PASS] test_ProjectIsolationIncludesAllocationAndRecoveredPrincipal() (gas: 3775009)
+[PASS] test_ProviderCooldownsReadFromPositionsAndCannotReset() (gas: 594835)
+[PASS] test_RejectsAllocationBeyondImmutableCap() (gas: 340683)
+[PASS] test_RejectsUnauthorizedAllocationAndShutdown() (gas: 22253)
+[PASS] test_RejectsZeroAmountOrMinimum() (gas: 74791)
+[PASS] test_ReturnCallbackCannotReenter() (gas: 114731)
+[PASS] test_ReturnFailureCanRetryWithoutLossOrDuplicate() (gas: 184963)
+[PASS] test_RewardsImplicitlyClaimedDuringStakeAreNotReallocated() (gas: 530049)
+[PASS] test_SlippageFailureRollsBackAllSteps() (gas: 249060)
+Suite result: ok. 24 passed; 0 failed; 0 skipped; finished in 368.27ms (372.61ms CPU time)
+
+Ran 4 tests for test/unit/TelligenceDateTime.t.sol:TelligenceDateTimeTest
+[PASS] testFuzzArbitraryBytesNeverRevert(bytes) (runs: 4096, μ: 962, ~: 760)
+[PASS] testKnownUtcEpochVectors() (gas: 147329)
+[PASS] testRejectsInvalidCalendarFields() (gas: 178840)
+[PASS] testRejectsNoncanonicalTimestampBytes() (gas: 22295)
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 370.45ms (370.91ms CPU time)
+
+Ran 37 tests for test/TelligenceVeniceAuth.t.sol:TelligenceVeniceAuthTest
+[PASS] testAcceptsBoundedProviderClockSkew() (gas: 121674)
+[PASS] testAcceptsCanonicalVeniceChallenge() (gas: 121425)
+[PASS] testAcceptsEachPermittedResource() (gas: 474787)
+[PASS] testAcceptsRuntimeGeneratedSignatureVector() (gas: 153712)
+[PASS] testFuzzAcceptsBoundedAlphanumericNonce(uint8) (runs: 4096, μ: 132964, ~: 128678)
+[PASS] testFuzzRejectsArbitraryEnvelope(bytes32,bytes) (runs: 4096, μ: 12176, ~: 12170)
+[PASS] testFuzzRejectsSingleByteMutation(uint256,uint8) (runs: 4096, μ: 57489, ~: 41951)
+[PASS] testHostedSignerCannotAdministerAuthentication() (gas: 14805)
+[PASS] testLifecycleCutoffRejectsOtherwiseValidAuthentication() (gas: 128561)
+[PASS] testPermanentShutdownCannotBeReversed() (gas: 53751)
+[PASS] testPolicyRotationInvalidatesEnvelopes() (gas: 167963)
+[PASS] testReenablingSameSignerDoesNotRestoreSignatures() (gas: 173296)
+[PASS] testRejectsChangedGeneration() (gas: 47031)
+[PASS] testRejectsCrossVaultReplay() (gas: 1553348)
+[PASS] testRejectsExpiredChallenge() (gas: 96313)
+[PASS] testRejectsFarFutureChallenge() (gas: 96220)
+[PASS] testRejectsFinancialDigest() (gas: 116414)
+[PASS] testRejectsHighSSignature() (gas: 121312)
+[PASS] testRejectsHugeDynamicOffsetWithoutReverting() (gas: 37395)
+[PASS] testRejectsInnerSignatureForAnotherChain() (gas: 124585)
+[PASS] testRejectsInnerSignatureForAnotherDomainName() (gas: 124834)
+[PASS] testRejectsInnerSignatureForAnotherVault() (gas: 125003)
+[PASS] testRejectsInvalidCalendarDate() (gas: 87594)
+[PASS] testRejectsInvalidTimestampDelimiter() (gas: 75820)
+[PASS] testRejectsLifetimeOverFiveMinutes() (gas: 95329)
+[PASS] testRejectsNonceLineInjection() (gas: 49586)
+[PASS] testRejectsNonzeroPadding() (gas: 38124)
+[PASS] testRejectsRawSignature() (gas: 12596)
+[PASS] testRejectsReversedDates() (gas: 95338)
+[PASS] testRejectsTimestampWithoutMilliseconds() (gas: 38015)
+[PASS] testRejectsUnrecognizedResource() (gas: 56037)
+[PASS] testRejectsWrongChain() (gas: 36778)
+[PASS] testRejectsWrongSigner() (gas: 120583)
+[PASS] testRejectsZeroLifetime() (gas: 95404)
+[PASS] testRejectsZeroPolicy() (gas: 40495)
+[PASS] testRotationDoesNotEnableAuthentication() (gas: 23772)
+[PASS] testZeroSignerStartsDisabledAndMustBeConfiguredBeforeEnabling() (gas: 1567280)
+Suite result: ok. 37 passed; 0 failed; 0 skipped; finished in 370.53ms (804.72ms CPU time)
+
+╭----------------------------+--------+--------+---------╮
+| Test Suite                 | Passed | Failed | Skipped |
++========================================================+
+| TelligenceComputeVaultTest | 24     | 0      | 0       |
+|----------------------------+--------+--------+---------|
+| TelligenceVeniceAuthTest   | 37     | 0      | 0       |
+|----------------------------+--------+--------+---------|
+| TelligenceDateTimeTest     | 4      | 0      | 0       |
+╰----------------------------+--------+--------+---------╯
+

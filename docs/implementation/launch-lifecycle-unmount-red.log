@@ -1,0 +1,574 @@
+
+ RUN  v4.1.10 /private/tmp/telligence-build/web
+
+ ❯ test/telligence-launch-lifecycle.test.tsx (16 tests | 3 failed) 145ms
+     × never opens a wallet after the launch form unmounts during metadata preparation 5ms
+     × preserves a submitted transaction after unmount without advancing registration 4ms
+     × stops a stale draft before wallet submission when the creator edits its terms 4ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/telligence-launch-lifecycle.test.tsx > compute launch wallet lifecycle > never opens a wallet after the launch form unmounts during metadata preparation
+AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times
+
+Received:
+
+  1st vi.fn() call:
+
+    Array [
+      Object {
+        "abi": Array [
+          Object {
+            "inputs": Array [
+              Object {
+                "components": Array [
+                  Object {
+                    "name": "name",
+                    "type": "string",
+                  },
+                  Object {
+                    "name": "ticker",
+                    "type": "string",
+                  },
+                  Object {
+                    "name": "uri",
+                    "type": "string",
+                  },
+                  Object {
+                    "name": "salt",
+                    "type": "bytes32",
+                  },
+                ],
+                "name": "description",
+                "type": "tuple",
+              },
+              Object {
+                "components": Array [
+                  Object {
+                    "name": "startsAtOrAfter",
+                    "type": "uint48",
+                  },
+                  Object {
+                    "name": "splitPercent",
+                    "type": "uint16",
+                  },
+                  Object {
+                    "name": "initialIssuance",
+                    "type": "uint112",
+                  },
+                  Object {
+                    "name": "issuanceCutFrequency",
+                    "type": "uint32",
+                  },
+                  Object {
+                    "name": "issuanceCutPercent",
+                    "type": "uint32",
+                  },
+                  Object {
+                    "name": "cashOutTaxRate",
+                    "type": "uint16",
+                  },
+                ],
+                "name": "stages",
+                "type": "tuple[]",
+              },
+              Object {
+                "components": Array [
+                  Object {
+                    "name": "conversionCadence",
+                    "type": "uint48",
+                  },
+                  Object {
+                    "name": "minBatchTokens",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "maxBatchTokens",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "minVVVPerProjectToken",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "minDiemPerVVV",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "maxPrincipal",
+                    "type": "uint128",
+                  },
+                ],
+                "name": "policyConfig",
+                "type": "tuple",
+              },
+              Object {
+                "name": "recovery",
+                "type": "address",
+              },
+              Object {
+                "name": "inferenceSigner",
+                "type": "address",
+              },
+            ],
+            "name": "deployFor",
+            "outputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+              Object {
+                "name": "policy",
+                "type": "address",
+              },
+              Object {
+                "name": "vault",
+                "type": "address",
+              },
+            ],
+            "stateMutability": "payable",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [],
+            "name": "REV_DEPLOYER",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "policyOf",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "vaultOf",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "creatorOf",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "policyHashOf",
+            "outputs": Array [
+              Object {
+                "type": "bytes32",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "indexed": true,
+                "name": "revnetId",
+                "type": "uint256",
+              },
+              Object {
+                "indexed": true,
+                "name": "creator",
+                "type": "address",
+              },
+              Object {
+                "name": "policy",
+                "type": "address",
+              },
+              Object {
+                "name": "vault",
+                "type": "address",
+              },
+              Object {
+                "name": "policyHash",
+                "type": "bytes32",
+              },
+            ],
+            "name": "DeployProject",
+            "type": "event",
+          },
+        ],
+        "address": "0x3333333333333333333333333333333333333333",
+        "args": Array [
+          Object {
+            "name": "Public archive",
+            "salt": "0x7bf709a2a39455320d06b2de88d5a4bc20266dab44912dd880871643291685eb",
+            "ticker": "COMPUTE",
+            "uri": "ipfs://bafyproject",
+          },
+          Array [
+            Object {
+              "cashOutTaxRate": 6000,
+              "initialIssuance": 1000000000000000000n,
+              "issuanceCutFrequency": 0,
+              "issuanceCutPercent": 0,
+              "splitPercent": 4000,
+              "startsAtOrAfter": 1800000600,
+            },
+          ],
+          Object {
+            "conversionCadence": 3600,
+            "maxBatchTokens": 100000000000000000000n,
+            "maxPrincipal": 1000000000000000000000n,
+            "minBatchTokens": 1000000000000000000n,
+            "minDiemPerVVV": 1000n,
+            "minVVVPerProjectToken": 1000n,
+          },
+          "0x1111111111111111111111111111111111111111",
+          "0x2222222222222222222222222222222222222222",
+        ],
+        "chainId": 8453,
+        "functionName": "deployFor",
+        "value": 5n,
+      },
+    ]
+
+
+Number of calls: 1
+
+ ❯ test/telligence-launch-lifecycle.test.tsx:345:29
+    343|     view.unmount();
+    344|     await act(async () => pinning.resolve({ cid: "bafyproject" }));
+    345|     expect(mocks.write).not.toHaveBeenCalled();
+       |                             ^
+    346|     expect(callsTo("/v1/projects")).toHaveLength(0);
+    347|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  test/telligence-launch-lifecycle.test.tsx > compute launch wallet lifecycle > preserves a submitted transaction after unmount without advancing registration
+AssertionError: expected null not to be null
+ ❯ test/telligence-launch-lifecycle.test.tsx:356:65
+    354|     view.unmount();
+    355|     await act(async () => submitted.resolve(HASH));
+    356|     expect(localStorage.getItem(pendingLaunchKey(CREATOR))).not.toBeNu…
+       |                                                                 ^
+    357|     expect(mocks.receipt).not.toHaveBeenCalled();
+    358|     expect(callsTo("/v1/projects")).toHaveLength(0);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  test/telligence-launch-lifecycle.test.tsx > compute launch wallet lifecycle > stops a stale draft before wallet submission when the creator edits its terms
+AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times
+
+Received:
+
+  1st vi.fn() call:
+
+    Array [
+      Object {
+        "abi": Array [
+          Object {
+            "inputs": Array [
+              Object {
+                "components": Array [
+                  Object {
+                    "name": "name",
+                    "type": "string",
+                  },
+                  Object {
+                    "name": "ticker",
+                    "type": "string",
+                  },
+                  Object {
+                    "name": "uri",
+                    "type": "string",
+                  },
+                  Object {
+                    "name": "salt",
+                    "type": "bytes32",
+                  },
+                ],
+                "name": "description",
+                "type": "tuple",
+              },
+              Object {
+                "components": Array [
+                  Object {
+                    "name": "startsAtOrAfter",
+                    "type": "uint48",
+                  },
+                  Object {
+                    "name": "splitPercent",
+                    "type": "uint16",
+                  },
+                  Object {
+                    "name": "initialIssuance",
+                    "type": "uint112",
+                  },
+                  Object {
+                    "name": "issuanceCutFrequency",
+                    "type": "uint32",
+                  },
+                  Object {
+                    "name": "issuanceCutPercent",
+                    "type": "uint32",
+                  },
+                  Object {
+                    "name": "cashOutTaxRate",
+                    "type": "uint16",
+                  },
+                ],
+                "name": "stages",
+                "type": "tuple[]",
+              },
+              Object {
+                "components": Array [
+                  Object {
+                    "name": "conversionCadence",
+                    "type": "uint48",
+                  },
+                  Object {
+                    "name": "minBatchTokens",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "maxBatchTokens",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "minVVVPerProjectToken",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "minDiemPerVVV",
+                    "type": "uint128",
+                  },
+                  Object {
+                    "name": "maxPrincipal",
+                    "type": "uint128",
+                  },
+                ],
+                "name": "policyConfig",
+                "type": "tuple",
+              },
+              Object {
+                "name": "recovery",
+                "type": "address",
+              },
+              Object {
+                "name": "inferenceSigner",
+                "type": "address",
+              },
+            ],
+            "name": "deployFor",
+            "outputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+              Object {
+                "name": "policy",
+                "type": "address",
+              },
+              Object {
+                "name": "vault",
+                "type": "address",
+              },
+            ],
+            "stateMutability": "payable",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [],
+            "name": "REV_DEPLOYER",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "policyOf",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "vaultOf",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "creatorOf",
+            "outputs": Array [
+              Object {
+                "type": "address",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "name": "revnetId",
+                "type": "uint256",
+              },
+            ],
+            "name": "policyHashOf",
+            "outputs": Array [
+              Object {
+                "type": "bytes32",
+              },
+            ],
+            "stateMutability": "view",
+            "type": "function",
+          },
+          Object {
+            "inputs": Array [
+              Object {
+                "indexed": true,
+                "name": "revnetId",
+                "type": "uint256",
+              },
+              Object {
+                "indexed": true,
+                "name": "creator",
+                "type": "address",
+              },
+              Object {
+                "name": "policy",
+                "type": "address",
+              },
+              Object {
+                "name": "vault",
+                "type": "address",
+              },
+              Object {
+                "name": "policyHash",
+                "type": "bytes32",
+              },
+            ],
+            "name": "DeployProject",
+            "type": "event",
+          },
+        ],
+        "address": "0x3333333333333333333333333333333333333333",
+        "args": Array [
+          Object {
+            "name": "Public archive",
+            "salt": "0x89b47044d2d44e0416f7304dd0ec6a24314437e9451522faab667d79f39bbef7",
+            "ticker": "COMPUTE",
+            "uri": "ipfs://bafyproject",
+          },
+          Array [
+            Object {
+              "cashOutTaxRate": 6000,
+              "initialIssuance": 1000000000000000000n,
+              "issuanceCutFrequency": 0,
+              "issuanceCutPercent": 0,
+              "splitPercent": 4000,
+              "startsAtOrAfter": 1800000600,
+            },
+          ],
+          Object {
+            "conversionCadence": 3600,
+            "maxBatchTokens": 100000000000000000000n,
+            "maxPrincipal": 1000000000000000000000n,
+            "minBatchTokens": 1000000000000000000n,
+            "minDiemPerVVV": 1000n,
+            "minVVVPerProjectToken": 1000n,
+          },
+          "0x1111111111111111111111111111111111111111",
+          "0x2222222222222222222222222222222222222222",
+        ],
+        "chainId": 8453,
+        "functionName": "deployFor",
+        "value": 5n,
+      },
+    ]
+
+
+Number of calls: 1
+
+ ❯ test/telligence-launch-lifecycle.test.tsx:368:29
+    366|     view.rerender(<LaunchComputeProjectButton draft={{ ...DRAFT, name:…
+    367|     await act(async () => pinning.resolve({ cid: "bafyproject" }));
+    368|     expect(mocks.write).not.toHaveBeenCalled();
+       |                             ^
+    369|   });
+    370|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 13 passed (16)
+   Start at  13:56:36
+   Duration  993ms (transform 52ms, setup 140ms, import 172ms, tests 145ms, environment 468ms)
+

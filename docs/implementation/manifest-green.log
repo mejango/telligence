@@ -1,0 +1,22 @@
+✔ builds runtime-compatible pins from exactly one safe Base block and matches immutable-masked artifacts (2.795625ms)
+✔ rejects an RPC on another chain before any state reads (0.253125ms)
+✔ requires an identified safe block and refuses latest fallback (0.178666ms)
+✔ detects a reorg while pinning instead of mixing two block states (0.491083ms)
+✔ rejects a factory pointing at a different explicitly reviewed Revnet deployer (0.112ms)
+✔ rejects substituted VVV staking and DIEM identities (0.273458ms)
+✔ checks staking assets and all token decimal contexts (0.438833ms)
+✔ rejects missing bytecode for every pinned component (1.6615ms)
+✔ rejects an unexpected implementation even when staking proxy bytecode is unchanged (0.257417ms)
+✔ rejects unrelated deployed factory and adapter bytecode (0.447917ms)
+✔ rejects bad artifact targets links and unsafe immutable ranges (0.945208ms)
+✔ requires reviewed policy bounds and emits no unknown fields from its JSON input (0.551583ms)
+✔ requires explicit addresses policy and output and rejects duplicate unknown or signing flags (0.149333ms)
+✔ writes the reviewed manifest exclusively and never overwrites an existing release (3.363667ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 223.108

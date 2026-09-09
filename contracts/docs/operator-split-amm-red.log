@@ -1,0 +1,17 @@
+Compiling 30 files with Solc 0.8.28
+Solc 0.8.28 finished in 27.33s
+Compiler run successful!
+
+Ran 1 test for test/fork/TelligenceBuybacksFork.t.sol:TelligenceBuybacksForkTest
+[FAIL: creator receives the declared share from the real buyback remint: 0 <= 0] test_RealBuybackRoutesComputeAndCreatorAllocationsThroughFactoryWithoutInflatingSupply() (gas: 15566168)
+Suite result: FAILED. 0 passed; 1 failed; 0 skipped; finished in 6.10s (5.82s CPU time)
+
+Ran 1 test suite in 6.11s (6.10s CPU time): 0 tests passed, 1 failed, 0 skipped (1 total tests)
+
+Failing tests:
+Encountered 1 failing test in test/fork/TelligenceBuybacksFork.t.sol:TelligenceBuybacksForkTest
+[FAIL: creator receives the declared share from the real buyback remint: 0 <= 0] test_RealBuybackRoutesComputeAndCreatorAllocationsThroughFactoryWithoutInflatingSupply() (gas: 15566168)
+
+Encountered a total of 1 failing tests, 0 tests succeeded
+
+Tip: Run `forge test --rerun` to retry only the 1 failed test

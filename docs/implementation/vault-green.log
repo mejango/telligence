@@ -1,0 +1,35 @@
+Compiling 113 files with Solc 0.8.28
+Solc 0.8.28 finished in 6.98s
+Compiler run successful!
+
+Ran 24 tests for test/TelligenceComputeVault.t.sol:TelligenceComputeVaultTest
+[PASS] testFuzz_AllocationConservesPrincipalAndRecovery(uint96) (runs: 4096, μ: 575514, ~: 575530)
+Logs:
+  Bound result 997000000000013134223
+
+[PASS] test_AllocateKeepsEveryPositionInVaultAndClearsApprovals() (gas: 329036)
+[PASS] test_BadStakingReceiptRevertsAtomically() (gas: 246687)
+[PASS] test_ClosingPermanentlyDisablesSignerWithoutReenable() (gas: 76492)
+[PASS] test_CompleteWinddownUsesAggregateDebtWithoutRoundingDust() (gas: 683713)
+[PASS] test_ConstructorRejectsEOAPolicyAndUnsafeNotice() (gas: 280997)
+[PASS] test_ConstructorRejectsWrongChainAndMismatchedAssets() (gas: 774362)
+[PASS] test_DonatedDiemCannotInflateMintDebtOrPreventRecovery() (gas: 572688)
+[PASS] test_DonatedStakeAfterClosureRecoversWithoutReactivatingCompute() (gas: 787563)
+[PASS] test_EmptyVaultCanCloseWithoutCallingZeroUnstake() (gas: 108242)
+[PASS] test_InferenceSignerHasNoAssetOrPolicyAuthority() (gas: 326851)
+[PASS] test_MintFailureRollsBackVVVAndPosition() (gas: 274923)
+[PASS] test_NoticeExpiryRejectsFreshValidSignaturesWithoutKeeper() (gas: 160506)
+[PASS] test_NoticeFreezesAllocationAndCannotRestartOrSkip() (gas: 378038)
+[PASS] test_PauseBlocksAllocationButNotRewardsOrWinddown() (gas: 683408)
+[PASS] test_ProjectIsolationIncludesAllocationAndRecoveredPrincipal() (gas: 3774609)
+[PASS] test_ProviderCooldownsReadFromPositionsAndCannotReset() (gas: 594835)
+[PASS] test_RejectsAllocationBeyondImmutableCap() (gas: 340683)
+[PASS] test_RejectsUnauthorizedAllocationAndShutdown() (gas: 22253)
+[PASS] test_RejectsZeroAmountOrMinimum() (gas: 74791)
+[PASS] test_ReturnCallbackCannotReenter() (gas: 114731)
+[PASS] test_ReturnFailureCanRetryWithoutLossOrDuplicate() (gas: 184963)
+[PASS] test_RewardsImplicitlyClaimedDuringStakeAreNotReallocated() (gas: 530049)
+[PASS] test_SlippageFailureRollsBackAllSteps() (gas: 249060)
+Suite result: ok. 24 passed; 0 failed; 0 skipped; finished in 120.08ms (125.05ms CPU time)
+
+Ran 1 test suite in 120.68ms (120.08ms CPU time): 24 tests passed, 0 failed, 0 skipped (24 total tests)

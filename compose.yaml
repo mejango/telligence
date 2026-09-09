@@ -1,0 +1,154 @@
+name: telligence
+
+x-services-build: &services-build
+  context: .
+  dockerfile: services/Dockerfile
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  init: true
+  restart: unless-stopped
+  tmpfs: ["/tmp:size=32m,mode=1777"]
+
+services:
+  postgres:
+    image: postgres:14.20-bookworm@sha256:a701f1c85fd2aa8b990fca821b9a16907f4c3d3a2eb7027e5897ccdd98a429fc
+    environment:
+      POSTGRES_USER: telligence
+      POSTGRES_DB: telligence
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run npm run dev:init first}
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    networks: [private]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U telligence -d telligence]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  migrate:
+    <<: *hardened
+    build: *services-build
+    command: [node, db/migrate.mjs]
+    environment:
+      DATABASE_URL: postgres://telligence:${POSTGRES_PASSWORD}@postgres:5432/telligence
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [private]
+    restart: "no"
+
+  auth-signer:
+    <<: *hardened
+    build:
+      <<: *services-build
+      args: { SERVICE: auth-signer }
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgres://telligence:${POSTGRES_PASSWORD}@postgres:5432/telligence
+      AUTH_SIGNER_SERVICE_SECRET: ${AUTH_SIGNER_SERVICE_SECRET:?Run npm run dev:init first}
+      SIGNER_ENCRYPTION_KEY: ${SIGNER_ENCRYPTION_KEY:?Run npm run dev:init first}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks:
+      private:
+        aliases: [auth-signer.railway.internal]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  gateway:
+    <<: *hardened
+    stop_grace_period: 140s
+    build:
+      <<: *services-build
+      args: { SERVICE: gateway }
+    environment:
+      NODE_ENV: development
+      PORT: 8080
+      DATABASE_URL: postgres://telligence:${POSTGRES_PASSWORD}@postgres:5432/telligence
+      API_KEY_PEPPER: ${API_KEY_PEPPER:?Run npm run dev:init first}
+      ALLOWED_WEB_ORIGINS: ${ALLOWED_WEB_ORIGINS:-http://localhost:3000,http://localhost:3002}
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8080/api/v1}
+      AUTH_SIGNER_URL: http://auth-signer.railway.internal:3001
+      AUTH_SIGNER_SERVICE_SECRET: ${AUTH_SIGNER_SERVICE_SECRET}
+      BASE_RPC_URL: ${BASE_RPC_URL:-}
+      TELLIGENCE_MANIFEST_PATH: ${TELLIGENCE_MANIFEST_FILE:-}
+      MODEL_PRICES_JSON: ${MODEL_PRICES_JSON:-}
+      MODEL_POLICY_JSON: ${MODEL_POLICY_JSON:-}
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: [./artifacts/local:/app/runtime:ro]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      auth-signer: { condition: service_healthy }
+    networks:
+      private: {}
+      public:
+        aliases: [gateway.railway.internal]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    <<: *hardened
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+        NEXT_PUBLIC_BENDYSTRAW_URL: ${NEXT_PUBLIC_BENDYSTRAW_URL:-https://bendystraw.up.railway.app}
+        NEXT_PUBLIC_TESTNET_BENDYSTRAW_URL: ${NEXT_PUBLIC_TESTNET_BENDYSTRAW_URL:-https://testnet.bendystraw.xyz}
+        NEXT_PUBLIC_PARA_API_KEY: ${NEXT_PUBLIC_PARA_API_KEY:-local-unconfigured}
+        NEXT_PUBLIC_PARA_ENV: ${NEXT_PUBLIC_PARA_ENV:-DEV}
+        NEXT_PUBLIC_PARA_ONRAMP_PROVIDER: ${NEXT_PUBLIC_PARA_ONRAMP_PROVIDER:-CDP}
+        NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID: ${NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID:-}
+        NEXT_PUBLIC_VERSION: ${NEXT_PUBLIC_VERSION:-development}
+        NEXT_PUBLIC_TELLIGENCE_FACTORY_ADDRESS: ${NEXT_PUBLIC_TELLIGENCE_FACTORY_ADDRESS:-}
+    environment:
+      TELLIGENCE_GATEWAY_URL: http://gateway.railway.internal:8080
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+    ports: ["127.0.0.1:3000:3000"]
+    tmpfs: ["/tmp:size=32m,mode=1777", "/app/.next/cache:uid=1001,gid=1001,size=256m"]
+    depends_on:
+      gateway: { condition: service_healthy }
+    networks: [public]
+
+  control-worker:
+    <<: *hardened
+    profiles: [compute]
+    build:
+      <<: *services-build
+      args: { SERVICE: control-worker }
+    environment:
+      PORT: 8082
+      DATABASE_URL: postgres://telligence:${POSTGRES_PASSWORD}@postgres:5432/telligence
+      AUTH_SIGNER_URL: http://auth-signer.railway.internal:3001
+      AUTH_SIGNER_SERVICE_SECRET: ${AUTH_SIGNER_SERVICE_SECRET}
+      BASE_RPC_URL: ${BASE_RPC_URL:-}
+      TELLIGENCE_MANIFEST_PATH: ${TELLIGENCE_MANIFEST_FILE:-}
+      KEEPER_EXECUTION_ENABLED: ${KEEPER_EXECUTION_ENABLED:-false}
+      KEEPER_PRIVATE_KEY: ${KEEPER_PRIVATE_KEY:-}
+      KEEPER_MAX_GAS: ${KEEPER_MAX_GAS:-3000000}
+      KEEPER_MAX_FEE_PER_GAS_WEI: ${KEEPER_MAX_FEE_PER_GAS_WEI:-5000000000}
+    volumes: [./artifacts/local:/app/runtime:ro]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      auth-signer: { condition: service_healthy }
+    networks: [private, public]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8082/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  private: { internal: true }
+  public: {}
+
+volumes:
+  postgres-data: {}

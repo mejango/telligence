@@ -1,0 +1,2 @@
+forge-std/=lib/forge-std/src/
+@rev-net/core-v6/=lib/revnet-core-v6/

@@ -1,0 +1,318 @@
+✖ builds runtime-compatible pins from exactly one safe Base block and matches immutable-masked artifacts (0.691ms)
+✖ rejects an RPC on another chain before any state reads (0.395958ms)
+✖ requires an identified safe block and refuses latest fallback (0.14775ms)
+✖ detects a reorg while pinning instead of mixing two block states (0.139ms)
+✖ rejects a factory pointing at a different explicitly reviewed Revnet deployer (0.128875ms)
+✖ rejects substituted VVV staking and DIEM identities (0.119334ms)
+✖ checks staking assets and all token decimal contexts (0.108416ms)
+✖ rejects missing bytecode for every pinned component (0.103792ms)
+✖ rejects an unexpected implementation even when staking proxy bytecode is unchanged (0.120917ms)
+✖ rejects unrelated deployed factory and adapter bytecode (0.136959ms)
+✖ rejects bad artifact targets links and unsafe immutable ranges (0.127667ms)
+✖ requires reviewed policy bounds and emits no unknown fields from its JSON input (0.109916ms)
+✖ requires explicit addresses policy and output and rejects duplicate unknown or signing flags (0.063041ms)
+✖ writes the reviewed manifest exclusively and never overwrites an existing release (5.390291ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 0
+ℹ fail 14
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 218.323375
+
+✖ failing tests:
+
+test at control-worker/test/create-manifest.test.mjs:53:1
+✖ builds runtime-compatible pins from exactly one safe Base block and matches immutable-masked artifacts (0.691ms)
+  Error: NOT_IMPLEMENTED
+      at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+      at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:54:43)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.start (node:internal/test_runner/test:959:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:332:17)
+
+test at control-worker/test/create-manifest.test.mjs:75:1
+✖ rejects an RPC on another chain before any state reads (0.395958ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /CHAIN/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:75:122)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:75:143)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async startSubtestAfterBootstrap (node:internal/test_runner/harness:332:3),
+    expected: /CHAIN/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:76:1
+✖ requires an identified safe block and refuses latest fallback (0.14775ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /BLOCK/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:76:233)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:76:254)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:752:7),
+    expected: /BLOCK/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:77:1
+✖ detects a reorg while pinning instead of mixing two block states (0.139ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /BLOCK_CHANGED/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:77:214)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:77:235)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:752:7),
+    expected: /BLOCK_CHANGED/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:78:1
+✖ rejects a factory pointing at a different explicitly reviewed Revnet deployer (0.128875ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /REVNET_DEPLOYER/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:78:175)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:78:196)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:752:7),
+    expected: /REVNET_DEPLOYER/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:79:1
+✖ rejects substituted VVV staking and DIEM identities (0.119334ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /PROVIDER/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:79:188)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:79:209)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:752:7),
+    expected: /PROVIDER/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:80:1
+✖ checks staking assets and all token decimal contexts (0.108416ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /PROVIDER/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:80:272)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:80:293)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:752:7),
+    expected: /PROVIDER/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:81:1
+✖ rejects missing bytecode for every pinned component (0.103792ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /CODE/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:81:232)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:81:253)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:752:7),
+    expected: /CODE/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:82:1
+✖ rejects an unexpected implementation even when staking proxy bytecode is unchanged (0.120917ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /IMPLEMENTATION/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:82:190)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:82:211)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:752:7),
+    expected: /IMPLEMENTATION/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:83:1
+✖ rejects unrelated deployed factory and adapter bytecode (0.136959ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /ARTIFACT_RUNTIME/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:83:234)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:83:255)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:752:7),
+    expected: /ARTIFACT_RUNTIME/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:84:1
+✖ rejects bad artifact targets links and unsafe immutable ranges (0.127667ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /ARTIFACT/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:84:558)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:84:579)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:752:7),
+    expected: /ARTIFACT/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:85:1
+✖ requires reviewed policy bounds and emits no unknown fields from its JSON input (0.109916ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /POLICY/. Input:
+  
+  'Error: NOT_IMPLEMENTED'
+  
+      at async TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:85:324)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: NOT_IMPLEMENTED
+        at buildDeploymentManifest (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:2:57)
+        at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:85:345)
+        at Test.runInAsyncScope (node:async_hooks:214:14)
+        at Test.run (node:internal/test_runner/test:1062:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+        at Test.postRun (node:internal/test_runner/test:1191:19)
+        at Test.run (node:internal/test_runner/test:1119:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:752:7),
+    expected: /POLICY/,
+    operator: 'rejects'
+  }
+
+test at control-worker/test/create-manifest.test.mjs:86:1
+✖ requires explicit addresses policy and output and rejects duplicate unknown or signing flags (0.063041ms)
+  Error: NOT_IMPLEMENTED
+      at parseManifestArguments (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:3:50)
+      at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:86:235)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7)
+
+test at control-worker/test/create-manifest.test.mjs:87:1
+✖ writes the reviewed manifest exclusively and never overwrites an existing release (5.390291ms)
+  Error: NOT_IMPLEMENTED
+      at writeManifestExclusive (file:///private/tmp/telligence-build/services/control-worker/create-manifest.mjs:4:56)
+      at TestContext.<anonymous> (file:///private/tmp/telligence-build/services/control-worker/test/create-manifest.test.mjs:87:210)
+      at async Test.run (node:internal/test_runner/test:1069:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7)

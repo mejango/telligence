@@ -1,0 +1,373 @@
+{
+  "chainId": 8453,
+  "forkBlock": 51091381,
+  "stakingProxy": "0x321b7ff75154472B18EDb199033fF4D116F340Ff",
+  "canonicalVVV": "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf",
+  "contracts": [
+    {
+      "address": "0xe37A7920dbc11253ac6d031C29f592f71B348DCA",
+      "match": "exact_match",
+      "verifiedAt": "2025-08-22T00:14:43Z",
+      "sourceResponseSha256": "5a32e27699c2d50e3c2cd19f36467d7a547072fae46b40b9057a4474b369897c",
+      "sourceUrl": "https://sourcify.dev/server/v2/contract/8453/0xe37A7920dbc11253ac6d031C29f592f71B348DCA?fields=abi,sources",
+      "abi": [
+        {
+          "name": "balanceOf",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "account",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "balanceOfUnlocked",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "user",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "burnDiem",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "diemAmountToBurn",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "name": "claim",
+          "type": "function",
+          "inputs": [],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "name": "cooldownDuration",
+          "type": "function",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "decimals",
+          "type": "function",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint8",
+              "internalType": "uint8"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "diem",
+          "type": "function",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "contract Diem"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "finalizeUnstake",
+          "type": "function",
+          "inputs": [],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "name": "getDiemAmountOut",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "sVVVAmountToLock",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "initiateUnstake",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "amount",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "name": "lockedStakes",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "sVVVLockedAmount",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "outstandingDiemAmount",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "mintDiem",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "sVVVAmountToLock",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "minDiemAmountOut",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "name": "stake",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "recipient",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "amount",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "name": "stakes",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "rewardDebt",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "cooldownEnd",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "cooldownAmount",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "venice",
+          "type": "function",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "contract Venice"
+            }
+          ],
+          "stateMutability": "view"
+        }
+      ]
+    },
+    {
+      "address": "0xF4d97F2da56e8c3098f3a8D538DB630A2606a024",
+      "match": "exact_match",
+      "verifiedAt": "2025-08-21T00:02:10Z",
+      "sourceResponseSha256": "c0a48a37e5f28ba9a4d7d4e4e33c987615aa45c81c90f0d6f4547e72e32d0794",
+      "sourceUrl": "https://sourcify.dev/server/v2/contract/8453/0xF4d97F2da56e8c3098f3a8D538DB630A2606a024?fields=abi,sources",
+      "abi": [
+        {
+          "name": "balanceOf",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "account",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "cooldownDuration",
+          "type": "function",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "decimals",
+          "type": "function",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "",
+              "type": "uint8",
+              "internalType": "uint8"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "initiateUnstake",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "amount",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "name": "stake",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "amount",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        },
+        {
+          "name": "stakedInfos",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "",
+              "type": "address",
+              "internalType": "address"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "amountStaked",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "coolDownEnd",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "coolDownAmount",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ],
+          "stateMutability": "view"
+        },
+        {
+          "name": "unstake",
+          "type": "function",
+          "inputs": [],
+          "outputs": [],
+          "stateMutability": "nonpayable"
+        }
+      ]
+    }
+  ],
+  "stakingImplementationAtForkBlock": "0xe37A7920dbc11253ac6d031C29f592f71B348DCA",
+  "implementationSlot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+}

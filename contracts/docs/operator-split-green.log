@@ -1,0 +1,23 @@
+Compiling 4 files with Solc 0.8.28
+Solc 0.8.28 finished in 23.13s
+Compiler run successful!
+
+Ran 11 tests for test/integration/TelligenceOperatorSplit.t.sol:TelligenceOperatorSplitTest
+[PASS] testFuzz_fractionalRoutingProtectsComputeAndConservesEveryIssuedUnit(uint16,uint96) (runs: 256, μ: 6225408, ~: 6228335)
+Logs:
+  Bound result 10
+  Bound result 9299
+
+[PASS] test_creatorAllocationDoesNotReplaceComputeOrRewardRecoveryAuthority() (gas: 6239606)
+[PASS] test_delayedDistributionAcrossStageCannotChangeCreatorToComputeRatio() (gas: 6676582)
+[PASS] test_factoryRejectsNoSupporterShareAndOverflowingInputsAtomically() (gas: 12811039)
+[PASS] test_factoryRequiresPositiveComputeEvenWithOperatorAllocation() (gas: 4277417)
+[PASS] test_fractionalSplitDustFollowsStockOwnerAndCanBeBurnedPermissionlessly() (gas: 6245392)
+[PASS] test_lockedSplitCannotBeChangedEvenThroughExistingStockOperatorPermission() (gas: 5808387)
+[PASS] test_oneBasisPointSupporterShareRemainsPossible() (gas: 6195632)
+[PASS] test_policyHashCommitsCreatorRecipientAndNewPolicyVersion() (gas: 5755224)
+[PASS] test_stagedRoutingRejectsChangingBeneficiaryRatios() (gas: 4284967)
+[PASS] test_zeroOperatorKeepsOriginalSingleRecipientAndSupporterIssuance() (gas: 6106379)
+Suite result: ok. 11 passed; 0 failed; 0 skipped; finished in 130.50ms (137.49ms CPU time)
+
+Ran 1 test suite in 136.35ms (130.50ms CPU time): 11 tests passed, 0 failed, 0 skipped (11 total tests)

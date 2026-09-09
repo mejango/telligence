@@ -1,0 +1,9 @@
+npm notice run @telligence/web@0.0.1 bundle:check
+npm notice run node scripts/check-client-bundle.mjs
+Largest app route: /[slug]/owners (588.8 KiB gzip)
+Unique app JavaScript: 813.1 KiB gzip
+All client JavaScript: 2511.6 KiB gzip
+Budgets: 900 KiB per route, 1100 KiB route-referenced, 2600 KiB all client JavaScript
+WalletConnect SDK is lazy-loaded
+Coinbase Wallet SDK is lazy-loaded
+Safe SDK is lazy-loaded

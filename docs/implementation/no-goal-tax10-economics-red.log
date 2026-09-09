@@ -1,0 +1,17 @@
+Compiling 1 files with Solc 0.8.28
+Solc 0.8.28 finished in 20.82s
+Compiler run successful!
+
+Ran 1 test for test/economics/ComputeEconomics.t.sol:ComputeEconomicsTest
+[FAIL: assertion failed: 24107850000000000000 != 35705475000000000000] test_DefaultTenPercentTaxMatchesIndependentNetFormula() (gas: 5293170)
+Suite result: FAILED. 0 passed; 1 failed; 0 skipped; finished in 11.66ms (2.57ms CPU time)
+
+Ran 1 test suite in 17.72ms (11.66ms CPU time): 0 tests passed, 1 failed, 0 skipped (1 total tests)
+
+Failing tests:
+Encountered 1 failing test in test/economics/ComputeEconomics.t.sol:ComputeEconomicsTest
+[FAIL: assertion failed: 24107850000000000000 != 35705475000000000000] test_DefaultTenPercentTaxMatchesIndependentNetFormula() (gas: 5293170)
+
+Encountered a total of 1 failing tests, 0 tests succeeded
+
+Tip: Run `forge test --rerun` to retry only the 1 failed test

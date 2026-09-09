@@ -1,0 +1,11 @@
+Compiling 1 files with Solc 0.8.28
+Solc 0.8.28 finished in 25.71s
+Compiler run successful!
+
+Ran 3 tests for test/fork/TelligenceBuybacksFork.t.sol:TelligenceBuybacksForkTest
+[PASS] test_RealAMMOutputBelowPolicyFloorRevertsEveryPoolAndTreasuryMovement() (gas: 620156)
+[PASS] test_RealBuybackPreservesProductionAndCashoutReceivesVVVOutsideTerminalReclaim() (gas: 1214768)
+[PASS] test_RealBuybackRoutesComputeAndCreatorAllocationsThroughFactoryWithoutInflatingSupply() (gas: 15876697)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 4.97s (4.64s CPU time)
+
+Ran 1 test suite in 4.98s (4.97s CPU time): 3 tests passed, 0 failed, 0 skipped (3 total tests)

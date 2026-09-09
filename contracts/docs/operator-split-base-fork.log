@@ -1,0 +1,15 @@
+Compiling 31 files with Solc 0.8.28
+Solc 0.8.28 finished in 28.55s
+Compiler run successful!
+
+Ran 2 tests for test/fork/TelligenceVeniceFork.t.sol:TelligenceVeniceForkTest
+[PASS] test_RealProviderHonorsMinimumAndAtomicRollback() (gas: 483842)
+[PASS] test_RealVVVToStakedDiemAndCompleteReturn() (gas: 777664)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 312.77ms (5.59ms CPU time)
+
+Ran 2 tests for test/fork/TelligenceBuybacksFork.t.sol:TelligenceBuybacksForkTest
+[PASS] test_RealAMMOutputBelowPolicyFloorRevertsEveryPoolAndTreasuryMovement() (gas: 620180)
+[PASS] test_RealBuybackPreservesProductionAndCashoutReceivesVVVOutsideTerminalReclaim() (gas: 1214793)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 312.78ms (2.79ms CPU time)
+
+Ran 2 test suites in 321.72ms (625.55ms CPU time): 4 tests passed, 0 failed, 0 skipped (4 total tests)

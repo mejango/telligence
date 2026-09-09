@@ -1,0 +1,7 @@
+{
+  "name": "Telligence",
+  "short_name": "Telligence",
+  "description": "Fund recurring compute for work you believe in.",
+  "iconPath": "/assets/img/telligence-mark.svg",
+  "safe_apps_permissions": []
+}

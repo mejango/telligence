@@ -1,9 +1,10 @@
 name: CI
 
 on:
+  workflow_call:
   pull_request:
   push:
-    branches: [main, staging]
+    branches: [main, dev]
 
 permissions:
   contents: read
@@ -17,6 +18,9 @@ jobs:
     name: Type, lint, test, build, and browser
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: web
     env:
       NODE_OPTIONS: --no-experimental-webstorage
       NEXT_PUBLIC_SITE_URL: http://127.0.0.1:4173
@@ -61,6 +65,7 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
+          cache-dependency-path: web/package-lock.json
           cache: npm
 
       - name: Use pinned npm
@@ -75,47 +80,20 @@ jobs:
       - name: Reject high or critical production dependency advisories
         run: npm run audit:production
 
-      - name: Validate environment and deployment policy fixtures
-        run: npm run env:test && npm run deployment:check
-
-      - name: Type-check
-        run: npm run typecheck
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Reject new or silently changed formatting debt
-        run: npm run format:ratchet
-
-      - name: Verify pinned contract deployment
-        env:
-          PROTOCOL_DEPLOYMENTS_DIR: ${{ github.workspace }}/.contract-source/deploy-all-v6
-        run: npm run protocol:check
-
-      - name: Verify wallet-write inventory and run invariant tests with coverage
-        run: npm run test:ci
-
-      - name: Build production application
-        run: npm run build:browser
-
-      - name: Verify standalone deployment artifact
-        run: npm run standalone:check
-
-      - name: Enforce client bundle budgets
-        run: npm run bundle:check
-
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Test production shape and accessibility
-        run: npm run test:browser
+      - name: Run the complete web release gate
+        env:
+          PROTOCOL_DEPLOYMENTS_DIR: ${{ github.workspace }}/.contract-source/deploy-all-v6
+        run: npm run check
 
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage
-          path: coverage/
+          path: web/coverage/
           if-no-files-found: ignore
           retention-days: 14
 
@@ -125,8 +103,8 @@ jobs:
         with:
           name: playwright-diagnostics
           path: |
-            playwright-report/
-            test-results/
+            web/playwright-report/
+            web/test-results/
           if-no-files-found: ignore
           retention-days: 14
 
@@ -194,17 +172,17 @@ jobs:
             --build-arg NEXT_PUBLIC_RPC_OPTIMISM_SEPOLIA_URLS \
             --build-arg NEXT_PUBLIC_RPC_BASE_SEPOLIA_URLS \
             --build-arg NEXT_PUBLIC_RPC_ARBITRUM_SEPOLIA_URLS \
-            --tag revnet-money:ci .
+            --tag telligence-web:ci ./web
 
       - name: Start least-privilege container
         run: |
-          docker run --detach --name revnet-money-ci \
+          docker run --detach --name telligence-web-ci \
             --read-only \
             --tmpfs /app/.next/cache:uid=1001,gid=1001 \
             --cap-drop ALL \
             --security-opt no-new-privileges \
             --publish 127.0.0.1:3000:3000 \
-            revnet-money:ci
+            telligence-web:ci
 
       - name: Verify health and immutable revision
         run: |
@@ -220,12 +198,106 @@ jobs:
       - name: Show container logs
         if: failure()
         run: |
-          if docker container inspect revnet-money-ci >/dev/null 2>&1; then
-            docker logs revnet-money-ci
+          if docker container inspect telligence-web-ci >/dev/null 2>&1; then
+            docker logs telligence-web-ci
           else
             echo "Smoke-test container was not created; no container logs are available."
           fi
 
       - name: Stop smoke-test container
         if: always()
-        run: docker rm --force revnet-money-ci || true
+        run: docker rm --force telligence-web-ci || true
+
+  contracts:
+    name: Contract unit, integration, invariant, and size checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      FOUNDRY_PROFILE: ci
+      NODE_OPTIONS: --no-experimental-webstorage
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: contracts/package-lock.json
+      - name: Use pinned npm
+        run: npm install --global npm@12.0.1 --no-audit --no-fund
+      - name: Install locked contract and ABI-tool dependencies
+        run: npm ci --ignore-scripts && npm --prefix contracts ci --ignore-scripts --workspaces=false --allow-git=root
+      - name: Install pinned Foundry
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+        with:
+          version: v1.7.0
+      - name: Check Solidity format
+        working-directory: contracts
+        run: forge fmt --check
+      - name: Run contract tests without external RPC
+        run: npm run test:contracts
+      - name: Enforce deployable contract sizes
+        working-directory: contracts
+        run: forge build src/TelligenceFactory.sol src/TelligenceComputeVaultDeployer.sol --sizes --skip '*/test/**' --skip '*/script/**'
+      - name: Check generated ABI parity
+        run: |
+          npm run abi:generate
+          git diff --exit-code -- packages/contracts web/src/lib/telligence/generated
+
+  services:
+    name: Gateway, signer, worker, and PostgreSQL integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NODE_OPTIONS: --no-experimental-webstorage
+      TEST_DATABASE_URL: postgres://telligence:test-only-ci-password@127.0.0.1:5432/telligence_test
+    services:
+      postgres:
+        image: postgres:14.20-bookworm@sha256:a701f1c85fd2aa8b990fca821b9a16907f4c3d3a2eb7027e5897ccdd98a429fc
+        env:
+          POSTGRES_USER: telligence
+          POSTGRES_PASSWORD: test-only-ci-password
+          POSTGRES_DB: telligence_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd 'pg_isready -U telligence -d telligence_test'
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: services/package-lock.json
+      - name: Use pinned npm
+        run: npm install --global npm@12.0.1 --no-audit --no-fund
+      - name: Install locked service dependencies
+        run: npm --prefix services ci --ignore-scripts
+      - name: Verify service dependency integrity and production advisories
+        run: npm --prefix services ls --depth=0 && npm --prefix services audit --omit=dev --audit-level=high
+      - name: Test private local setup
+        run: npm run test:tooling
+      - name: Require PostgreSQL and test all service boundaries
+        run: node scripts/require-test-db.mjs && npm run test:services
+      - name: Build and start isolated service containers
+        run: |
+          npm run dev:init
+          POSTGRES_PORT=55442 docker compose --project-name telligence-ci up --build --wait gateway
+          docker compose --profile compute build control-worker
+      - name: Verify health and unconfigured deployment gates
+        run: |
+          node scripts/smoke-unconfigured.mjs
+          docker compose --project-name telligence-ci exec -T gateway node --input-type=module -e "const r=await fetch('http://auth-signer.railway.internal:3001/v1/prepare-signer',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});if(r.status!==401)process.exit(1)"
+      - name: Show service diagnostics
+        if: failure()
+        run: docker compose --project-name telligence-ci logs --tail 80
+      - name: Stop isolated service containers
+        if: always()
+        run: docker compose --project-name telligence-ci down

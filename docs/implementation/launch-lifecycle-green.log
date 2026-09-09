@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /private/tmp/telligence-build/web
+
+
+ Test Files  1 passed (1)
+      Tests  18 passed (18)
+   Start at  14:02:05
+   Duration  1.14s (transform 52ms, setup 146ms, import 190ms, tests 141ms, environment 543ms)
+

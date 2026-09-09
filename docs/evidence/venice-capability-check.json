@@ -1,0 +1,8 @@
+{
+  "checkedAt": "2026-09-09T14:56:58.613Z",
+  "endpoint": "https://api.venice.ai/api/v1/chat/completions",
+  "status": 402,
+  "baseContractWalletAuthAdvertised": true,
+  "canonicalHeader": "SIGN-IN-WITH-X",
+  "scope": "Unauthenticated capability discovery only. No funded activation tested."
+}

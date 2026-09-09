@@ -1,0 +1,27 @@
+{
+  "name": "@telligence/services",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "test": "node --test gateway/test/*.test.mjs auth-signer/test/*.test.mjs control-worker/test/*.test.mjs",
+    "test:gateway": "node --test gateway/test/*.test.mjs",
+    "test:db": "node --test gateway/test/postgres.test.mjs gateway/test/http.test.mjs gateway/test/authentication.test.mjs gateway/test/canary.test.mjs gateway/test/reconcile.test.mjs gateway/test/target.test.mjs control-worker/test/postgres.test.mjs",
+    "migrate": "node db/migrate.mjs",
+    "start:gateway": "node gateway/server.mjs",
+    "start:signer": "node auth-signer/server.mjs",
+    "start:worker": "node control-worker/server.mjs",
+    "canary": "node gateway/canary.mjs",
+    "audit": "npm audit --omit=dev --audit-level=high",
+    "reconcile": "node gateway/reconcile.mjs",
+    "manifest:create": "node control-worker/create-manifest.mjs",
+    "manifest:check": "node control-worker/check-manifest.mjs"
+  },
+  "dependencies": {
+    "pg": "8.16.3",
+    "viem": "2.56.3"
+  }
+}

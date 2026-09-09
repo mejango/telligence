@@ -1,0 +1,509 @@
+npm notice run @telligence/web@0.0.1 test:ci
+npm notice run npm run wallet-writes:check && vitest run --coverage
+npm notice run @telligence/web@0.0.1 wallet-writes:check
+npm notice run node scripts/check-wallet-write-sites.mjs
+Verified 139 wallet boundary call sites across 13 documented surfaces and 31 test-referenced actions.
+
+ RUN  v4.1.10 /private/tmp/telligence-build/web
+      Coverage enabled with v8
+
+Not implemented: navigation to another Document
+
+ Test Files  206 passed | 1 skipped (207)
+      Tests  1659 passed | 1 skipped (1660)
+   Start at  14:39:29
+   Duration  38.37s (transform 10.33s, setup 33.78s, import 79.47s, tests 51.86s, environment 115.72s)
+
+ % Coverage report from v8
+-------------------|---------|----------|---------|---------|-------------------
+File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+-------------------|---------|----------|---------|---------|-------------------
+All files          |   53.08 |    45.44 |   50.23 |   54.86 |                   
+ src/app           |   37.69 |    40.42 |   35.36 |    40.8 |                   
+  ...Providers.tsx |   13.82 |    16.27 |   10.71 |   18.05 | ...4,59-62,76-185 
+  ...ivityFeed.tsx |   67.53 |    58.62 |   73.33 |   70.58 | ...,70,96-108,130 
+  error.tsx        |       0 |        0 |       0 |       0 | 1-73              
+  ...geActivity.ts |       0 |        0 |       0 |       0 | 22-98             
+  ...opProjects.ts |   94.59 |    84.21 |    87.5 |   96.96 | 48                
+  global-error.tsx |       0 |      100 |       0 |       0 | 1-13              
+  layout.tsx       |       0 |        0 |       0 |       0 | 11-63             
+  not-found.tsx    |       0 |      100 |       0 |       0 | 5                 
+  page.tsx         |       0 |      100 |       0 |       0 | 8                 
+  providers.tsx    |       0 |      100 |       0 |       0 | 1-14              
+  robots.ts        |       0 |        0 |       0 |       0 | 3-6               
+  sitemap.ts       |       0 |        0 |       0 |       0 | 4-22              
+ src/app/[slug]    |   61.13 |    46.53 |   52.63 |   62.06 |                   
+  ...Providers.tsx |     100 |    77.77 |     100 |     100 | 29-30             
+  ...ctFallback.ts |   85.71 |    88.23 |   54.54 |      86 | ...06,122,135,145 
+  ...ctOperator.ts |     100 |    83.33 |     100 |     100 | 46                
+  ...uckerGroup.ts |   84.61 |      100 |     100 |   81.81 | 20-21             
+  layout.tsx       |       0 |        0 |       0 |       0 | 25-296            
+  loading.tsx      |       0 |        0 |       0 |       0 | 1-16              
+  page.tsx         |   86.66 |    38.46 |     100 |     100 | 18-53             
+  ...ute.server.ts |   93.75 |    96.29 |     100 |   95.12 | 63,177            
+ ...out/components |    82.6 |    77.45 |   81.81 |   85.31 |                   
+  ...onSection.tsx |       0 |        0 |       0 |       0 | 1-24              
+  ...ataDialog.tsx |   80.54 |    72.83 |   82.05 |   85.64 | ...69-472,543-674 
+  ProjectLinks.tsx |       0 |      100 |       0 |       0 | 8-12              
+  RichPreview.tsx  |    62.5 |       50 |     100 |    62.5 | 7,18-19           
+  metadataMerge.ts |     100 |    97.22 |     100 |     100 | 94,203            
+ ...ug]/components |   45.07 |    57.14 |   39.28 |   47.61 |                   
+  ...ectNotice.tsx |       0 |        0 |       0 |       0 | 1-28              
+  ProjectMenu.tsx  |   76.66 |    86.11 |      50 |      75 | 27-74             
+  ...ctTabIcon.tsx |     100 |       50 |     100 |     100 | 96                
+  ...ectLayout.tsx |       0 |        0 |       0 |       0 | 1-38              
+ ...s/ActivityFeed |   62.92 |    53.21 |   62.26 |   62.97 |                   
+  ActivityFeed.tsx |   16.36 |    10.52 |    7.14 |      18 | ...7,81-83,89-241 
+  ActivityItem.tsx |   50.53 |    38.93 |   66.66 |   45.67 | ...69-173,198-351 
+  ...vityEvents.ts |   84.39 |    81.16 |   95.23 |   86.07 | ...68-469,478-479 
+ ...ponents/Header |     7.4 |      7.2 |   14.81 |    6.18 |                   
+  Header.tsx       |       0 |        0 |       0 |       0 | 1-328             
+  TvlDatum.tsx     |   17.02 |    29.62 |   23.52 |      15 | 43-93,113-161     
+ ...onents/PayCard |       0 |        0 |       0 |       0 |                   
+  PayCard.tsx      |       0 |      100 |       0 |       0 | 1-7               
+  ...erContext.tsx |       0 |        0 |       0 |       0 | 11-32             
+ ...nts/TokenPrice |     7.1 |     7.47 |       5 |    7.14 |                   
+  ...gleButton.tsx |       0 |        0 |       0 |       0 | 1-27              
+  ...riceChart.tsx |      40 |      100 |       0 |      40 | 7-11              
+  ...rtTooltip.tsx |       0 |        0 |       0 |       0 | 20-61             
+  ...riceChart.tsx |       0 |        0 |       0 |       0 | 1-345             
+  ...iceHistory.ts |       0 |        0 |       0 |       0 | 10-30             
+  ...hOutChange.ts |   84.84 |    72.72 |     100 |     100 | 12,25,31-41,52-64 
+  ...iceHistory.ts |       0 |        0 |       0 |       0 | 25-195            
+  ...eChartData.ts |       0 |        0 |       0 |       0 | 1-319             
+  ...iceHistory.ts |       0 |        0 |       0 |       0 | 23-289            
+  priceConcepts.ts |       0 |        0 |       0 |       0 | 25-32             
+ ...mponents/Value |    3.21 |     2.47 |    6.47 |    3.23 |                   
+  BorrowDialog.tsx |       0 |        0 |       0 |       0 | 37-418            
+  BridgeDialog.tsx |       0 |        0 |       0 |       0 | 1-558             
+  ...rtantInfo.tsx |       0 |        0 |       0 |       0 | 8                 
+  LoanFeeChart.tsx |   94.73 |    68.96 |    87.5 |   94.44 | 63                
+  ...ailsTable.tsx |    9.09 |        5 |   22.22 |      10 | 50-142,189-267    
+  ...ateDialog.tsx |       0 |        0 |       0 |       0 | 23-441            
+  RedeemDialog.tsx |       0 |        0 |       0 |       0 | 72-689            
+  RepayDialog.tsx  |       0 |        0 |       0 |       0 | 34-895            
+  ...dLoanCard.tsx |       0 |        0 |       0 |       0 | 20-30             
+ ...ts/Value/hooks |   49.33 |    55.29 |      60 |   49.76 |                   
+  ...rowDialog.tsx |   49.33 |    55.29 |      60 |   49.76 | ...83-784,812-813 
+ .../components/v6 |    12.5 |        5 |    6.25 |   15.38 |                   
+  ...rtContext.tsx |    6.89 |        0 |       0 |    8.33 | 40-79             
+  shared.ts        |   66.66 |       50 |     100 |     100 | 21                
+ ...ents/v6/extras |   54.94 |    46.06 |   55.38 |   58.19 |                   
+  ...dressList.tsx |       0 |        0 |       0 |       0 | 1-100             
+  ...eployForm.tsx |   78.77 |    66.66 |      80 |   82.31 | ...47-571,705-715 
+  V6ExtrasTab.tsx  |       0 |        0 |       0 |       0 | 1-192             
+  projectPayers.ts |   56.25 |    76.47 |      50 |   58.33 | 12-15,46          
+ ...ts/v6/operator |    18.6 |    11.32 |   26.66 |   18.11 |                   
+  ...outerCard.tsx |   26.33 |    19.04 |   35.38 |   27.35 | ...4,894-952,1000 
+  ...countCard.tsx |       0 |        0 |       0 |       0 | 1-408             
+  ...EditsCard.tsx |       0 |        0 |       0 |       0 | 1-42              
+  ...sionsCard.tsx |    58.9 |    41.17 |   51.85 |   59.32 | 118-256           
+  ...dleEditor.tsx |       0 |        0 |       0 |       0 | 1-1113            
+  ...QueueCard.tsx |       0 |        0 |       0 |       0 | 1-629             
+  ...nsionCard.tsx |       0 |        0 |       0 |       0 | 1-321             
+  ...eratorTab.tsx |       0 |        0 |       0 |       0 | 1-38              
+  operatorLib.ts   |   69.38 |    69.23 |   56.25 |   68.88 | ...73,107-125,192 
+  ...issionMeta.ts |    87.5 |        0 |      75 |   83.33 | 66                
+  ...tensionLib.ts |   93.33 |    77.77 |     100 |   91.66 | 83,93             
+  ...tOperators.ts |       0 |        0 |       0 |       0 | 1-85              
+  ...atorWrites.ts |   56.17 |     52.5 |   66.66 |   58.53 | 143-214,218,285   
+ ...ts/v6/overview |       0 |        0 |       0 |       0 |                   
+  ...InfoPanel.tsx |       0 |        0 |       0 |       0 | 1-97              
+  ...erviewTab.tsx |       0 |      100 |       0 |       0 | 1-14              
+ ...ents/v6/owners |   68.81 |    68.39 |   59.64 |   71.23 |                   
+  ...nceSubtab.tsx |   89.83 |    65.27 |      80 |   96.07 | 99,231            
+  ...ansSubtab.tsx |       0 |        0 |       0 |       0 | 1-207             
+  V6OwnersTab.tsx  |   20.83 |    14.28 |       4 |      25 | ...7,30-31,61-105 
+  ...itsSubtab.tsx |   95.08 |    71.42 |   89.47 |   96.61 | 223,261           
+  V6TokenPanel.tsx |    78.1 |    80.56 |   80.95 |   79.55 | ...24-525,664-689 
+ ...wners/accounts |   14.49 |     8.24 |   11.36 |   15.51 |                   
+  ...ntsSubtab.tsx |      50 |      100 |       0 |      50 | 13                
+  V6AllCard.tsx    |    6.25 |        0 |       0 |    6.25 | 20-68             
+  ...ensDialog.tsx |    1.78 |        0 |       0 |    1.96 | 44-217            
+  ...itsDialog.tsx |   90.47 |       75 |     100 |     100 | 82-108            
+  V6YouCard.tsx    |    2.45 |        0 |       0 |    2.83 | ...8,60-61,63-713 
+  ...sAggregate.ts |   77.77 |    66.66 |      40 |   76.47 | 19-24             
+ .../owners/market |   28.65 |    26.02 |   24.64 |   30.29 |                   
+  AmmCard.tsx      |   14.28 |    16.82 |    8.33 |   15.56 | ...1044,1108-1910 
+  ...tionPanel.tsx |    1.19 |        0 |       0 |    1.29 | 63-639            
+  ...gePreview.tsx |   88.88 |     80.7 |     100 |   98.07 | 223               
+  ...EditPanel.tsx |    1.24 |        0 |       0 |    1.35 | 44-50,67-568      
+  ...riceChart.tsx |       0 |        0 |       0 |       0 | 1-262             
+  ...tHookCard.tsx |       0 |        0 |       0 |       0 | 1-300             
+  ...ketSubtab.tsx |       0 |        0 |       0 |       0 | 1-31              
+  formView.ts      |   95.34 |     85.4 |     100 |    97.5 | 89,104            
+  ...iceHistory.ts |       0 |        0 |       0 |       0 | 1-23              
+  lib.ts           |   42.65 |    35.65 |   45.08 |    45.3 | ...2635,2668-2688 
+  ...dityWrite.tsx |    2.94 |        0 |       0 |    3.44 | 42-120            
+ ...ers/settlement |   26.69 |    24.64 |   27.15 |   27.95 |                   
+  ...hainsCard.tsx |       0 |        0 |       0 |       0 | 1-152             
+  BridgesCard.tsx  |       0 |        0 |       0 |       0 | 1-92              
+  GossipCard.tsx   |       0 |        0 |       0 |       0 | 1-293             
+  PayoutsCard.tsx  |   85.71 |    78.26 |   85.29 |   89.53 | ...03,224-228,303 
+  ...mentsCard.tsx |       0 |        0 |       0 |       0 | 1-464             
+  ...entSubtab.tsx |       0 |        0 |       0 |       0 | 1-33              
+  lib.ts           |    5.48 |     6.47 |    2.04 |    5.85 | ...36-310,327-680 
+  payouts.ts       |   89.41 |    78.43 |   84.61 |    93.5 | 226-232           
+ ...ponents/v6/pay |    2.81 |     2.79 |    6.56 |    2.12 |                   
+  TextSelect.tsx   |       0 |        0 |       0 |       0 | 1-59              
+  V6PayCard.tsx    |       0 |        0 |       0 |       0 | 1-1605            
+  ...irmDialog.tsx |       0 |        0 |       0 |       0 | 1-321             
+  ...ShopStrip.tsx |       0 |        0 |       0 |       0 | 1-117             
+  usePayShop.ts    |    3.12 |        0 |       0 |    3.22 | 58-233            
+  usePaySurface.ts |       0 |        0 |       0 |       0 | 1-147             
+ ...onents/v6/shop |   43.23 |    34.44 |   32.11 |   45.49 |                   
+  ...temsModal.tsx |    64.7 |    68.34 |   54.16 |   68.85 | ...82-396,463,514 
+  ...rsSection.tsx |     2.7 |        0 |       0 |    3.22 | 32-224            
+  ...ediaModal.tsx |   84.21 |    75.32 |   81.81 |   88.57 | ...73,207-220,239 
+  ...rySection.tsx |    2.94 |        0 |       0 |    3.22 | 61-499            
+  ...ItemModal.tsx |    8.04 |    11.49 |   15.38 |     7.5 | 56-303            
+  ...tailModal.tsx |    5.26 |        0 |       0 |    5.71 | 69-304            
+  ...iaPreview.tsx |   54.54 |    33.33 |   66.66 |   62.96 | 16-20,64-95       
+  V6ShopTab.tsx    |   13.15 |     7.69 |    12.5 |   14.28 | 36-102            
+  shopBatch.ts     |   97.56 |     97.5 |     100 |     100 | 93                
+  shopLib.ts       |   33.33 |    30.53 |   22.03 |      35 | ...69-488,500-551 
+  shopMediaEdit.ts |    92.2 |       85 |     100 |   97.01 | 51-52             
+  ...ermissions.ts |   34.78 |    22.22 |      50 |      30 | 91-158            
+  ...stinations.ts |    5.88 |        0 |       0 |    6.25 | 20-55             
+ ...nents/v6/terms |   76.24 |    68.14 |   81.39 |   80.66 |                   
+  ...ChartBase.tsx |   82.92 |    74.62 |      84 |    86.3 | ...56,187-190,204 
+  V6TermsTab.tsx   |       0 |        0 |       0 |       0 | 1-48              
+  chartUtils.ts    |   76.25 |    66.12 |    90.9 |    83.6 | ...50-151,160,173 
+ .../[slug]/extras |   81.81 |       50 |     100 |     100 |                   
+  page.tsx         |   81.81 |       50 |     100 |     100 | 15-22             
+ ...slug]/operator |   78.57 |    66.66 |      50 |   91.66 |                   
+  page.tsx         |   78.57 |    66.66 |      50 |   91.66 | 38                
+ .../[slug]/owners |   81.81 |       50 |     100 |     100 |                   
+  page.tsx         |   81.81 |       50 |     100 |     100 | 15-22             
+ ...ers/components |   82.63 |    71.82 |   82.52 |   85.23 |                   
+  ...ntsDialog.tsx |   81.92 |    70.29 |   88.88 |    84.5 | ...77,189,387-425 
+  ...ensButton.tsx |   89.47 |    73.33 |     100 |     100 | 53-73             
+  ...tchButton.tsx |   93.33 |    84.28 |      90 |   96.42 | 53,164            
+  ...sPieChart.tsx |    54.9 |    10.52 |   41.17 |      60 | 66-132            
+  ...antsTable.tsx |   81.81 |    59.25 |   66.66 |   81.81 | 60,168-171,180    
+  ...litsSchema.ts |   68.29 |    70.73 |     100 |    67.5 | ...40-41,47,49,55 
+  ...utionBatch.ts |     100 |    85.29 |     100 |     100 | 165               
+  splitsLib.ts     |   94.11 |    93.75 |     100 |     100 | 42                
+ ...mponents/hooks |   70.17 |    63.46 |   56.52 |   74.75 |                   
+  ...hainSplits.ts |       4 |        0 |       0 |    4.34 | 22-97             
+  ...plitGroups.ts |   88.76 |    78.57 |   86.66 |      95 | 47,121,179-184    
+ ...pp/[slug]/shop |   81.81 |       50 |     100 |     100 |                   
+  page.tsx         |   81.81 |       50 |     100 |     100 | 15-22             
+ ...p/[slug]/terms |   27.27 |        0 |      40 |   31.57 |                   
+  getRulesets.ts   |      50 |        0 |      50 |   54.54 | 33-42,61-64       
+  page.tsx         |       0 |        0 |       0 |       0 | 12-25             
+ ...rms/components |       0 |        0 |       0 |       0 |                   
+  ...ceSection.tsx |       0 |        0 |       0 |       0 | 1-60              
+  StagesTable.tsx  |       0 |        0 |       0 |       0 | 1-248             
+ ...p/account/[id] |       0 |        0 |       0 |       0 |                   
+  layout.tsx       |       0 |        0 |       0 |       0 | 14-22             
+  page.tsx         |       0 |        0 |       0 |       0 | 10-14             
+  ...lveAccount.ts |       0 |        0 |       0 |       0 | 13-33             
+ ...id]/components |   24.01 |     16.1 |   24.13 |   25.68 |                   
+  ...tActivity.tsx |   71.69 |    43.18 |    62.5 |   77.27 | ...27-130,161-183 
+  ...untHeader.tsx |       0 |        0 |       0 |       0 | 1-62              
+  ...dProjects.tsx |       0 |        0 |       0 |       0 | 1-122             
+  ...dProjects.tsx |       0 |        0 |       0 |       0 | 1-168             
+  ...mHoldings.tsx |       0 |        0 |       0 |       0 | 1-177             
+  ...nHoldings.tsx |   38.63 |     32.6 |   28.57 |   39.02 | 73-147            
+ .../[id]/holdings |       0 |        0 |       0 |       0 |                   
+  page.tsx         |       0 |        0 |       0 |       0 | 11-15             
+ .../[id]/projects |       0 |        0 |       0 |       0 |                   
+  page.tsx         |       0 |        0 |       0 |       0 | 10-14             
+ ...unt/[id]/roles |       0 |        0 |       0 |       0 |                   
+  page.tsx         |       0 |        0 |       0 |       0 | 10-14             
+ ...aw/[net]/query |   74.07 |    54.05 |     100 |   74.07 |                   
+  route.ts         |   74.07 |    54.05 |     100 |   74.07 | 15,20,24,34,70-76 
+ ...i/data/shields |       0 |        0 |       0 |       0 |                   
+  route.ts         |       0 |        0 |       0 |       0 | 9-112             
+ ...cover-projects |       0 |        0 |       0 |       0 |                   
+  route.ts         |       0 |        0 |       0 |       0 | 7-57              
+ ...pp/api/healthz |       0 |        0 |       0 |       0 |                   
+  route.ts         |       0 |        0 |       0 |       0 | 3-6               
+ ...epage-activity |       0 |        0 |       0 |       0 |                   
+  route.ts         |       0 |        0 |       0 |       0 | 5-9               
+ ...d]/[projectId] |       0 |        0 |       0 |       0 |                   
+  route.ts         |       0 |        0 |       0 |       0 | 7-87              
+ ...i/project-name |     100 |       80 |     100 |     100 |                   
+  route.ts         |     100 |       80 |     100 |     100 | 23-24             
+ ...d]/[projectId] |       0 |        0 |       0 |       0 |                   
+  route.tsx        |       0 |        0 |       0 |       0 | 7-43              
+ ...earch-projects |       0 |        0 |       0 |       0 |                   
+  route.ts         |       0 |        0 |       0 |       0 | 14-134            
+ .../telligence-og |       0 |      100 |       0 |       0 |                   
+  route.tsx        |       0 |      100 |       0 |       0 | 3-7               
+ ...i/top-projects |       0 |        0 |       0 |       0 |                   
+  route.ts         |       0 |        0 |       0 |       0 | 5-9               
+ src/app/audit     |       0 |      100 |       0 |       0 |                   
+  page.tsx         |       0 |      100 |       0 |       0 | 6-57              
+ src/app/build     |       0 |      100 |       0 |       0 |                   
+  page.tsx         |       0 |      100 |       0 |       0 | 8-1557            
+ ...te/[projectId] |       0 |        0 |       0 |       0 |                   
+  loading.tsx      |       0 |      100 |       0 |       0 | 3                 
+  page.tsx         |       0 |        0 |       0 |       0 | 12-25             
+ ...rojectId]/keys |       0 |        0 |       0 |       0 |                   
+  page.tsx         |       0 |        0 |       0 |       0 | 7-15              
+ src/app/create    |      80 |    69.44 |    37.5 |   79.26 |                   
+  RevnetCreate.tsx |   81.57 |    69.44 |      50 |   80.82 | ...26,174,239-249 
+  loading.tsx      |       0 |      100 |       0 |       0 | 3                 
+  page.tsx         |       0 |      100 |       0 |       0 | 5-12              
+ ...create/buttons |   85.71 |    73.75 |   81.81 |   89.83 |                   
+  ...ectButton.tsx |    87.5 |       40 |      50 |    87.5 | 41                
+  PayAndDeploy.tsx |   85.45 |    78.57 |   88.88 |   90.19 | 41,43,45,48,149   
+ ...pp/create/form |   67.57 |    62.88 |   67.44 |   68.29 |                   
+  ...ageDialog.tsx |   79.78 |    71.56 |   77.77 |   79.12 | ...93,622-632,815 
+  ...vePreview.tsx |   64.28 |    18.75 |   53.84 |   64.86 | 46-49,71-82       
+  ChainSelect.tsx  |   76.08 |     67.5 |   84.61 |    72.5 | ...0,45-47,92-105 
+  ...evnetForm.tsx |   47.05 |       40 |      50 |      50 | 112-127           
+  ...oySection.tsx |   77.77 |       80 |   57.14 |   85.71 | 103,128           
+  Fields.tsx       |    90.9 |    90.62 |   66.66 |    90.9 | 26                
+  ...ieldGroup.tsx |   25.58 |     12.5 |      10 |   29.72 | ...54,59-64,71-76 
+  ...orSection.tsx |   98.24 |    94.44 |     100 |      98 | 108               
+  ...iousStage.tsx |      80 |      100 |      50 |      75 | 24                
+  ...ctDetails.tsx |   66.66 |      100 |      50 |   66.66 | 43                
+  ...eResponse.tsx |      20 |      100 |       0 |      20 | 17-29             
+  ...vedAssets.tsx |   31.37 |    17.64 |      25 |   33.33 | ...03-110,127-175 
+  Stages.tsx       |   93.54 |    63.63 |   85.71 |   93.33 | 110,176           
+  ...TimeField.tsx |      50 |    42.85 |      25 |      50 | 30-50,85-117      
+  StoreSection.tsx |      65 |    56.75 |   69.56 |   67.27 | ...66,205-215,252 
+  useCreateForm.ts |     100 |       40 |     100 |     100 | 10-20             
+ ...create/helpers |   82.53 |    75.95 |   90.36 |   83.33 |                   
+  ...upIssuance.ts |    82.6 |       80 |     100 |   81.81 | 15,28-30          
+  createSchema.ts  |   84.76 |    76.87 |     100 |      86 | ...7,91-92,99,135 
+  ...serveAsset.ts |   79.48 |    77.77 |     100 |   84.84 | 22,25,48,53,87    
+  ...achability.ts |    87.5 |    79.41 |   85.71 |   86.84 | 39,52,55-56,105   
+  ...FormErrors.ts |    87.5 |    69.56 |     100 |   86.95 | 10,14,48          
+  ...DeployData.ts |   95.74 |    87.71 |     100 |     100 | ...33,149-168,223 
+  ...ctMetaData.ts |       0 |        0 |       0 |       0 | 9-28              
+  ...romReceipt.ts |      88 |    78.94 |     100 |    90.9 | 28,38             
+  ...ectedChain.ts |   94.11 |       75 |     100 |     100 | 17                
+  ...tageStarts.ts |     100 |    83.33 |     100 |     100 | 7                 
+  stageSchema.ts   |   77.92 |    64.93 |     100 |   77.63 | ...74,179-180,183 
+  useTestData.tsx  |   22.22 |       50 |   33.33 |   17.64 | 13-38             
+ src/app/discover  |       0 |      100 |       0 |       0 |                   
+  loading.tsx      |       0 |      100 |       0 |       0 | 3                 
+  page.tsx         |       0 |      100 |       0 |       0 | 5-11              
+ ...p/how-it-works |       0 |      100 |       0 |       0 |                   
+  page.tsx         |       0 |      100 |       0 |       0 | 6-41              
+ ...app/ipfs-proof |       0 |        0 |       0 |       0 |                   
+  ...owsertest.tsx |       0 |        0 |       0 |       0 | 1-21              
+ src/app/learn     |       0 |      100 |       0 |       0 |                   
+  page.tsx         |       0 |      100 |       0 |       0 | 7-533             
+ src/app/llms.txt  |       0 |        0 |       0 |       0 |                   
+  route.ts         |       0 |        0 |       0 |       0 | 1-58              
+ src/app/recover   |       0 |        0 |       0 |       0 |                   
+  page.tsx         |       0 |        0 |       0 |       0 | 5-19              
+ src/components    |   57.98 |    50.59 |   56.52 |   61.93 |                   
+  ...ptActions.tsx |       0 |        0 |       0 |       0 | 1-50              
+  BrandMarks.tsx   |      50 |    33.33 |      50 |   57.14 | 74-93             
+  ...ithWallet.tsx |   66.66 |      100 |      50 |   66.66 | 49-59             
+  ChainLogo.tsx    |     100 |    66.66 |     100 |     100 | 29-32             
+  ...nSelector.tsx |      80 |       50 |   66.66 |      80 | 20                
+  DateRelative.tsx |    5.26 |        0 |       0 |    6.66 | 7-29              
+  ...umAddress.tsx |    8.33 |        0 |       0 |    8.33 | 11-44             
+  ...rscanLink.tsx |   85.71 |    66.66 |     100 |     100 | 17-20             
+  ...tCallCard.tsx |      80 |    66.66 |      75 |   88.88 | 79                
+  ExternalLink.tsx |     100 |       50 |     100 |     100 | 4                 
+  GetFunds.tsx     |   91.66 |    88.57 |     100 |     100 | 32,64,82-88       
+  ...eUploader.tsx |   26.66 |    56.25 |      25 |   28.57 | 8-12,26-29,34-36  
+  IpfsImage.tsx    |   72.22 |    35.71 |   71.42 |   69.23 | 15-27             
+  ...ngerprint.tsx |       0 |        0 |       0 |       0 | 2-17              
+  ...tionGuard.tsx |   18.75 |    33.33 |   16.66 |   21.42 | 17-33             
+  Profile.tsx      |     100 |       50 |     100 |     100 | 19                
+  ...ileAvatar.tsx |    5.26 |        0 |       0 |    5.26 | 26-81             
+  ...esContext.tsx |   14.28 |        0 |       0 |   16.66 | 15-39             
+  ...ctIdInput.tsx |   82.14 |    73.07 |     100 |   84.61 | 35-36,51-52       
+  ProjectLink.tsx  |   23.07 |        0 |   16.66 |      25 | 21,29-42          
+  ...wProvider.tsx |   70.52 |       56 |   71.59 |   76.47 | ...1457-1573,1596 
+  ViewAsDialog.tsx |    5.55 |        0 |       0 |    5.88 | 28-66             
+  ViewAsForm.tsx   |    6.25 |        0 |       0 |    6.66 | 18-43             
+  WalletButton.tsx |   54.26 |    51.94 |      50 |   57.71 | ...18-545,589-591 
+ ...ponents/guides |       0 |        0 |       0 |       0 |                   
+  ...killsNote.tsx |       0 |        0 |       0 |       0 | 3-28              
+  ...ildPrompt.tsx |       0 |        0 |       0 |       0 | 1-26              
+  RevnetGuide.tsx  |       0 |        0 |       0 |       0 | 15-383            
+ ...ponents/layout |    80.3 |    56.34 |   72.22 |    82.9 |                   
+  Footer.tsx       |       0 |      100 |       0 |       0 | 4                 
+  Nav.tsx          |       0 |        0 |       0 |       0 | 1-118             
+  RevnetSearch.tsx |    87.6 |       71 |   83.87 |   90.65 | ...18,238,256-259 
+ ...onents/loading |       0 |        0 |       0 |       0 |                   
+  ...Skeletons.tsx |       0 |        0 |       0 |       0 | 7-313             
+ ...omponents/shop |   69.59 |    73.49 |      50 |   69.62 |                   
+  ...aftFields.tsx |   45.65 |    67.69 |   35.48 |   46.66 | ...53-378,438-488 
+  itemDraft.ts     |   80.39 |    77.22 |    90.9 |   81.11 | ...33-238,293-294 
+ ...nts/telligence |   85.08 |    81.52 |   86.99 |    87.5 |                   
+  ...ityStatus.tsx |     100 |       80 |     100 |     100 | 16                
+  ...reateForm.tsx |   85.71 |    94.73 |   83.33 |   86.04 | 77-81,240         
+  ComputeNav.tsx   |       0 |        0 |       0 |       0 | 1-9               
+  ...ojectPage.tsx |      80 |    77.77 |   66.66 |   91.66 | 161               
+  ...teProject.tsx |   89.01 |    84.04 |   86.66 |   91.66 | ...35,251,285,315 
+  KeyConsole.tsx   |   90.51 |    79.13 |    92.3 |   93.91 | ...46,264,307,346 
+  ...ectButton.tsx |   89.51 |    84.33 |     100 |   91.66 | ...22-224,242,258 
+  ...icyReview.tsx |    87.5 |       75 |     100 |   85.71 | 29                
+  ...nchNotice.tsx |   88.57 |    82.85 |     100 |      90 | 34,75-81          
+  ...Directory.tsx |    92.3 |     90.9 |   83.33 |    92.3 | 57                
+  ...yControls.tsx |   91.39 |    89.54 |   93.75 |   93.33 | ...46,253,311,345 
+  ...eryLookup.tsx |       0 |        0 |       0 |       0 | 1-74              
+ src/components/ui |   76.25 |    65.37 |   73.29 |   79.72 |                   
+  ...TimeField.tsx |    7.69 |        0 |       0 |    9.09 | 18-122            
+  InfoTip.tsx      |       0 |      100 |       0 |       0 | 1-20              
+  Revalidating.tsx |      25 |        0 |       0 |   33.33 | 26-27             
+  ...irmDialog.tsx |    91.3 |    88.88 |     100 |     100 | 63,102-127        
+  TxSteps.tsx      |   42.85 |    53.48 |      50 |   42.85 | 81-103            
+  button.tsx       |   95.23 |    91.66 |     100 |   95.23 | 111               
+  chart.tsx        |   73.07 |    67.87 |   71.42 |   79.39 | ...60-761,777-778 
+  dialog.tsx       |   96.34 |    81.25 |     100 |   97.84 | 137,174,377       
+  html.tsx         |      96 |    94.44 |     100 |   97.91 | 42                
+  icons.tsx        |   61.11 |       50 |   61.11 |   61.11 | ...02,122,161-174 
+  label.tsx        |   45.45 |        0 |      50 |      50 | 16-21             
+  ...ew-toggle.tsx |       0 |        0 |       0 |       0 | 1-16              
+  ...-selector.tsx |       0 |        0 |       0 |       0 | 1-40              
+  select.tsx       |   86.14 |    75.12 |   88.88 |   89.58 | ...17,564-565,588 
+  skeleton.tsx     |    62.5 |    44.44 |      50 |    62.5 | 31-40             
+  slot.tsx         |   92.59 |    86.66 |     100 |    92.3 | 42,64             
+  table.tsx        |   91.66 |      100 |      75 |   91.66 | 42,98             
+  toast.tsx        |   59.05 |    53.01 |   55.17 |   64.48 | ...99-245,262-273 
+  toaster.tsx      |   77.77 |       60 |   66.66 |    87.5 | 28                
+  tooltip.tsx      |   86.78 |    69.91 |   81.39 |   90.54 | ...45-347,374-379 
+  use-toast.ts     |    53.7 |    16.66 |   44.44 |   56.86 | ...24,149,162,190 
+ src/hooks         |    63.5 |    57.97 |   52.57 |   66.06 |                   
+  ...etsByChain.ts |       0 |        0 |       0 |       0 | 1-44              
+  ...oIssuances.ts |       0 |        0 |       0 |       0 | 12-80             
+  ...tRecipient.ts |       0 |        0 |       0 |       0 | 7-23              
+  ...shOutRoute.ts |       0 |        0 |       0 |       0 | 27-45             
+  ...strawLists.ts |   15.62 |    11.11 |    8.69 |   16.38 | ...18,242,279-486 
+  ...downToDate.ts |       0 |        0 |       0 |       0 | 3-22              
+  ...torSession.ts |   77.52 |    72.22 |   83.33 |   80.24 | ...22-130,141-147 
+  ...ctRulesets.ts |       0 |        0 |       0 |       0 | 26-76             
+  ...enIssuance.ts |       0 |        0 |       0 |       0 | 21-45             
+  ...niteScroll.ts |       0 |        0 |       0 |       0 | 1-22              
+  ...bileWallet.ts |   18.18 |       10 |   33.33 |   16.12 | 14-47             
+  ...chainBatch.ts |   78.42 |    64.07 |      80 |   83.18 | ...54-455,518-520 
+  ...tBaseToken.ts |   31.57 |       20 |      25 |   33.33 | 44-75             
+  ...bleSurplus.ts |       0 |        0 |       0 |       0 | 30-88             
+  ...rSignature.ts |   92.68 |       90 |     100 |   97.43 | 102               
+  ...2Signature.ts |    91.3 |    88.88 |     100 |    91.3 | 36,47             
+  ...ewedRelayr.ts |   85.24 |       80 |   79.22 |   87.58 | ...1167,1191-1220 
+  ...eSignature.ts |   84.61 |       80 |     100 |   86.84 | 85,94,101,116,129 
+  ...teContract.ts |   75.77 |       60 |   68.42 |   79.19 | ...46-547,562-581 
+  useRulesets.ts   |       0 |        0 |       0 |       0 | 1-43              
+  ...uckerPairs.ts |       0 |        0 |       0 |       0 | 1-20              
+  useTokenA.ts     |       0 |      100 |       0 |       0 | 8-10              
+  ...enBalances.ts |       0 |        0 |       0 |       0 | 1-51              
+  ...dingTokens.ts |       0 |        0 |       0 |       0 | 5-21              
+  ...ermissions.ts |   95.83 |    95.45 |     100 |     100 | 31                
+ src/hooks/ens     |   36.36 |    33.33 |      50 |      40 |                   
+  useEnsAddress.ts |       0 |        0 |       0 |       0 | 12-37             
+  useEnsName.ts    |   88.88 |       80 |     100 |     100 | 27                
+ src/lib           |   82.06 |    75.76 |      86 |   85.41 |                   
+  ...rrencyRate.ts |   49.18 |    40.42 |   46.15 |   48.93 | 139-212           
+  bridgePrepare.ts |   93.93 |    90.47 |     100 |   96.42 | 117               
+  ...nvironment.ts |     100 |       40 |     100 |     100 | 6-8               
+  cache.ts         |       0 |        0 |       0 |       0 | 1-9               
+  cashOutTax.ts    |       0 |      100 |       0 |       0 | 11-24             
+  ...-authority.ts |   86.79 |    83.25 |     100 |   94.44 | ...84,659,718,742 
+  date.ts          |   11.11 |     6.66 |      30 |   13.63 | 12,30-72          
+  directPaySwap.ts |   93.33 |    91.66 |   66.66 |    92.3 | 131               
+  emptyProfile.ts  |       0 |      100 |       0 |       0 | 5                 
+  ethUsdFeed.ts    |   94.11 |       70 |     100 |     100 | 33,52-56          
+  feeHelpers.ts    |   97.22 |     87.5 |     100 |   97.14 | 71                
+  fixedPoint.ts    |       0 |      100 |       0 |       0 | 20-24             
+  ...Validation.ts |   91.42 |     91.3 |     100 |   91.17 | 21-22,47          
+  formatPercent.ts |      80 |    83.33 |     100 |     100 | 6                 
+  forms.tsx        |   92.81 |     86.4 |   88.88 |   94.44 | ...41,395,413-414 
+  ipfs-cid.ts      |   84.41 |    76.47 |     100 |   95.16 | 36,74-76          
+  ipfs.ts          |   91.89 |    86.11 |     100 |     100 | 21,30-35,47,67    
+  ...int.server.ts |   21.42 |        0 |   33.33 |      25 | 13-25             
+  issuancePrice.ts |     100 |    91.66 |     100 |     100 | 26                
+  jbcenter-ipfs.ts |   82.14 |       50 |     100 |   82.14 | 47,53,59,72,75    
+  jbcenter-rpc.ts  |      95 |    85.71 |     100 |   93.75 | 55                
+  ...ansactions.ts |   82.35 |    72.72 |     100 |    87.5 | 98,101            
+  ...hain-batch.ts |   87.27 |    86.36 |      95 |   93.75 | 85,101,113        
+  ...ain-guards.ts |   93.75 |    91.52 |     100 |   97.72 | 164               
+  number.ts        |   88.57 |    82.75 |   85.71 |   96.55 | 2                 
+  ...ntTerminal.ts |     100 |     87.5 |     100 |     100 | 60-79             
+  ...t-receipts.ts |   92.85 |    96.15 |     100 |   97.29 | 53                
+  priceSeries.ts   |    92.3 |    89.65 |     100 |   94.73 | 20,45-46          
+  profile.ts       |    4.34 |        0 |       0 |    5.26 | 23-94             
+  ...nk-preview.ts |    91.3 |     87.5 |     100 |   89.47 | 25,53             
+  ...data-write.ts |   92.72 |    88.23 |     100 |      94 | 71,101-102        
+  ...navigation.ts |      85 |    72.72 |     100 |   88.23 | 35-36             
+  ...ectHandles.ts |   92.85 |    93.44 |     100 |   94.59 | 232,275,341,371   
+  projectLinks.ts  |   82.35 |     64.7 |     100 |   81.25 | 28-30,36          
+  query-persist.ts |      90 |       80 |    92.3 |   95.12 | 110-111           
+  ...jectHandle.ts |   83.62 |    81.14 |     100 |      85 | ...77,519,522,526 
+  ...r-activity.ts |     100 |     90.9 |     100 |     100 | 5                 
+  revnet-draft.ts  |   52.33 |    46.66 |   51.61 |   54.36 | ...95,247,293-452 
+  ...etOperator.ts |   90.14 |    78.57 |     100 |   93.22 | 133,168-173       
+  ...data-image.ts |   43.33 |    68.42 |   33.33 |   44.44 | 14,31-58          
+  safe-queue.ts    |   84.68 |    66.66 |      85 |   88.54 | ...44-253,274-275 
+  ...Deployment.ts |    83.7 |    80.43 |     100 |   89.07 | ...52,459,468,484 
+  safeOwners.ts    |    90.9 |    85.71 |     100 |     100 | 39,44             
+  slug.ts          |   71.42 |       70 |      80 |   76.47 | 22,34-36          
+  ...ensionSalt.ts |   84.61 |    76.47 |     100 |   95.45 | 37                
+  time-zone.ts     |   62.74 |    41.66 |   64.28 |   66.66 | 50,60-76,104-112  
+  timeRange.ts     |      50 |       40 |     100 |      50 | 23-33,45-55       
+  token.ts         |   66.66 |       75 |      75 |   66.66 | 31,39-47          
+  topLayer.ts      |   94.11 |       75 |     100 |     100 | 41                
+  ...n-activity.ts |    93.2 |    93.33 |      90 |   97.64 | 188-191           
+  ...ion-review.ts |     100 |       86 |     100 |     100 | 62,157,182-215    
+  utils.ts         |   67.18 |    61.29 |   82.35 |    74.5 | 26-56,87,91       
+  view-as.ts       |   94.59 |    93.75 |    90.9 |   96.66 | 18                
+  wagmiConfig.ts   |     100 |       50 |     100 |     100 | 18-20             
+  ...Transports.ts |      90 |       75 |     100 |     100 | 17                
+  ...ForReceipt.ts |   82.35 |    77.77 |      50 |   86.66 | 21,42             
+  walletLinks.ts   |      80 |    58.82 |     100 |   84.21 | 18,29-30          
+ ...lib/bendystraw |   69.31 |    59.83 |   73.01 |   73.54 |                   
+  client.ts        |      10 |        0 |      50 |      10 | 25-48             
+  ...onContract.ts |   58.94 |    53.77 |   76.19 |   65.82 | ...29-144,164,173 
+  operations.ts    |   85.71 |    78.49 |      88 |   94.04 | 104,435-438       
+  projectRefs.ts   |    92.3 |    66.66 |     100 |   91.66 | 25                
+  query.server.ts  |       0 |        0 |       0 |       0 | 14-47             
+  ...try.server.ts |      80 |      100 |       0 |      80 | 1047              
+  ...strawQuery.ts |   33.33 |        0 |       0 |   33.33 | 19-21             
+ src/lib/nana      |   28.76 |    22.97 |   19.67 |   30.24 |                   
+  project.tsx      |   11.11 |        0 |     3.7 |   11.49 | 101-104,112-560   
+  rulesets.ts      |   34.78 |       10 |     100 |   38.09 | 42-51,53-61       
+  shop.ts          |    5.55 |        0 |       0 |    6.06 | 44-131            
+  state.ts         |   85.71 |     87.5 |     100 |    92.3 | 50                
+  suckers.ts       |   55.35 |    42.64 |   57.14 |   58.82 | 90,109-175        
+ src/lib/server    |   86.36 |    66.66 |     100 |      90 |                   
+  ...oundedBody.ts |   86.36 |    66.66 |     100 |      90 | 20-21             
+ ...lib/telligence |   93.61 |     91.6 |   93.33 |   95.85 |                   
+  api.ts           |   92.59 |    80.55 |     100 |    92.3 | 9,22              
+  ...oxy.server.ts |   95.27 |    92.37 |    92.5 |    98.3 | 115,146,292,407   
+  launch.ts        |   93.47 |    94.54 |     100 |   92.68 | 21,61,78          
+  ...ing-launch.ts |   92.85 |     92.5 |     100 |     100 | 42-70             
+  policy-review.ts |   91.66 |       84 |     100 |   91.66 | 19,33             
+  presentation.ts  |   96.49 |    97.61 |     100 |   96.36 | 87,105            
+  project-data.ts  |   91.66 |       95 |     100 |   95.45 | 54                
+  ...ect.server.ts |   76.19 |    57.14 |     100 |   77.77 | 20-22,41          
+  ...ery-lookup.ts |      96 |       96 |     100 |   95.45 | 67                
+  transactions.ts  |   94.28 |    95.83 |     100 |     100 | 28,83             
+  ...ayResource.ts |   86.27 |     62.5 |      75 |   90.69 | 33-34,61-62       
+ src/lib/v6        |   31.57 |    28.57 |    42.3 |   31.76 |                   
+  pay.ts           |   96.77 |     87.5 |     100 |     100 | 79,137            
+  suckerProofs.ts  |       0 |        0 |       0 |       0 | 60-252            
+ src/providers     |   65.03 |    58.24 |   46.42 |    69.7 |                   
+  ...mpHandoff.tsx |   66.66 |    16.66 |      50 |   66.66 | 93                
+  ...thContext.tsx |   36.36 |        0 |      20 |      40 | 8-18              
+  ...AuthSheet.tsx |   56.98 |     50.4 |   38.29 |   61.14 | ...46-554,587-699 
+  ...ModalHost.tsx |   86.95 |    74.66 |   65.38 |   96.87 | 29,192-198        
+  ...aceholder.tsx |    8.69 |     8.33 |       0 |   11.11 | 29-77             
+  SignInShell.tsx  |   71.42 |        0 |      50 |   71.42 | 55,89             
+  ...-connector.ts |   62.16 |    85.71 |   52.63 |   58.82 | ...,76,89-108,127 
+  ...-connector.ts |   83.33 |       80 |   66.66 |     100 | 32                
+  para-bridge.ts   |   84.61 |    83.33 |   66.66 |     100 | 32                
+  para-config.ts   |   60.86 |       30 |      40 |      65 | 29-52             
+  para-logout.ts   |   93.33 |      100 |      75 |     100 |                   
+  para-session.ts  |   91.66 |     87.5 |      50 |     100 | 31                
+  preload-para.ts  |      50 |      100 |       0 |      50 | 15                
+  ...connectors.ts |   42.85 |    83.33 |   45.45 |      40 | 29-36,56-59,82-92 
+-------------------|---------|----------|---------|---------|-------------------
+
+=============================== Coverage summary ===============================
+Statements   : 53.08% ( 10911/20555 )
+Branches     : 45.44% ( 8397/18478 )
+Functions    : 50.23% ( 2282/4543 )
+Lines        : 54.86% ( 10086/18384 )
+================================================================================

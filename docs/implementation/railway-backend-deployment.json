@@ -1,0 +1,82 @@
+{
+  "projectId": "b7502552-4222-4aa3-ad69-9bc729265387",
+  "environmentId": "82e7109b-357e-40f6-9088-61ed774e62f6",
+  "services": [
+    {
+      "name": "Postgres",
+      "serviceId": "b66458f9-1a56-441d-a04c-0b79c6690017",
+      "deploymentId": "1d68e27c-c6d9-42ef-badf-78ec631e48c2",
+      "status": "SUCCESS",
+      "imageDigest": "sha256:469c779c7c57ec6bad4670a0a3cb5a830aa6e0ce4f3707137608de5223a5041c",
+      "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+      "domains": {
+        "serviceDomains": [],
+        "customDomains": []
+      },
+      "startCommand": null,
+      "healthcheckPath": null,
+      "preDeployCommand": null,
+      "drainingSeconds": null,
+      "replicas": 1
+    },
+    {
+      "name": "auth-signer",
+      "serviceId": "159fb766-063a-494f-8e7c-b13675bf05df",
+      "deploymentId": "dabf4710-6c10-4fbe-90f3-ef4ffdd690c5",
+      "status": "SUCCESS",
+      "imageDigest": "sha256:5b7a71ea8585fb81f7d11f56199eacce6d9cb4518e09685d1cb53fc79b5f4515",
+      "image": null,
+      "domains": {
+        "serviceDomains": [],
+        "customDomains": []
+      },
+      "startCommand": "node auth-signer/server.mjs",
+      "healthcheckPath": "/healthz",
+      "preDeployCommand": null,
+      "drainingSeconds": null,
+      "replicas": 1
+    },
+    {
+      "name": "gateway",
+      "serviceId": "9d2f9a50-7281-4a00-9ed8-3f4834d739bd",
+      "deploymentId": "b2cad4fc-c951-4c9d-8d3f-2d45e47f3459",
+      "status": "SUCCESS",
+      "imageDigest": "sha256:8338bf7648c9602743a7bcb94ebdf0da306cbd03a06bd01d44b3dcff76ae78b0",
+      "image": null,
+      "domains": {
+        "serviceDomains": [
+          {
+            "id": "b923aa72-7625-4b95-919c-edca22e1c00c",
+            "domain": "gateway-production-389d.up.railway.app",
+            "targetPort": null
+          }
+        ],
+        "customDomains": []
+      },
+      "startCommand": "node gateway/server.mjs",
+      "healthcheckPath": "/readyz",
+      "preDeployCommand": [
+        "node db/migrate.mjs"
+      ],
+      "drainingSeconds": 140,
+      "replicas": 1
+    },
+    {
+      "name": "control-worker",
+      "serviceId": "4affaee8-dcdc-4b71-8216-92d7d82e21f6",
+      "deploymentId": "2d6ae44b-1839-4105-acfc-8a6d2b8b14ed",
+      "status": "SUCCESS",
+      "imageDigest": "sha256:f3aaf5c6a53ef9d0d6afa96bd10232d40636c83a130df87d6d147dd65cbc2a70",
+      "image": null,
+      "domains": {
+        "serviceDomains": [],
+        "customDomains": []
+      },
+      "startCommand": "node control-worker/server.mjs",
+      "healthcheckPath": "/healthz",
+      "preDeployCommand": null,
+      "drainingSeconds": null,
+      "replicas": 1
+    }
+  ]
+}

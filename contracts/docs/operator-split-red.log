@@ -1,0 +1,41 @@
+Compiling 1 files with Solc 0.8.28
+Solc 0.8.28 finished in 24.14s
+Compiler run successful!
+
+Ran 11 tests for test/integration/TelligenceOperatorSplit.t.sol:TelligenceOperatorSplitTest
+[FAIL: assertion failed: 1133 != 1132; counterexample: calldata=0x5da7d811000000000000000000000000000000000000000000000000000000000000f6c40000000000000000000000000000000000000000000000000000000000000b10 args=[63172 [6.317e4], 2832]] testFuzz_fractionalRoutingProtectsComputeAndConservesEveryIssuedUnit(uint16,uint96) (runs: 0, μ: 0, ~: 0)
+Logs:
+  Bound result 3182
+  Bound result 2832
+
+[FAIL: assertion failed: 0 != 10000000000000000000000] test_creatorAllocationDoesNotReplaceComputeOrRewardRecoveryAuthority() (gas: 6174755)
+[FAIL: assertion failed: 40000000000000000000000 != 50000000000000000000000] test_delayedDistributionAcrossStageCannotChangeCreatorToComputeRatio() (gas: 6313945)
+[FAIL: next call did not revert as expected] test_factoryRejectsNoSupporterShareAndOverflowingInputsAtomically() (gas: 5620437)
+[PASS] test_factoryRequiresPositiveComputeEvenWithOperatorAllocation() (gas: 4277321)
+[FAIL: assertion failed: 4 != 1] test_fractionalSplitDustFollowsStockOwnerAndCanBeBurnedPermissionlessly() (gas: 6165083)
+[FAIL: panic: array out-of-bounds access (0x32)] test_lockedSplitCannotBeChangedEvenThroughExistingStockOperatorPermission() (gas: 5703869)
+[FAIL: assertion failed: 60000000000000000000000 != 10000000000000000000] test_oneBasisPointSupporterShareRemainsPossible() (gas: 6165438)
+[FAIL: assertion failed: 1 != 2] test_policyHashCommitsCreatorRecipientAndNewPolicyVersion() (gas: 5685292)
+[FAIL: next call did not revert as expected] test_stagedRoutingRejectsChangingBeneficiaryRatios() (gas: 5852786)
+[PASS] test_zeroOperatorKeepsOriginalSingleRecipientAndSupporterIssuance() (gas: 6105396)
+Suite result: FAILED. 2 passed; 9 failed; 0 skipped; finished in 73.03ms (82.50ms CPU time)
+
+Ran 1 test suite in 74.13ms (73.03ms CPU time): 2 tests passed, 9 failed, 0 skipped (11 total tests)
+
+Failing tests:
+Encountered 9 failing tests in test/integration/TelligenceOperatorSplit.t.sol:TelligenceOperatorSplitTest
+[FAIL: assertion failed: 1133 != 1132; counterexample: calldata=0x5da7d811000000000000000000000000000000000000000000000000000000000000f6c40000000000000000000000000000000000000000000000000000000000000b10 args=[63172 [6.317e4], 2832]] testFuzz_fractionalRoutingProtectsComputeAndConservesEveryIssuedUnit(uint16,uint96) (runs: 0, μ: 0, ~: 0)
+[FAIL: assertion failed: 0 != 10000000000000000000000] test_creatorAllocationDoesNotReplaceComputeOrRewardRecoveryAuthority() (gas: 6174755)
+[FAIL: assertion failed: 40000000000000000000000 != 50000000000000000000000] test_delayedDistributionAcrossStageCannotChangeCreatorToComputeRatio() (gas: 6313945)
+[FAIL: next call did not revert as expected] test_factoryRejectsNoSupporterShareAndOverflowingInputsAtomically() (gas: 5620437)
+[FAIL: assertion failed: 4 != 1] test_fractionalSplitDustFollowsStockOwnerAndCanBeBurnedPermissionlessly() (gas: 6165083)
+[FAIL: panic: array out-of-bounds access (0x32)] test_lockedSplitCannotBeChangedEvenThroughExistingStockOperatorPermission() (gas: 5703869)
+[FAIL: assertion failed: 60000000000000000000000 != 10000000000000000000] test_oneBasisPointSupporterShareRemainsPossible() (gas: 6165438)
+[FAIL: assertion failed: 1 != 2] test_policyHashCommitsCreatorRecipientAndNewPolicyVersion() (gas: 5685292)
+[FAIL: next call did not revert as expected] test_stagedRoutingRejectsChangingBeneficiaryRatios() (gas: 5852786)
+
+Encountered a total of 9 failing tests, 2 tests succeeded
+
+Tip: Run `forge test --rerun` to retry only the 9 failed tests
+
+Fuzz seed: 0x44152e7b172f331444daf860d569f47b63fccc525498cbde72269cea3115fe32 (use `--fuzz-seed` to reproduce)

@@ -1,0 +1,4 @@
+Repository: https://github.com/rev-net/revnet-core-v6
+Commit: 5093359f561c0546c29b85147a9cc0de2f608ddf
+Source: unchanged src/ and LICENSE from the locally inspected stock implementation.
+This is a pinned compile-time dependency. Telligence uses the existing deployed contracts.

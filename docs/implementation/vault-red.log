@@ -1,0 +1,102 @@
+Compiling 2 files with Solc 0.8.28
+Solc 0.8.28 finished in 2.25s
+Compiler run successful with warnings:
+Warning (2018): Function state mutability can be restricted to pure
+  --> src/TelligenceComputeVault.sol:25:5:
+   |
+25 |     function allocate(uint256,uint256) external { revert("not implemented"); }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (2018): Function state mutability can be restricted to pure
+  --> src/TelligenceComputeVault.sol:26:5:
+   |
+26 |     function announceWinddown() external { revert("not implemented"); }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (2018): Function state mutability can be restricted to pure
+  --> src/TelligenceComputeVault.sol:27:5:
+   |
+27 |     function beginDiemUnstake() external { revert("not implemented"); }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (2018): Function state mutability can be restricted to pure
+  --> src/TelligenceComputeVault.sol:28:5:
+   |
+28 |     function claimDiemAndBeginVVVUnstake() external { revert("not implemented"); }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (2018): Function state mutability can be restricted to pure
+  --> src/TelligenceComputeVault.sol:29:5:
+   |
+29 |     function claimVVVAndReturn() external { revert("not implemented"); }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (2018): Function state mutability can be restricted to pure
+  --> src/TelligenceComputeVault.sol:30:5:
+   |
+30 |     function recoverDonatedStake() external { revert("not implemented"); }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (2018): Function state mutability can be restricted to pure
+  --> src/TelligenceComputeVault.sol:31:5:
+   |
+31 |     function claimRewardsAndReturn() external { revert("not implemented"); }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (2018): Function state mutability can be restricted to pure
+  --> src/TelligenceComputeVault.sol:32:5:
+   |
+32 |     function returnLiquidVVV() external { revert("not implemented"); }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Warning (2018): Function state mutability can be restricted to pure
+  --> src/TelligenceComputeVault.sol:33:5:
+   |
+33 |     function setAllocationPaused(bool) external { revert("not implemented"); }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Ran 17 tests for test/TelligenceComputeVault.t.sol:TelligenceComputeVaultTest
+[FAIL: not implemented; counterexample: calldata=0x460768360000000000000000000000000000000000000000fffffffffffffffffffffffd args=[79228162514264337593543950333 [7.922e28]]] testFuzz_AllocationConservesPrincipalAndRecovery(uint96) (runs: 0, μ: 0, ~: 0)
+Logs:
+  Bound result 997000000000000019245
+
+[FAIL: not implemented] test_AllocateKeepsEveryPositionInVaultAndClearsApprovals() (gas: 38254)
+[PASS] test_BadStakingReceiptRevertsAtomically() (gas: 76749)
+[FAIL: not implemented] test_CompleteWinddownUsesAggregateDebtWithoutRoundingDust() (gas: 38298)
+[FAIL: not implemented] test_DonatedStakeAfterClosureRecoversWithoutReactivatingCompute() (gas: 38276)
+[FAIL: not implemented] test_EmptyVaultCanCloseWithoutCallingZeroUnstake() (gas: 10812)
+[PASS] test_MintFailureRollsBackVVVAndPosition() (gas: 93051)
+[FAIL: not implemented] test_NoticeFreezesAllocationAndCannotRestartOrSkip() (gas: 38408)
+[FAIL: not implemented] test_PauseBlocksAllocationButNotRewardsOrWinddown() (gas: 38386)
+[FAIL: not implemented] test_ProviderCooldownsReadFromPositionsAndCannotReset() (gas: 38562)
+[FAIL: not implemented] test_RejectsAllocationBeyondImmutableCap() (gas: 38188)
+[PASS] test_RejectsUnauthorizedAllocationAndShutdown() (gas: 11557)
+[PASS] test_RejectsZeroAmountOrMinimum() (gas: 55549)
+[PASS] test_ReturnCallbackCannotReenter() (gas: 59381)
+[FAIL: not implemented] test_ReturnFailureCanRetryWithoutLossOrDuplicate() (gas: 64864)
+[FAIL: not implemented] test_RewardsImplicitlyClaimedDuringStakeAreNotReallocated() (gas: 38078)
+[PASS] test_SlippageFailureRollsBackAllSteps() (gas: 59804)
+Suite result: FAILED. 6 passed; 11 failed; 0 skipped; finished in 10.51ms (12.46ms CPU time)
+
+Ran 1 test suite in 11.10ms (10.51ms CPU time): 6 tests passed, 11 failed, 0 skipped (17 total tests)
+
+Failing tests:
+Encountered 11 failing tests in test/TelligenceComputeVault.t.sol:TelligenceComputeVaultTest
+[FAIL: not implemented; counterexample: calldata=0x460768360000000000000000000000000000000000000000fffffffffffffffffffffffd args=[79228162514264337593543950333 [7.922e28]]] testFuzz_AllocationConservesPrincipalAndRecovery(uint96) (runs: 0, μ: 0, ~: 0)
+[FAIL: not implemented] test_AllocateKeepsEveryPositionInVaultAndClearsApprovals() (gas: 38254)
+[FAIL: not implemented] test_CompleteWinddownUsesAggregateDebtWithoutRoundingDust() (gas: 38298)
+[FAIL: not implemented] test_DonatedStakeAfterClosureRecoversWithoutReactivatingCompute() (gas: 38276)
+[FAIL: not implemented] test_EmptyVaultCanCloseWithoutCallingZeroUnstake() (gas: 10812)
+[FAIL: not implemented] test_NoticeFreezesAllocationAndCannotRestartOrSkip() (gas: 38408)
+[FAIL: not implemented] test_PauseBlocksAllocationButNotRewardsOrWinddown() (gas: 38386)
+[FAIL: not implemented] test_ProviderCooldownsReadFromPositionsAndCannotReset() (gas: 38562)
+[FAIL: not implemented] test_RejectsAllocationBeyondImmutableCap() (gas: 38188)
+[FAIL: not implemented] test_ReturnFailureCanRetryWithoutLossOrDuplicate() (gas: 64864)
+[FAIL: not implemented] test_RewardsImplicitlyClaimedDuringStakeAreNotReallocated() (gas: 38078)
+
+Encountered a total of 11 failing tests, 6 tests succeeded
+
+Tip: Run `forge test --rerun` to retry only the 11 failed tests
+
+Fuzz seed: 0xebcc9c2ca78b95df6527c88cef1a21733d5ee51a376c09255c4865eef23c701 (use `--fuzz-seed` to reproduce)

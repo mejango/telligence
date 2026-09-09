@@ -1,0 +1,4 @@
+Repository: https://github.com/foundry-rs/forge-std
+Commit: 83c5d212a01f8950727da4095cdfe2654baccb5b
+Source: unchanged vendored checkout, excluding the checkout-specific .git pointer.
+Licenses: LICENSE-MIT and LICENSE-APACHE.

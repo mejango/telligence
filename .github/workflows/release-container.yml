@@ -14,75 +14,8 @@ concurrency:
 
 jobs:
   gate:
-    name: Revalidate release invariants
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      CI: "1"
-      NODE_OPTIONS: --no-experimental-webstorage
-      NEXT_PUBLIC_SITE_URL: http://127.0.0.1:4173
-      NEXT_PUBLIC_BENDYSTRAW_URL: http://127.0.0.1:4174
-      NEXT_PUBLIC_TESTNET_BENDYSTRAW_URL: http://127.0.0.1:4174
-      NEXT_PUBLIC_PARA_API_KEY: deterministic-browser-key
-      NEXT_PUBLIC_PARA_ENV: BETA
-      NEXT_PUBLIC_DWELLIR_API_KEY: deterministic-dwellir-key
-      NEXT_PUBLIC_VERSION: ${{ github.sha }}
-      NEXT_PUBLIC_MAINNET_SUBGRAPH_URL: http://127.0.0.1:4174/graphql
-      NEXT_PUBLIC_OPTIMISM_SUBGRAPH_URL: http://127.0.0.1:4174/graphql
-      NEXT_PUBLIC_BASE_SUBGRAPH_URL: http://127.0.0.1:4174/graphql
-      NEXT_PUBLIC_ARBITRUM_SUBGRAPH_URL: http://127.0.0.1:4174/graphql
-      NEXT_PUBLIC_SEPOLIA_SUBGRAPH_URL: http://127.0.0.1:4174/graphql
-      NEXT_PUBLIC_OPTIMISM_SEPOLIA_SUBGRAPH_URL: http://127.0.0.1:4174/graphql
-      NEXT_PUBLIC_BASE_SEPOLIA_SUBGRAPH_URL: http://127.0.0.1:4174/graphql
-      NEXT_PUBLIC_ARBITRUM_SEPOLIA_SUBGRAPH_URL: http://127.0.0.1:4174/graphql
-      NEXT_PUBLIC_RPC_ETHEREUM_URLS: http://127.0.0.1:4174/rpc
-      NEXT_PUBLIC_RPC_OPTIMISM_URLS: http://127.0.0.1:4174/rpc
-      NEXT_PUBLIC_RPC_BASE_URLS: http://127.0.0.1:4174/rpc
-      NEXT_PUBLIC_RPC_ARBITRUM_URLS: http://127.0.0.1:4174/rpc
-      NEXT_PUBLIC_RPC_ETHEREUM_SEPOLIA_URLS: http://127.0.0.1:4174/rpc
-      NEXT_PUBLIC_RPC_OPTIMISM_SEPOLIA_URLS: http://127.0.0.1:4174/rpc
-      NEXT_PUBLIC_RPC_BASE_SEPOLIA_URLS: http://127.0.0.1:4174/rpc
-      NEXT_PUBLIC_RPC_ARBITRUM_SEPOLIA_URLS: http://127.0.0.1:4174/rpc
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Check out pinned deploy-all-v6 deployment artifacts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: Bananapus/deploy-all-v6
-          ref: 316e9d4d3f9e1c5b41a5df7c0ad6183abbeccc7f
-          path: .contract-source/deploy-all-v6
-          sparse-checkout: deployments
-          persist-credentials: false
-
-      - name: Use pinned Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-
-      - name: Use pinned npm
-        run: npm install --global npm@12.0.1 --no-audit --no-fund
-
-      - name: Install locked dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Verify installed dependency integrity
-        run: npm run dependencies:check
-
-      - name: Reject high or critical production dependency advisories
-        run: npm run audit:production
-
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
-      - name: Revalidate the complete release-equivalent gate
-        env:
-          PROTOCOL_DEPLOYMENTS_DIR: ${{ github.workspace }}/.contract-source/deploy-all-v6
-        run: npm run check
+    name: Revalidate contracts, services, web, and containers
+    uses: ./.github/workflows/ci.yml
 
   publish:
     name: Publish signed-by-GitHub build evidence
@@ -90,6 +23,26 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: web
+            context: ./web
+            dockerfile: ./web/Dockerfile
+            service: gateway
+          - image: gateway
+            context: .
+            dockerfile: ./services/Dockerfile
+            service: gateway
+          - image: auth-signer
+            context: .
+            dockerfile: ./services/Dockerfile
+            service: auth-signer
+          - image: control-worker
+            context: .
+            dockerfile: ./services/Dockerfile
+            service: control-worker
     permissions:
       contents: read
       packages: write
@@ -118,7 +71,7 @@ jobs:
         id: metadata
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}/${{ matrix.image }}
           tags: |
             type=sha,format=long,prefix=sha-
             type=ref,event=tag
@@ -127,7 +80,8 @@ jobs:
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: .
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
@@ -137,6 +91,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
+            SERVICE=${{ matrix.service }}
             NEXT_PUBLIC_SITE_URL=${{ vars.NEXT_PUBLIC_SITE_URL }}
             NEXT_PUBLIC_BENDYSTRAW_URL=${{ vars.NEXT_PUBLIC_BENDYSTRAW_URL }}
             NEXT_PUBLIC_TESTNET_BENDYSTRAW_URL=${{ vars.NEXT_PUBLIC_TESTNET_BENDYSTRAW_URL }}
@@ -146,6 +101,7 @@ jobs:
             NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=${{ vars.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID }}
             NEXT_PUBLIC_DWELLIR_API_KEY=${{ vars.NEXT_PUBLIC_DWELLIR_API_KEY }}
             NEXT_PUBLIC_VERSION=${{ github.sha }}
+            NEXT_PUBLIC_TELLIGENCE_FACTORY_ADDRESS=${{ vars.NEXT_PUBLIC_TELLIGENCE_FACTORY_ADDRESS }}
             NEXT_PUBLIC_MAINNET_SUBGRAPH_URL=${{ vars.NEXT_PUBLIC_MAINNET_SUBGRAPH_URL }}
             NEXT_PUBLIC_OPTIMISM_SUBGRAPH_URL=${{ vars.NEXT_PUBLIC_OPTIMISM_SUBGRAPH_URL }}
             NEXT_PUBLIC_BASE_SUBGRAPH_URL=${{ vars.NEXT_PUBLIC_BASE_SUBGRAPH_URL }}
@@ -166,6 +122,6 @@ jobs:
       - name: Attest published image digest
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-name: ghcr.io/${{ github.repository }}
+          subject-name: ghcr.io/${{ github.repository }}/${{ matrix.image }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true

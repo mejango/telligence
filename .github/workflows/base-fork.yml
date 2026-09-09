@@ -1,0 +1,45 @@
+name: Base integration fork
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: base-fork-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  base:
+    name: Verify actual Base integrations without broadcasting
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      FOUNDRY_PROFILE: ci
+      RPC_BASE_MAINNET: ${{ secrets.RPC_BASE_MAINNET }}
+      NODE_OPTIONS: --no-experimental-webstorage
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require explicitly configured archive RPC
+        run: test -n "$RPC_BASE_MAINNET"
+      - name: Use pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: contracts/package-lock.json
+      - name: Use pinned npm
+        run: npm install --global npm@12.0.1 --no-audit --no-fund
+      - name: Install locked contract dependencies
+        run: npm --prefix contracts ci --ignore-scripts --workspaces=false --allow-git=root
+      - name: Install pinned Foundry
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+        with:
+          version: v1.7.0
+      - name: Exercise the real provider and buyback runtimes in a local fork
+        working-directory: contracts
+        run: forge test --match-path 'test/fork/**' --summary

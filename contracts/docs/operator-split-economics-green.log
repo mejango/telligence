@@ -1,0 +1,22 @@
+Compiling 1 files with Solc 0.8.28
+Solc 0.8.28 finished in 29.77s
+Compiler run successful!
+
+Ran 4 tests for test/economics/OperatorSplitEconomics.t.sol:OperatorSplitEconomicsTest
+[PASS] test_CreatorCanCashOutFundedBackingBeforeAnyRevenue() (gas: 6686804)
+Logs:
+  creator_before_revenue,creator_vvv=4358615625000000000,compute_vvv=0,treasury_vvv=95423351600000000000,fees_vvv=218032775000000000
+
+[PASS] test_CreatorExitOrderChangesComputeAndTreasuryWhileVVVConserves() (gas: 13867847)
+Logs:
+  creator_then_compute,creator_vvv=4358615625000000000,compute_vvv=26608801593660000000,treasury_vvv=67582271928447920001,fees_vvv=1450310852892079999
+  compute_then_creator,creator_vvv=5893436545290937500,compute_vvv=24107850000000000000,treasury_vvv=68586001265830551251,fees_vvv=1412712188878511249
+
+[PASS] test_FundingIssues40Compute10Creator50SupporterWithoutCreatorPayment() (gas: 6124341)
+[PASS] test_RewardsAndRecoveredPrincipalReturnWithoutMintingOrCreatorSkim() (gas: 7516685)
+Logs:
+  creator_after_3_vvv_reward_and_recovery,creator_vvv=8030149287517500000,compute_vvv=0,treasury_vvv=93452406752144770001,fees_vvv=1517443960337729999
+
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 11.15ms (11.81ms CPU time)
+
+Ran 1 test suite in 11.97ms (11.15ms CPU time): 4 tests passed, 0 failed, 0 skipped (4 total tests)

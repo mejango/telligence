@@ -1,0 +1,11 @@
+npm notice run @telligence/web@0.0.1 test
+npm notice run vitest run test/telligence
+
+ RUN  v4.1.10 <repo>/web
+
+
+ Test Files  25 passed (25)
+      Tests  384 passed (384)
+   Start at  18:24:13
+   Duration  3.61s (transform 1.90s, setup 4.10s, import 6.30s, tests 3.23s, environment 13.23s)
+

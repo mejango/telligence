@@ -1,0 +1,50 @@
+
+ RUN  v4.1.10 /private/tmp/telligence-build/web
+
+ ❯ test/telligence-launch-lifecycle.test.tsx (18 tests | 1 failed) 1200ms
+     × waits on the creator launch lock and rereads submission state before preparing 1005ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/telligence-launch-lifecycle.test.tsx > compute launch wallet lifecycle > waits on the creator launch lock and rereads submission state before preparing
+AssertionError: expected "vi.fn()" to be called with arguments: [ …(2) ]
+
+Number of calls: 0
+
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"space-y-4"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"w-full sm:w-auto"[39m
+        [36m>[39m
+          [0mLaunch compute project[0m
+        [36m</button>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</body>[39m
+[36m</html>[39m
+ ❯ test/telligence-launch-lifecycle.test.tsx:406:41
+    404|     vi.stubGlobal("navigator", { locks: { request } });
+    405|     render(component()); clickLaunch();
+    406|     await waitFor(() => expect(request).toHaveBeenCalledWith(`telligen…
+       |                                         ^
+    407|     expect(mocks.gateway).not.toHaveBeenCalled();
+    408|     localStorage.setItem(pendingLaunchKey(CREATOR), JSON.stringify(PEN…
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../../../Users/jango/Documents/jb/v6/evm/webclients/revnet-money/node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 17 passed (18)
+   Start at  14:01:38
+   Duration  2.20s (transform 61ms, setup 148ms, import 203ms, tests 1.20s, environment 520ms)
+

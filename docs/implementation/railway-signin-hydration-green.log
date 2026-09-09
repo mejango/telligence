@@ -1,0 +1,11 @@
+npm notice run @telligence/web@0.0.1 npx
+npm notice run 'vitest' run test/wallet-button.test.tsx test/para-connection-ui.test.tsx test/para-modal-host.test.tsx test/para-auth-sheet.test.tsx
+
+ RUN  v4.1.10 <repo>/web
+
+
+ Test Files  4 passed (4)
+      Tests  21 passed (21)
+   Start at  19:54:08
+   Duration  3.60s (transform 1.20s, setup 1.51s, import 4.26s, tests 2.99s, environment 3.27s)
+

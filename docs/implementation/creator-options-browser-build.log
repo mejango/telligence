@@ -1,0 +1,65 @@
+npm notice run @telligence/web@0.0.1 build:browser
+npm notice run node scripts/build-browser.mjs
+Validated 6 build-time environment values.
+[browser-fixture] listening on http://127.0.0.1:4174
+▲ Next.js 16.3.4 (webpack)
+✓ Running next.config.js took 8ms
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 27.7s
+  Running TypeScript ...
+  Finished TypeScript in 13.5s ...
+  Collecting page data using 9 workers ...
+  Generating static pages using 9 workers (0/22) ...
+  Generating static pages using 9 workers (5/22)
+  Generating static pages using 9 workers (10/22)
+  Generating static pages using 9 workers (16/22)
+✓ Generating static pages using 9 workers (22/22) in 420ms
+  Finalizing page optimization ...
+  Collecting build traces ...
+
+Route (app)                                   Revalidate  Expire
+┌ ○ /                                                 5m      1y
+├ ○ /_not-found                                       5m      1y
+├ ƒ /[slug]
+├ ƒ /[slug]/extras
+├ ƒ /[slug]/operator
+├ ƒ /[slug]/owners
+├ ƒ /[slug]/shop
+├ ƒ /[slug]/terms
+├ ƒ /account/[id]
+├ ƒ /account/[id]/holdings
+├ ƒ /account/[id]/projects
+├ ƒ /account/[id]/roles
+├ ƒ /api/bendystraw/[net]/query
+├ ƒ /api/data/shields
+├ ƒ /api/discover-projects
+├ ƒ /api/healthz
+├ ƒ /api/homepage-activity
+├ ƒ /api/project-image/[chainId]/[projectId]
+├ ƒ /api/project-name
+├ ƒ /api/project-og/[chainId]/[projectId]
+├ ƒ /api/search-projects
+├ ○ /api/telligence-og
+├ ƒ /api/telligence/[...path]
+├ ƒ /api/top-projects
+├ ○ /audit                                            5m      1y
+├ ○ /build                                            5m      1y
+├ ƒ /compute/[projectId]
+├ ƒ /compute/[projectId]/keys
+├ ○ /create                                           5m      1y
+├ ○ /discover                                         5m      1y
+├ ○ /how-it-works                                     5m      1y
+├ ○ /ipfs-proof                                       5m      1y
+├ ○ /learn                                            5m      1y
+├ ○ /llms.txt                                         1h      1y
+├ ƒ /recover
+├ ○ /robots.txt
+└ ○ /sitemap.xml                                      1h      1y
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

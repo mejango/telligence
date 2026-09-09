@@ -1,0 +1,10 @@
+Compiling 2 files with Solc 0.8.28
+Solc 0.8.28 finished in 3.31s
+Compiler run successful!
+
+Ran 2 tests for test/fork/TelligenceVeniceFork.t.sol:TelligenceVeniceForkTest
+[PASS] test_RealProviderHonorsMinimumAndAtomicRollback() (gas: 483842)
+[PASS] test_RealVVVToStakedDiemAndCompleteReturn() (gas: 777664)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 22.83s (37.22s CPU time)
+
+Ran 1 test suite in 22.83s (22.83s CPU time): 2 tests passed, 0 failed, 0 skipped (2 total tests)

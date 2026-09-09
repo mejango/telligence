@@ -1,0 +1,7 @@
+{"name":"gatewayReady","status":200,"body":{"status":"ok"}}
+{"name":"signerHealth","status":200,"body":{"status":"ok"}}
+{"name":"signerRejectsUnauthenticated","status":401,"body":{"error":"unauthorized"}}
+{"name":"signerAcceptsServiceCredential","status":404,"body":{"error":"not_found"}}
+{"name":"workerHealth","status":200,"body":{"service":"control-worker","status":"awaiting_configuration","keeperExecution":false}}
+{"name":"workerReadiness","status":503,"body":{"service":"control-worker","status":"awaiting_configuration","keeperExecution":false}}
+{"migrationColumns":[{"column_name":"daily_limit_microusd","is_nullable":"YES","column_default":null},{"column_name":"policy_version","is_nullable":"NO","column_default":null},{"column_name":"target_daily_microusd","is_nullable":"YES","column_default":null}]}

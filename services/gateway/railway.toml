@@ -1,0 +1,12 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "services/Dockerfile"
+watchPatterns = ["services/**", "packages/**"]
+
+[deploy]
+startCommand = "node gateway/server.mjs"
+preDeployCommand = "node db/migrate.mjs"
+healthcheckPath = "/readyz"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
