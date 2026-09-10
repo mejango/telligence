@@ -139,6 +139,30 @@ No signup or credentials were submitted.
 The gateway reports ready database health; the web reaches it through
 `gateway.railway.internal`. The project directory contains no seeded projects.
 
+## Resilience hardening deployment, 2026-09-10
+
+Backend images were rebuilt from the sanitized `services/` and `packages/`
+context at commit `e5cbb8fbca046fc3b7b353e501f8e44bd8f02770` and uploaded
+with `railway up --path-as-root`; the web service autodeployed commit
+`25b3a9c64596d4e9ebe8e249837fcd1c2944fa3c` from GitHub. Deployment identities
+and digests are in [railway-backend-deployment.json](railway-backend-deployment.json).
+
+Effective changes to the production environment:
+
+| Change | State |
+| --- | --- |
+| Database roles | `telligence_gateway`, `telligence_signer`, `telligence_worker` created with `node db/roles.mjs` from the gateway container; each service's `DATABASE_URL` is now its own role. The gateway keeps `MIGRATION_DATABASE_URL` (owner) for the pre-deploy migration only. |
+| Signer credentials | `AUTH_SIGNER_GATEWAY_SECRET` and `AUTH_SIGNER_WORKER_SECRET` on the signer; the gateway and worker each carry their own value in `AUTH_SIGNER_SERVICE_SECRET`. The signer's obsolete `AUTH_SIGNER_SERVICE_SECRET` variable remains set but unread (this CLI release cannot unset variables); delete it in the dashboard. |
+| Schema | `gateway_instances`, `usage_reservations.gateway_instance`, `usage_reservations.dispatched_at` applied by the pre-deploy migration. |
+| Gateway domain | `api.telligence.money` is attached to the gateway service on port 8080. Its CNAME has not been added at the registrar, so `PUBLIC_API_BASE_URL` still names the Railway gateway domain. Switch it after the record resolves. |
+| Secrets | Owner-only, gitignored local backup `artifacts/local/production-backend-secrets-20260910.json`. |
+
+Verified after the redeploys: gateway `/healthz` and `/readyz` 200 and
+`gateway.started` logged with an instance identity; signer and worker started
+under their roles with no permission errors; `/v1/config` still reports
+`ready:false`. No projects, keys, reservations, or canaries exist, so no
+usage was affected by the lifecycle migration.
+
 ## Compute activation remains gated
 
 Hosting readiness does not activate fundraising or inference. The gateway

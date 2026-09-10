@@ -1,82 +1,110 @@
 {
   "projectId": "b7502552-4222-4aa3-ad69-9bc729265387",
   "environmentId": "82e7109b-357e-40f6-9088-61ed774e62f6",
+  "recordedAt": "2026-09-10",
+  "sourceCommit": "25b3a9c64596d4e9ebe8e249837fcd1c2944fa3c",
+  "backendUpload": "railway up --path-as-root from a sanitized context of services/ and packages/ at commit e5cbb8fbca046fc3b7b353e501f8e44bd8f02770",
   "services": [
     {
       "name": "Postgres",
       "serviceId": "b66458f9-1a56-441d-a04c-0b79c6690017",
       "deploymentId": "1d68e27c-c6d9-42ef-badf-78ec631e48c2",
       "status": "SUCCESS",
+      "createdAt": "2026-09-09T22:32:20.685Z",
       "imageDigest": "sha256:469c779c7c57ec6bad4670a0a3cb5a830aa6e0ce4f3707137608de5223a5041c",
       "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
-      "domains": {
-        "serviceDomains": [],
-        "customDomains": []
-      },
       "startCommand": null,
       "healthcheckPath": null,
       "preDeployCommand": null,
       "drainingSeconds": null,
-      "replicas": 1
+      "replicas": 1,
+      "domains": {
+        "serviceDomains": [],
+        "customDomains": []
+      }
     },
     {
       "name": "auth-signer",
       "serviceId": "159fb766-063a-494f-8e7c-b13675bf05df",
-      "deploymentId": "dabf4710-6c10-4fbe-90f3-ef4ffdd690c5",
+      "deploymentId": "057d00c3-364d-4d8e-a4f5-b26293478260",
       "status": "SUCCESS",
-      "imageDigest": "sha256:5b7a71ea8585fb81f7d11f56199eacce6d9cb4518e09685d1cb53fc79b5f4515",
+      "createdAt": "2026-09-10T00:58:46.447Z",
+      "imageDigest": "sha256:766acc0cae828a3a3a6159de414bcb2c9a0354c73a38b889382bdeb18cde0338",
       "image": null,
-      "domains": {
-        "serviceDomains": [],
-        "customDomains": []
-      },
       "startCommand": "node auth-signer/server.mjs",
       "healthcheckPath": "/healthz",
       "preDeployCommand": null,
       "drainingSeconds": null,
-      "replicas": 1
+      "replicas": 1,
+      "domains": {
+        "serviceDomains": [],
+        "customDomains": []
+      }
     },
     {
       "name": "gateway",
       "serviceId": "9d2f9a50-7281-4a00-9ed8-3f4834d739bd",
-      "deploymentId": "b2cad4fc-c951-4c9d-8d3f-2d45e47f3459",
+      "deploymentId": "15366d1f-3bcc-4a44-9562-0bee8a22b29d",
       "status": "SUCCESS",
-      "imageDigest": "sha256:8338bf7648c9602743a7bcb94ebdf0da306cbd03a06bd01d44b3dcff76ae78b0",
+      "createdAt": "2026-09-10T00:58:50.960Z",
+      "imageDigest": "sha256:6d4437834ea9d3779d00a29aab95fdd115c6c92103b15ce1b83b65b548fecb36",
       "image": null,
-      "domains": {
-        "serviceDomains": [
-          {
-            "id": "b923aa72-7625-4b95-919c-edca22e1c00c",
-            "domain": "gateway-production-389d.up.railway.app",
-            "targetPort": null
-          }
-        ],
-        "customDomains": []
-      },
       "startCommand": "node gateway/server.mjs",
       "healthcheckPath": "/readyz",
       "preDeployCommand": [
         "node db/migrate.mjs"
       ],
       "drainingSeconds": 140,
-      "replicas": 1
+      "replicas": 1,
+      "domains": {
+        "serviceDomains": [
+          "gateway-production-389d.up.railway.app"
+        ],
+        "customDomains": [
+          "api.telligence.money"
+        ]
+      }
     },
     {
       "name": "control-worker",
       "serviceId": "4affaee8-dcdc-4b71-8216-92d7d82e21f6",
-      "deploymentId": "2d6ae44b-1839-4105-acfc-8a6d2b8b14ed",
+      "deploymentId": "1c837948-58b3-4eaf-8ea1-7001a9eefe43",
       "status": "SUCCESS",
-      "imageDigest": "sha256:f3aaf5c6a53ef9d0d6afa96bd10232d40636c83a130df87d6d147dd65cbc2a70",
+      "createdAt": "2026-09-10T00:58:47.593Z",
+      "imageDigest": "sha256:9b74e48ba4d7678d480be5a5f4fe41501aac2f048c574316ff40280c84400b30",
       "image": null,
-      "domains": {
-        "serviceDomains": [],
-        "customDomains": []
-      },
       "startCommand": "node control-worker/server.mjs",
       "healthcheckPath": "/healthz",
       "preDeployCommand": null,
       "drainingSeconds": null,
-      "replicas": 1
+      "replicas": 1,
+      "domains": {
+        "serviceDomains": [],
+        "customDomains": []
+      }
+    },
+    {
+      "name": "web",
+      "serviceId": "6a3a5f99-b549-40fd-92f6-11b308671ef6",
+      "deploymentId": "42cd5448-e06d-45b0-8109-a50adb49b452",
+      "status": "BUILDING",
+      "createdAt": "2026-09-10T00:57:56.788Z",
+      "imageDigest": null,
+      "image": null,
+      "startCommand": null,
+      "healthcheckPath": "/api/healthz",
+      "preDeployCommand": null,
+      "drainingSeconds": null,
+      "replicas": 1,
+      "domains": {
+        "serviceDomains": [
+          "web-production-24f6d.up.railway.app"
+        ],
+        "customDomains": [
+          "www.telligence.money",
+          "telligence.money"
+        ]
+      }
     }
   ]
 }
