@@ -6,17 +6,21 @@ Start with `npm run start:signer` from `services/`. Required variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `DATABASE_URL` | Private PostgreSQL connection; grant only the signer tables and project binding reads needed here. |
-| `AUTH_SIGNER_SERVICE_SECRET` | Random service bearer secret, at least 32 characters, shared only with the gateway and worker. |
+| `DATABASE_URL` | Private PostgreSQL connection as the `telligence_signer` role: vault identity, encrypted signer material, reservation state, and preparations only. |
+| `AUTH_SIGNER_GATEWAY_SECRET` | The gateway's bearer credential, at least 32 characters. It may prepare signers and request inference signatures for a durable, undispatched reservation of the named project. |
+| `AUTH_SIGNER_WORKER_SECRET` | The worker's distinct bearer credential. It may only request the free balance resource (3). |
 | `SIGNER_ENCRYPTION_KEY` | Canonical base64 encoding of 32 random bytes, stored only in this service's sealed variables. |
+| `SIGNER_ENCRYPTION_KEY_PREVIOUS` | Only during rotation; see `rotate-encryption-key.mjs`. |
 | `PORT` | Private listener port; defaults to 3001. |
 
-Do not assign this service a Railway public domain. The client accepts only Railway private DNS names or loopback origins and refuses redirects. `/healthz` exposes only health. All other operations require the exact service bearer secret and enforce a bounded JSON body and concurrency ceiling.
+Do not assign this service a Railway public domain. The client accepts only Railway private DNS names or loopback origins and refuses redirects. `/healthz` exposes only health. All other operations require one of the two caller credentials and enforce a bounded JSON body and concurrency ceiling. Protection of key material (the encryption key, present only here) is distinct from protection against unauthorized signing requests (caller scopes plus the reservation binding): a stolen gateway credential can obtain a signature only for a reservation that already exists in the ledger, so every signature is accounted for; a stolen worker credential obtains only balance signatures.
+
+Key rotation: set the new `SIGNER_ENCRYPTION_KEY`, move the old value to `SIGNER_ENCRYPTION_KEY_PREVIOUS`, run `node auth-signer/rotate-encryption-key.mjs --check` then `--rotate` on this host, and remove the previous key when `--check` reports nothing left to rotate. Rotation is atomic; a row neither key decrypts aborts it, and that signer must be rotated onchain instead.
 
 ## Private API
 
 - `POST /v1/prepare-signer` takes `{creatorAddress, preparationId}`. It persists a dedicated encrypted signing key and returns only `{inferenceSigner, preparationId, expiresAt}`. The gateway first authenticates the creator and later claims the preparation only after validating the deployed factory instance and signer. Preparations expire after 24 hours.
-- `POST /v1/projects/:uuid/venice-signature` takes exactly one of `{resource}`, `{challenge}`, or `{message}`. It loads the project's registered vault, signer and generation from PostgreSQL and returns `{headerName, headerValue, expiresAt}`. Neither caller-specified vaults nor arbitrary signing digests are supported.
+- `POST /v1/projects/:uuid/venice-signature` takes exactly one of `{resource}`, `{challenge}`, or `{message}`, plus `reservationId` for anything other than the balance resource. It verifies that reservation is `reserved` and not yet dispatched for that project before touching key material, loads the project's registered vault, signer and generation from PostgreSQL, and returns `{headerName, headerValue, expiresAt}`. Neither caller-specified vaults nor arbitrary signing digests are supported.
 
 Resource IDs are 0 chat completions, 1 responses, 2 embeddings, and 3 the vault's own x402 balance. These represent authentication formats; the gateway independently permits inference endpoints and pricing. Pending bindings may authenticate only to read balance. Inference requires a ready binding; the control plane separately requires funded canary approval.
 

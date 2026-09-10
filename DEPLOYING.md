@@ -54,10 +54,15 @@ production secrets must be generated and managed independently.
 
 | Variable | Service | Meaning |
 | --- | --- | --- |
-| `DATABASE_URL` | gateway, signer, worker, migration job | Private PostgreSQL connection; use platform-verified TLS where applicable |
+| `DATABASE_URL` | gateway, signer, worker | Private PostgreSQL connection **as that service's own role** (`telligence_gateway`, `telligence_signer`, `telligence_worker`); use platform-verified TLS where applicable |
+| `MIGRATION_DATABASE_URL` | gateway pre-deploy only | Table-owner connection used by `node db/migrate.mjs`; the gateway process never connects with it |
+| `TELLIGENCE_GATEWAY_DB_PASSWORD`, `TELLIGENCE_SIGNER_DB_PASSWORD`, `TELLIGENCE_WORKER_DB_PASSWORD` | one-off `node db/roles.mjs` | Role passwords, at least 32 characters; set only for the role-creation command, never on a running service |
 | `API_KEY_PEPPER` | gateway | Independent random secret, at least 32 bytes; changing it invalidates existing application keys |
-| `AUTH_SIGNER_SERVICE_SECRET` | gateway, worker, signer | Independent random service credential, at least 32 characters |
+| `AUTH_SIGNER_SERVICE_SECRET` | gateway, worker | Each caller's own signer credential, at least 32 characters; the gateway's value is the signer's `AUTH_SIGNER_GATEWAY_SECRET`, the worker's is `AUTH_SIGNER_WORKER_SECRET` |
+| `AUTH_SIGNER_GATEWAY_SECRET`, `AUTH_SIGNER_WORKER_SECRET` | signer only | Distinct credentials; the worker credential can only request the free balance resource, the gateway credential can only request inference signatures for a durable, undispatched reservation |
 | `SIGNER_ENCRYPTION_KEY` | signer only | Exactly 32 random bytes encoded as canonical base64; back up independently of the database |
+| `SIGNER_ENCRYPTION_KEY_PREVIOUS` | signer only, during rotation | The previous key while `node auth-signer/rotate-encryption-key.mjs --rotate` re-encrypts rows; remove afterwards |
+| `EXPECTED_LEDGER_CHECKPOINT` | gateway | Optional `<ISO time>:<count>` printed by `node db/restore-check.mjs --print-checkpoint` and stored outside the database; a ledger with fewer reservations refuses new requests with `ledger_untrusted` |
 | `AUTH_SIGNER_URL` | gateway, worker | `http://auth-signer.railway.internal:3001` |
 | `ALLOWED_WEB_ORIGINS` | gateway | Exact comma-separated public web origins; production requires HTTPS |
 | `PUBLIC_API_BASE_URL` | gateway | Public HTTPS API endpoint ending in `/api/v1` |
@@ -93,11 +98,17 @@ catalog means inference stays unavailable. This refresh does not perform paid
 inference and does not prove a project's canary.
 
 Browsers use `/api/telligence` on the web origin; the bounded server proxy
-forwards only supported administrative paths and headers. Application inference
-calls go directly to the gateway's public `/api/v1` base URL. For local Next.js,
-set `TELLIGENCE_GATEWAY_URL=http://localhost:8080` in `web/.env.local` and
-`NEXT_PUBLIC_SITE_URL=http://localhost:3002`. Never put a service secret in a
-`NEXT_PUBLIC_*` variable.
+forwards only creator session, CSRF, and public project paths. It never carries
+inference. Applications use the gateway's public `/api/v1` base URL directly
+(the `apiBaseUrl` reported by `GET /v1/config` and shown in the key console),
+including `GET /api/v1/requests/:id` for request status, so a website
+deployment or outage cannot interrupt inference. Point `PUBLIC_API_BASE_URL`
+at a stable gateway hostname such as `https://api.telligence.money/api/v1`
+once that custom domain is attached to the gateway service and its DNS record
+resolves; until then the Railway-provided gateway domain is the stable endpoint.
+For local Next.js, set `TELLIGENCE_GATEWAY_URL=http://localhost:8080` in
+`web/.env.local` and `NEXT_PUBLIC_SITE_URL=http://localhost:3002`. Never put a
+service secret in a `NEXT_PUBLIC_*` variable.
 
 ## Install, build, and database migration
 
@@ -143,6 +154,35 @@ its success before starting gateway, signer, and worker processes.
 The initial schema is idempotent for first installation. Future schema changes
 must be explicit, versioned, compatible migrations; adding a column to a
 `CREATE TABLE IF NOT EXISTS` statement does not migrate an existing table.
+
+### Database roles
+
+Each backend connects with its own PostgreSQL role. Create or rotate them once
+with the table owner's connection and three independent passwords:
+
+```sh
+DATABASE_URL=<owner> TELLIGENCE_GATEWAY_DB_PASSWORD=… TELLIGENCE_SIGNER_DB_PASSWORD=… \
+TELLIGENCE_WORKER_DB_PASSWORD=… node services/db/roles.mjs
+```
+
+After any migration that adds a table, re-apply the grant matrix with
+`node services/db/roles.mjs --grants-only` using the owner connection; a table
+the matrix does not cover is unreadable by every service role, so a forgotten
+grant fails loudly. Grants are deliberately not part of the migration: a
+REVOKE/GRANT over every table can deadlock against the live gateway's
+row-locking transactions during a pre-deploy. No service role can `DELETE` or
+create tables. The signer reads only vault identity, encrypted signer material, and
+reservation state, and writes only preparations. The worker reads no encrypted
+signer, key hash, session, or reservation and can update only project status
+and capacity observation columns. The gateway cannot read signed keeper
+transactions. `services/db/test/operations.test.mjs` exercises each service's
+real code paths under its role and asserts the denials.
+
+Remaining impact: the gateway's pre-deploy migration uses
+`MIGRATION_DATABASE_URL`, so that container's environment still carries the
+owner connection even though the gateway process never opens it. A compromise
+that can read the container environment defeats the gateway role boundary; a
+compromise limited to the gateway process or its SQL cannot.
 
 ## Local containers
 
@@ -311,6 +351,69 @@ Configure the hosting platform's termination window accordingly. An interrupted
 request retains its durable reservation even if the process cannot finish
 settling it.
 
+### Request lifecycle and crash recovery
+
+Every reservation records the gateway instance that created it. The gateway
+commits a `dispatched_at` marker after the signer has produced the request's
+authentication and before any bytes reach the provider; a failed marker write
+never forwards. Each instance heartbeats every five seconds and marks itself
+stopped after draining. At startup and every 30 seconds a gateway recovers
+orphans, which are `reserved` rows whose instance is stopped, silent for more
+than 60 seconds, or unknown:
+
+| Orphan | Proof | Result |
+| --- | --- | --- |
+| Tracked instance, no `dispatched_at` | Never sent | `released`, audit `usage.recovered_undispatched` |
+| Tracked instance, `dispatched_at` set | May have been billed | `uncertain`, audit `usage.recovered_uncertain` |
+| Row predating instance tracking | Unknown | `uncertain` |
+
+Released rows stop counting toward budgets and concurrency. Uncertain rows keep
+charging their maximum across epochs until reconciled with provider evidence
+(`node gateway/reconcile.mjs --retain-maximum`) or, when no provider identity
+was captured before the crash, explicitly retained at full maximum in both the
+original and current epoch (`--retain-unproven`). Neither path refunds. A
+duplicate idempotency key after recovery is still refused. Recovery is
+idempotent and safe to run from several instances at once.
+
+### Capacity observation and aging
+
+The worker refreshes capacity in its own loop, eight projects at a time, each
+time-boxed to 25 seconds, independently of receipt audits, keeper execution,
+and planning. Runtime pins are re-verified once a minute rather than once per
+project. The gateway treats an observation as fresh for 30 seconds and usable
+for up to 180 seconds (`capacityGraceMs`). An aging observation is still safe
+because every reservation and settlement since the observation is subtracted
+from it, its UTC epoch must match, and the provider itself validates the
+onchain signer state on every request; a reorg or signer change clears the
+observation immediately. Beyond the grace window admission stops. Project
+snapshots report `capacity.freshness` as `fresh`, `aging`, or `stale`.
+
+### Database restoration
+
+1. Restore the backup into an isolated database and run `npm --prefix services run migrate` against it with the owner connection.
+2. Run `node services/db/restore-check.mjs --checkpoint <ISO:count>` with the checkpoint stored outside the database and `BASE_RPC_URL` set. It reports outstanding and uncertain usage, gateway instances, keeper job states, and every unfinished keeper intent compared with the chain. Exit status 1 means do not route traffic.
+3. `RESERVED_ROWS_AWAIT_GATEWAY_RECOVERY` clears itself when a gateway starts and recovers orphans. `LEDGER_BEHIND_CHECKPOINT` means usage was lost: keep `EXPECTED_LEDGER_CHECKPOINT` set so the gateway refuses reservations (`ledger_untrusted`) until provider usage has been reconciled into the ledger; never restart with an emptier ledger.
+4. `INTENT_NONCE_CONSUMED_WITHOUT_RECEIPT:<job>` means a broadcast happened after the backup. Keep keeper execution disabled, establish the canonical receipt for that nonce, and repair the job record before enabling execution. The worker never replays or re-signs an intent.
+5. Only then point the service roles at the restored database and re-enable traffic.
+
+### Signer encryption key rotation or recovery
+
+1. Generate a new 32-byte key. Set it as `SIGNER_ENCRYPTION_KEY` on the signer and move the old value to `SIGNER_ENCRYPTION_KEY_PREVIOUS`; the signer decrypts with either while rotation proceeds.
+2. On the signer host run `node auth-signer/rotate-encryption-key.mjs --check`, then `--rotate`. Rows the new key already reads are skipped; a row neither key reads aborts the whole rotation without partial writes.
+3. When `--check` reports zero rotatable rows, remove `SIGNER_ENCRYPTION_KEY_PREVIOUS` and store the new key offline.
+
+If the key is lost with no backup, the stored signers are unrecoverable. Prepare
+a new signer for each project and have the creator or recovery authority call
+`setInferenceSigner` onchain, then `POST /v1/projects/:id/signer`; return-only
+recovery never depends on the hosted signer.
+
+### Keeper reconciliation after an incident
+
+Run `node services/db/restore-check.mjs` with `BASE_RPC_URL` before enabling
+`KEEPER_EXECUTION_ENABLED`. Quarantined jobs and consumed-nonce intents are
+resolved only by recording the canonical receipt, never by deleting the intent
+or re-signing with a fresh nonce.
+
 Alert on stale provider observations, rejected runtime pins, signer-generation
 mismatch, stuck/uncertain reservations, old job leases, failed receipts,
 nonce/replacement uncertainty, failed migrations, database backup failures, and
@@ -320,9 +423,13 @@ project IDs, model, latency, and numeric usage are enough for routine diagnosis.
 
 A stolen application key is revoked in the creator console. A compromised
 inference signer requires onchain authentication disable/rotation plus provider
-reconciliation: it can use Venice directly outside gateway quotas. Rotate the
-private service credential on every consumer and signer together. Preserve
-uncertain usage and disable new requests until the ledger is trustworthy.
+reconciliation: it can use Venice directly outside gateway quotas. Rotate a
+signer caller credential on that caller and the signer together; the gateway
+and worker credentials are independent. A compromised worker credential can
+only read balances. A compromised gateway credential can obtain inference
+signatures only for reservations that exist in the ledger and have not been
+dispatched, so every signature it obtains is accounted for. Preserve uncertain
+usage and disable new requests until the ledger is trustworthy.
 
 Take encrypted scheduled PostgreSQL backups and retain recovery points. Back
 up the signer encryption secret separately with restricted access. Restore a

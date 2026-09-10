@@ -48,7 +48,8 @@ services:
     environment:
       PORT: 3001
       DATABASE_URL: postgres://telligence:${POSTGRES_PASSWORD}@postgres:5432/telligence
-      AUTH_SIGNER_SERVICE_SECRET: ${AUTH_SIGNER_SERVICE_SECRET:?Run npm run dev:init first}
+      AUTH_SIGNER_GATEWAY_SECRET: ${AUTH_SIGNER_GATEWAY_SECRET:?Run npm run dev:init first}
+      AUTH_SIGNER_WORKER_SECRET: ${AUTH_SIGNER_WORKER_SECRET:?Run npm run dev:init first}
       SIGNER_ENCRYPTION_KEY: ${SIGNER_ENCRYPTION_KEY:?Run npm run dev:init first}
     depends_on:
       migrate: { condition: service_completed_successfully }
@@ -75,7 +76,7 @@ services:
       ALLOWED_WEB_ORIGINS: ${ALLOWED_WEB_ORIGINS:-http://localhost:3000,http://localhost:3002}
       PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8080/api/v1}
       AUTH_SIGNER_URL: http://auth-signer.railway.internal:3001
-      AUTH_SIGNER_SERVICE_SECRET: ${AUTH_SIGNER_SERVICE_SECRET}
+      AUTH_SIGNER_SERVICE_SECRET: ${AUTH_SIGNER_GATEWAY_SECRET}
       BASE_RPC_URL: ${BASE_RPC_URL:-}
       TELLIGENCE_MANIFEST_PATH: ${TELLIGENCE_MANIFEST_FILE:-}
       MODEL_PRICES_JSON: ${MODEL_PRICES_JSON:-}
@@ -128,7 +129,7 @@ services:
       PORT: 8082
       DATABASE_URL: postgres://telligence:${POSTGRES_PASSWORD}@postgres:5432/telligence
       AUTH_SIGNER_URL: http://auth-signer.railway.internal:3001
-      AUTH_SIGNER_SERVICE_SECRET: ${AUTH_SIGNER_SERVICE_SECRET}
+      AUTH_SIGNER_SERVICE_SECRET: ${AUTH_SIGNER_WORKER_SECRET}
       BASE_RPC_URL: ${BASE_RPC_URL:-}
       TELLIGENCE_MANIFEST_PATH: ${TELLIGENCE_MANIFEST_FILE:-}
       KEEPER_EXECUTION_ENABLED: ${KEEPER_EXECUTION_ENABLED:-false}

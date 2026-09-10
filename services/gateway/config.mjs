@@ -42,6 +42,13 @@ export function configFromEnv(env = process.env) {
   const catalog = env.MODEL_PRICES_JSON
     ? validatePrices(JSON.parse(env.MODEL_PRICES_JSON))
     : null;
+  if (
+    env.EXPECTED_LEDGER_CHECKPOINT &&
+    !/^\d{4}-\d{2}-\d{2}T[0-9:.]+Z:(0|[1-9]\d{0,15})$/.test(
+      env.EXPECTED_LEDGER_CHECKPOINT,
+    )
+  )
+    throw new Error("EXPECTED_LEDGER_CHECKPOINT must be <ISO time>:<count>.");
   return {
     databaseUrl: required(env, "DATABASE_URL"),
     keyPepper,
@@ -53,7 +60,9 @@ export function configFromEnv(env = process.env) {
     port: Number(env.PORT ?? 8080),
     secureCookies: env.NODE_ENV === "production",
     capacityMaxAgeMs: 30000,
+    capacityGraceMs: 180000,
     safetyMarginMicroUsd: 1000n,
+    expectedLedgerCheckpoint: env.EXPECTED_LEDGER_CHECKPOINT || null,
     rpcUrl: env.BASE_RPC_URL,
     manifestPath: env.TELLIGENCE_MANIFEST_PATH,
     apiBaseUrl: required(env, "PUBLIC_API_BASE_URL"),

@@ -8,11 +8,11 @@ From `services/`, run `npm ci`, `npm run migrate`, then `npm run start:worker`. 
 
 | Variable | Purpose |
 | --- | --- |
-| `DATABASE_URL` | Private PostgreSQL connection; required |
+| `DATABASE_URL` | Private PostgreSQL connection as the `telligence_worker` role; required. The role never sees encrypted signers, key hashes, sessions, or reservations |
 | `BASE_RPC_URL` | Base JSON-RPC endpoint supporting `safe`/`finalized` blocks and historical contract reads |
 | `TELLIGENCE_MANIFEST_PATH` | Mounted deployment manifest described below |
 | `AUTH_SIGNER_URL` | Private signer origin, such as `http://auth-signer.railway.internal:3001` |
-| `AUTH_SIGNER_SERVICE_SECRET` | Private service credential, at least 32 random bytes |
+| `AUTH_SIGNER_SERVICE_SECRET` | The worker's own signer credential (the signer's `AUTH_SIGNER_WORKER_SECRET`); it can only request balance signatures |
 | `PORT` | HTTP health port, default `8082` |
 | `KEEPER_EXECUTION_ENABLED` | Literal `true` explicitly enables gas spending; default `false` |
 | `KEEPER_PRIVATE_KEY` | Dedicated gas wallet; required only for execution; distinct from every inference signer |
@@ -20,7 +20,9 @@ From `services/`, run `npm ci`, `npm run migrate`, then `npm run start:worker`. 
 | `KEEPER_MAX_GAS` | Per-transaction gas limit ceiling, default `3000000` |
 | `KEEPER_MAX_FEE_PER_GAS_WEI` | Fee-per-gas ceiling, default `5000000000` |
 
-`GET /healthz` reports process liveness. `GET /readyz` returns 503 until the database, deployment pins, and reconciliation configuration are usable. Health responses contain no credentials. A configured worker can be ready while an individual project or Venice is unavailable; provider bindings and their observation timestamps control project access.
+`GET /healthz` reports process liveness. `GET /readyz` returns 503 until the database, deployment pins, and reconciliation configuration are usable, and reports each loop's last success. Health responses contain no credentials.
+
+The worker runs two independent loops (`scheduler.mjs`). The capacity loop refreshes provider observations every five seconds, eight projects at a time, each attempt time-boxed to 25 seconds; a silent RPC or provider marks only that project unavailable. The maintenance loop runs receipt audits, keeper ticks, and planning. A stalled maintenance step cannot delay capacity observation; they share only the database. Runtime pins are re-verified at most once a minute per process instead of once per project per refresh. A configured worker can be ready while an individual project or Venice is unavailable; provider bindings and their observation timestamps control project access.
 
 Without execution enabled, the worker refreshes capacity and audits old receipts but does not claim jobs, create plans, sign transactions, or spend gas. No endpoint enables execution remotely. Startup requires configuration; it never creates accounts or inserts example projects.
 

@@ -121,3 +121,14 @@ CREATE TABLE IF NOT EXISTS usage_reconciliations (
 );
 
 ALTER TABLE signer_preparations DROP CONSTRAINT IF EXISTS signer_preparations_claimed_project_id_key;
+
+-- Request lifecycle: which gateway process owns a reservation and whether the
+-- provider request was durably marked as dispatched before it was sent.
+CREATE TABLE IF NOT EXISTS gateway_instances (
+ id uuid PRIMARY KEY,
+ started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ heartbeat_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ stopped_at timestamptz
+);
+ALTER TABLE usage_reservations ADD COLUMN IF NOT EXISTS gateway_instance uuid;
+ALTER TABLE usage_reservations ADD COLUMN IF NOT EXISTS dispatched_at timestamptz;

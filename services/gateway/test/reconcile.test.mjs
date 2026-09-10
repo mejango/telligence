@@ -8,6 +8,7 @@ import {
   inspectReservation,
   parseReconcileArgs,
   reconcileReservation,
+  retainUnprovenReservation,
 } from "../reconcile.mjs";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -123,6 +124,10 @@ test("reconciliation CLI offers inspection or explicit maximum retention, never 
   assert.deepEqual(
     parseReconcileArgs(["--retain-maximum", "--reservation", id]),
     { mode: "retain", reservationId: id },
+  );
+  assert.deepEqual(
+    parseReconcileArgs(["--retain-unproven", "--reservation", id]),
+    { mode: "retain-unproven", reservationId: id },
   );
   for (const args of [
     [],
@@ -364,5 +369,51 @@ test(
         .state,
       "uncertain",
     );
+  },
+);
+
+test(
+  "an uncertain orphan without provider identity can only be retained at full maximum, in both epochs, once",
+  { skip: !pool },
+  async () => {
+    const f = await fixture({ providerId: null });
+    await pool.query("UPDATE usage_reservations SET dispatched_at=created_at WHERE id=$1", [f.reservationId]);
+    const inspected = await inspectReservation({ pool, reservationId: f.reservationId });
+    assert.equal(inspected.canCorrelate, false);
+    assert.ok(inspected.dispatchedAt);
+    const evidence = await retainUnprovenReservation({ pool, reservationId: f.reservationId });
+    assert.equal(evidence.source, "operator-attestation");
+    assert.equal(evidence.retainedMicrousd, "100");
+    assert.equal(evidence.originalEpoch, f.createdAt.toISOString().slice(0, 10));
+    const { rows } = await pool.query(
+      "SELECT * FROM usage_reservations WHERE project_id=$1 ORDER BY created_at",
+      [f.projectId],
+    );
+    assert.equal(rows.length, 2);
+    assert.deepEqual(rows.map((r) => [r.state, r.charged_microusd]), [["settled", "100"], ["settled", "100"]]);
+    assert.equal(rows[1].provider_epoch, new Date().toISOString().slice(0, 10));
+    assert.deepEqual(await retainUnprovenReservation({ pool, reservationId: f.reservationId }), evidence);
+    assert.equal(rows.length, (await pool.query("SELECT 1 FROM usage_reservations WHERE project_id=$1", [f.projectId])).rowCount);
+    const audits = await pool.query("SELECT kind FROM audit_events WHERE project_id=$1", [f.projectId]);
+    assert.deepEqual(audits.rows.map((r) => r.kind), ["usage.retained_unproven"]);
+  },
+);
+
+test(
+  "unproven retention refuses live, final and correlatable reservations",
+  { skip: !pool },
+  async () => {
+    const live = await fixture({ providerId: null });
+    await pool.query("UPDATE usage_reservations SET state='reserved' WHERE id=$1", [live.reservationId]);
+    await assert.rejects(retainUnprovenReservation({ pool, reservationId: live.reservationId }), (e) => e.code === "RECONCILIATION_STILL_RESERVED");
+    const final = await fixture({ providerId: null });
+    await pool.query("UPDATE usage_reservations SET state='released' WHERE id=$1", [final.reservationId]);
+    await assert.rejects(retainUnprovenReservation({ pool, reservationId: final.reservationId }), (e) => e.code === "RECONCILIATION_ALREADY_FINAL");
+    const provable = await fixture();
+    await assert.rejects(retainUnprovenReservation({ pool, reservationId: provable.reservationId }), (e) => e.code === "RECONCILIATION_PROOF_AVAILABLE");
+    for (const id of [live.reservationId, final.reservationId, provable.reservationId]) {
+      const { rows } = await pool.query("SELECT charged_microusd FROM usage_reservations WHERE id=$1", [id]);
+      assert.equal(rows[0].charged_microusd, null);
+    }
   },
 );

@@ -10,7 +10,8 @@ export async function initializeLocalEnvironment(root) {
 POSTGRES_PASSWORD=${secret()}
 POSTGRES_PORT=5432
 API_KEY_PEPPER=${secret()}
-AUTH_SIGNER_SERVICE_SECRET=${secret()}
+AUTH_SIGNER_GATEWAY_SECRET=${secret()}
+AUTH_SIGNER_WORKER_SECRET=${secret()}
 SIGNER_ENCRYPTION_KEY=${randomBytes(32).toString("base64")}
 ALLOWED_WEB_ORIGINS=http://localhost:3000,http://localhost:3002
 PUBLIC_API_BASE_URL=http://localhost:8080/api/v1

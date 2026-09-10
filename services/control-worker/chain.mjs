@@ -77,7 +77,12 @@ export class BaseChain {
   async validateProject(project) {
     if (project.chain_id !== 8453 || !/^[1-9][0-9]*$/.test(String(project.revnet_id))) throw fault('INVALID_PROJECT', undefined, true);
     const block = await this.client.getBlock({ blockTag: 'latest' });
-    await this.verifyPins(block.number);
+    // Pinned runtimes are immutable bytecode hashes: reverify at most once a minute
+    // per process instead of once per project per refresh. A failure never caches.
+    if (!this.pinsVerifiedAt || Date.now() - this.pinsVerifiedAt > 60_000) {
+      await this.verifyPins(block.number);
+      this.pinsVerifiedAt = Date.now();
+    }
     const id = BigInt(project.revnet_id);
     const checks = [
       [this.manifest.factoryAddress, factoryAbi, 'policyOf', project.wrapper_address, [id]],

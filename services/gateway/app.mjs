@@ -126,7 +126,7 @@ export function createHandler({
           path,
         );
         if (!matched) throw new Error("Invalid signer operation");
-        return await client.getHeader(matched[1], body.resource);
+        return await client.getHeader(matched[1], body.resource, body.reservationId);
       } catch {
         throw new ApiError(
           503,
@@ -240,10 +240,10 @@ export function createHandler({
           body,
           store,
           prices: catalog,
-          authHeader: async (projectId) => {
+          authHeader: async (projectId, reservationId) => {
             const signed = await callSigner(
               `/v1/projects/${projectId}/venice-signature`,
-              { resource: 0 },
+              { resource: 0, reservationId },
             );
             const header =
               signed.header ?? signed.headerValue ?? signed.siwxHeader;

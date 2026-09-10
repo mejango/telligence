@@ -34,19 +34,21 @@ const fail = (code) => Object.assign(new Error(code), { code });
 const hash = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
+const MODES = {
+  "--inspect": "inspect",
+  "--retain-maximum": "retain",
+  "--retain-unproven": "retain-unproven",
+};
 export function parseReconcileArgs(args) {
   if (
     !Array.isArray(args) ||
     args.length !== 3 ||
-    !["--inspect", "--retain-maximum"].includes(args[0]) ||
+    !MODES[args[0]] ||
     args[1] !== "--reservation" ||
     !UUID.test(args[2])
   )
     throw fail("RECONCILIATION_EXPLICIT_ARGUMENTS_REQUIRED");
-  return {
-    mode: args[0] === "--inspect" ? "inspect" : "retain",
-    reservationId: args[2],
-  };
+  return { mode: MODES[args[0]], reservationId: args[2] };
 }
 
 export async function inspectReservation({ pool, reservationId }) {
@@ -55,7 +57,7 @@ export async function inspectReservation({ pool, reservationId }) {
     rows: [row],
   } = await pool.query(
     `SELECT u.id,u.project_id,u.state,u.provider_epoch,u.maximum_microusd,u.charged_microusd,
-    u.provider_request_id,u.model,u.created_at,r.evidence FROM usage_reservations u
+    u.provider_request_id,u.model,u.created_at,u.dispatched_at,u.gateway_instance,u.settled_at,r.evidence FROM usage_reservations u
     LEFT JOIN usage_reconciliations r ON r.reservation_id=u.id WHERE u.id=$1`,
     [reservationId],
   );
@@ -73,8 +75,93 @@ export async function inspectReservation({ pool, reservationId }) {
       PROVIDER_ID.test(row.provider_request_id),
     model: row.model,
     createdAt: row.created_at.toISOString(),
+    dispatchedAt: row.dispatched_at?.toISOString() ?? null,
+    gatewayInstance: row.gateway_instance ?? null,
+    settledAt: row.settled_at?.toISOString() ?? null,
     reconciliation: row.evidence ?? null,
   };
+}
+
+/**
+ * Operator attestation for an uncertain reservation with no provider identity,
+ * typically a crash after dispatch. The full maximum is charged in its original
+ * epoch and again in the current epoch, exactly like a proven retention. This
+ * is never a refund; a row with a provider identity must use the proof path.
+ */
+export async function retainUnprovenReservation({ pool, reservationId }) {
+  if (!UUID.test(reservationId)) throw fail("RECONCILIATION_INVALID_ID");
+  const result = await transaction(pool, async (client) => {
+    const {
+      rows: [current],
+    } = await client.query(
+      "SELECT * FROM usage_reservations WHERE id=$1 FOR UPDATE",
+      [reservationId],
+    );
+    if (!current) throw fail("RECONCILIATION_NOT_FOUND");
+    const {
+      rows: [project],
+    } = await client.query(
+      "SELECT *,clock_timestamp() AS db_now FROM projects WHERE id=$1 FOR UPDATE",
+      [current.project_id],
+    );
+    const {
+      rows: [already],
+    } = await client.query(
+      "SELECT evidence FROM usage_reconciliations WHERE reservation_id=$1",
+      [reservationId],
+    );
+    if (already) return already.evidence;
+    if (current.state === "reserved") throw fail("RECONCILIATION_STILL_RESERVED");
+    if (current.state !== "uncertain") throw fail("RECONCILIATION_ALREADY_FINAL");
+    if (current.provider_request_id) throw fail("RECONCILIATION_PROOF_AVAILABLE");
+    const epoch = project.db_now.toISOString().slice(0, 10);
+    if (current.provider_epoch > epoch) throw fail("RECONCILIATION_INVALID_EPOCH");
+    let retentionId = null;
+    if (current.provider_epoch !== epoch) {
+      retentionId = randomUUID();
+      await client.query(
+        `INSERT INTO usage_reservations(id,project_id,key_id,provider_epoch,idempotency_hash,maximum_microusd,charged_microusd,model,state,settled_at,gateway_instance)
+        VALUES($1,$2,$3,$4,$5,$6,$6,$7,'settled',clock_timestamp(),$8)`,
+        [
+          retentionId,
+          project.id,
+          current.key_id,
+          epoch,
+          hash(`reconciliation:${reservationId}`),
+          current.maximum_microusd,
+          current.model,
+          current.gateway_instance,
+        ],
+      );
+    }
+    await client.query(
+      "UPDATE usage_reservations SET state='settled',charged_microusd=maximum_microusd,settled_at=clock_timestamp() WHERE id=$1",
+      [reservationId],
+    );
+    const evidence = {
+      source: "operator-attestation",
+      reason: "no_provider_identity",
+      reservationId,
+      projectId: project.id,
+      dispatchedAt: current.dispatched_at?.toISOString() ?? null,
+      retainedMicrousd: current.maximum_microusd,
+      originalEpoch: current.provider_epoch,
+      retainedEpoch: epoch,
+      retentionReservationId: retentionId,
+      observedAt: project.db_now.toISOString(),
+    };
+    await client.query(
+      `INSERT INTO usage_reconciliations(reservation_id,project_id,provider_request_id,retention_reservation_id,evidence)
+      VALUES($1,$2,$3,$4,$5)`,
+      [reservationId, project.id, `unproven:${reservationId}`, retentionId, evidence],
+    );
+    await client.query(
+      "INSERT INTO audit_events(project_id,kind,object_id) VALUES($1,'usage.retained_unproven',$2)",
+      [project.id, reservationId],
+    );
+    return evidence;
+  });
+  return result;
 }
 
 function debitMicroUsd(amount) {
@@ -403,14 +490,19 @@ async function main(args, env) {
     const result =
       mode === "inspect"
         ? await inspectReservation({ pool, reservationId })
-        : await reconcileReservation({
-            pool,
-            reservationId,
-            adminKey: env.VENICE_RECONCILIATION_ADMIN_KEY,
-          });
-    process.stdout.write(
-      `${JSON.stringify({ event: mode === "inspect" ? "reconciliation.inspected" : "reconciliation.retained", result })}\n`,
-    );
+        : mode === "retain-unproven"
+          ? await retainUnprovenReservation({ pool, reservationId })
+          : await reconcileReservation({
+              pool,
+              reservationId,
+              adminKey: env.VENICE_RECONCILIATION_ADMIN_KEY,
+            });
+    const event = {
+      inspect: "reconciliation.inspected",
+      retain: "reconciliation.retained",
+      "retain-unproven": "reconciliation.retained_unproven",
+    }[mode];
+    process.stdout.write(`${JSON.stringify({ event, result })}\n`);
   } finally {
     await pool.end();
   }

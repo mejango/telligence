@@ -29,7 +29,17 @@ export function encryptSignerKey(privateKey, encryptionKey, context) {
   }
 }
 
-export function decryptSignerKey(payload, encryptionKey, context) {
+/** During a key rotation the previous key may still decrypt rows that have not been re-encrypted yet. */
+export function decryptSignerKey(payload, encryptionKey, context, previousEncryptionKey) {
+  try {
+    return decryptWithKey(payload, encryptionKey, context);
+  } catch (error) {
+    if (!previousEncryptionKey) throw error;
+    return decryptWithKey(payload, previousEncryptionKey, context);
+  }
+}
+
+function decryptWithKey(payload, encryptionKey, context) {
   if (typeof payload !== 'string' || payload.length > 1024) throw new Error('Invalid signer ciphertext');
   const parsed = JSON.parse(payload);
   if (!parsed || parsed.v !== 1 || Object.keys(parsed).sort().join() !== 'ciphertext,iv,tag,v') throw new Error('Unsupported signer ciphertext');

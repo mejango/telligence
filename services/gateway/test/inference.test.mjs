@@ -73,6 +73,7 @@ function fixture(options = {}) {
     async finish(id, args) {
       finishes.push({ id, ...args });
     },
+    async markDispatched() {},
   };
   const authHeader = async (projectId) => {
     assert.equal(projectId, "project-id");
@@ -454,4 +455,44 @@ test("paid ambiguity is nonretryable HTTP409 and carries its reserved request id
     (error) => error.status === 409 && error.code === "inference_unconfirmed",
   );
   assert.deepEqual(f.finishes, [{ id: "reservation-id", state: "uncertain" }]);
+});
+
+test("the dispatch marker is committed after signing and before any provider bytes leave", async () => {
+  const f = fixture();
+  const order = [];
+  f.store.markDispatched = async (id) => {
+    order.push(`dispatch:${id}`);
+  };
+  f.authHeader = async (projectId, reservationId) => {
+    order.push(`sign:${projectId}:${reservationId}`);
+    return "vault-siwe-secret";
+  };
+  const upstream = f.fetchImpl;
+  f.fetchImpl = async (...args) => {
+    order.push("fetch");
+    return upstream(...args);
+  };
+  await forwardInference(f);
+  assert.deepEqual(order, ["sign:project-id:reservation-id", "dispatch:reservation-id", "fetch"]);
+  assert.deepEqual(f.finishes, [{ id: "reservation-id", state: "settled", chargedMicroUsd: 10n }]);
+});
+
+test("a failed dispatch marker never forwards and releases the reservation", async () => {
+  const f = fixture();
+  f.store.markDispatched = async () => {
+    throw new Error("database unavailable");
+  };
+  await assert.rejects(forwardInference(f), (error) => error.status === 502);
+  assert.equal(f.requests.length, 0);
+  assert.deepEqual(f.finishes, [{ id: "reservation-id", state: "released" }]);
+});
+
+test("a dispatch marker owned by another process is not retried and holds nothing new", async () => {
+  const f = fixture();
+  f.store.markDispatched = async () => {
+    throw Object.assign(new Error("not owned"), { status: 409, code: "reservation_not_owned" });
+  };
+  await assert.rejects(forwardInference(f), (error) => error.status === 502);
+  assert.equal(f.requests.length, 0);
+  assert.deepEqual(f.finishes, [{ id: "reservation-id", state: "released" }]);
 });

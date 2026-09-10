@@ -28,10 +28,11 @@ export function createSignerClient({ url, secret, fetchImpl = fetch }) {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   }
   return {
-    async getHeader(project, resource = 3) {
+    async getHeader(project, resource = 3, reservationId) {
       const projectId = typeof project === 'string' ? project : project.id;
       if (!/^[0-9a-f-]{36}$/i.test(projectId) || ![0, 1, 2, 3].includes(resource)) throw new Error('Invalid signing request');
-      const result = await request(`/v1/projects/${projectId}/venice-signature`, { resource });
+      if (reservationId !== undefined && !/^[0-9a-f-]{36}$/i.test(reservationId)) throw new Error('Invalid signing request');
+      const result = await request(`/v1/projects/${projectId}/venice-signature`, reservationId === undefined ? { resource } : { resource, reservationId });
       if (result.headerName !== 'SIGN-IN-WITH-X' || typeof result.headerValue !== 'string' || !/^[A-Za-z0-9+/]+=*$/.test(result.headerValue) || !Number.isFinite(Date.parse(result.expiresAt))) throw new Error('Invalid private signer response');
       return { headerName: result.headerName, headerValue: result.headerValue, expiresAt: result.expiresAt };
     },

@@ -165,7 +165,7 @@ test(
   async () => {
     const { id, key } = await fixture();
     await pool.query(
-      `UPDATE provider_bindings SET observed_at=now()-interval '2 minutes' WHERE project_id=$1`,
+      `UPDATE provider_bindings SET observed_at=now()-interval '4 minutes' WHERE project_id=$1`,
       [id],
     );
     await assert.rejects(

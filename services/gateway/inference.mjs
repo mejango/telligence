@@ -226,7 +226,9 @@ export async function forwardInference({
   try {
     if (request.aborted || response.destroyed) throw disconnected();
     const upstreamAuthorization = await withinDeadline(
-      Promise.resolve().then(() => authHeader(reservation.projectId)),
+      Promise.resolve().then(() =>
+        authHeader(reservation.projectId, reservation.id),
+      ),
     );
     if (
       typeof upstreamAuthorization !== "string" ||
@@ -234,6 +236,14 @@ export async function forwardInference({
       /[\r\n]/.test(upstreamAuthorization)
     )
       throw unavailable();
+    if (signal.aborted) throw signal.reason;
+    // Durable dispatch marker: a crash before this commit is provably undispatched
+    // and recoverable as released; a crash after it is held as uncertain.
+    try {
+      await withinDeadline(store.markDispatched(reservation.id));
+    } catch (error) {
+      throw signal.aborted ? signal.reason : unavailable();
+    }
     if (signal.aborted) throw signal.reason;
     started = true;
     upstream = await withinDeadline(

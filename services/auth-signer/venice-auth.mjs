@@ -87,7 +87,7 @@ export function authenticationTypedData({ vault, generation, messageHash }) {
 }
 
 /** The private key only signs the fixed EIP712 authentication type, never an arbitrary caller digest. */
-export async function signVeniceAuthentication({ binding, challenge, message, resource, encryptionKey, now = Date.now() }) {
+export async function signVeniceAuthentication({ binding, challenge, message, resource, encryptionKey, previousEncryptionKey, now = Date.now() }) {
   if (!binding || Number(binding.chain_id) !== BASE || !['ready', 'pending'].includes(binding.status)) throw new Error('Signer binding is unavailable');
   const vault = vaultAddress(binding.vault_address);
   const generation = BigInt(binding.signer_generation);
@@ -98,7 +98,7 @@ export async function signVeniceAuthentication({ binding, challenge, message, re
   const parsed = parseVeniceMessage({ message, vault, now });
   if (binding.status === 'pending' && parsed.resource !== 3) throw new Error('Inference requires verified provider activation');
   const signerAddress = getAddress(binding.signer_address);
-  const account = privateKeyToAccount(decryptSignerKey(binding.encrypted_signer, encryptionKey, signerAddress.toLowerCase()));
+  const account = privateKeyToAccount(decryptSignerKey(binding.encrypted_signer, encryptionKey, signerAddress.toLowerCase(), previousEncryptionKey));
   if (account.address !== signerAddress) throw new Error('Signer binding does not match encrypted key');
   const innerSignature = await account.signTypedData(authenticationTypedData({ vault, generation, messageHash: hashMessage(message) }));
   const signature = encodeAbiParameters(AUTH_ENVELOPE, [1, generation, parsed.resource, parsed.challenge.nonce, parsed.challenge.issuedAt, parsed.challenge.expirationTime, innerSignature]);

@@ -33,6 +33,10 @@ async function jsonBody(request) {
 
 export function createPostgresSignerStore(pool) {
   return {
+    async loadReservation(projectId, reservationId) {
+      const result = await pool.query('SELECT state, dispatched_at FROM usage_reservations WHERE id = $1 AND project_id = $2', [reservationId, projectId]);
+      return result.rows[0];
+    },
     async loadSignerBinding(projectId) {
       const result = await pool.query(`SELECT p.vault_address, p.chain_id, b.encrypted_signer, b.signer_generation,
           b.signer_address, b.status
@@ -53,21 +57,36 @@ export function createPostgresSignerStore(pool) {
   };
 }
 
-/** Only expose on Railway private networking. Service authentication is required on every signing operation. */
-export function createSignerServer({ loadSignerBinding, saveSignerPreparation, serviceSecret, encryptionKey, now = Date.now, maxConcurrency = 16 }) {
-  verifyServiceCredential('', serviceSecret);
+/**
+ * Only expose on Railway private networking. Every signing operation authenticates
+ * with a caller-scoped credential: the worker may only request the free balance
+ * resource, and the gateway may only request an inference signature for a
+ * reservation that is durably reserved and not yet dispatched. Key material
+ * protection (the encryption key) is separate from this request authorization.
+ */
+export function createSignerServer({ loadSignerBinding, saveSignerPreparation, loadReservation, serviceSecrets, encryptionKey, previousEncryptionKey, now = Date.now, maxConcurrency = 16 }) {
+  if (previousEncryptionKey !== undefined) {
+    encryptSignerKey(`0x${'01'.repeat(32)}`, previousEncryptionKey, 'startup-validation');
+    if (previousEncryptionKey === encryptionKey) throw new Error('The previous encryption key must differ from the current key');
+  }
+  const roles = ['gateway', 'worker'];
+  if (!serviceSecrets || Object.keys(serviceSecrets).sort().join() !== roles.join()) throw new Error('Gateway and worker signer credentials are required');
+  for (const role of roles) verifyServiceCredential('', serviceSecrets[role]);
+  if (serviceSecrets.gateway === serviceSecrets.worker) throw new Error('Gateway and worker signer credentials must differ');
   // Validate the key before accepting traffic, using nonsecret test material which is never persisted.
   encryptSignerKey(`0x${'01'.repeat(32)}`, encryptionKey, 'startup-validation');
-  if (typeof loadSignerBinding !== 'function' || typeof saveSignerPreparation !== 'function') throw new Error('Signer storage is required');
+  if (typeof loadSignerBinding !== 'function' || typeof saveSignerPreparation !== 'function' || typeof loadReservation !== 'function') throw new Error('Signer storage is required');
   let active = 0;
   const server = createServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/healthz') return respond(response, 200, { status: 'ok' });
-    if (!verifyServiceCredential(request.headers.authorization, serviceSecret)) return respond(response, 401, { error: 'unauthorized' });
+    const role = roles.find((candidate) => verifyServiceCredential(request.headers.authorization, serviceSecrets[candidate]));
+    if (!role) return respond(response, 401, { error: 'unauthorized' });
     if (active >= maxConcurrency) return respond(response, 503, { error: 'signer_busy' });
     active++;
     try {
       if (request.method !== 'POST') return respond(response, 404, { error: 'not_found' });
       if (request.url === '/v1/prepare-signer') {
+        if (role !== 'gateway') return respond(response, 403, { error: 'scope_forbidden' });
         const body = await jsonBody(request);
         if (Object.keys(body).sort().join() !== 'creatorAddress,preparationId' || !UUID.test(body.preparationId)) return respond(response, 400, { error: 'invalid_preparation' });
         let creatorAddress;
@@ -84,11 +103,20 @@ export function createSignerServer({ loadSignerBinding, saveSignerPreparation, s
       const matched = /^\/v1\/projects\/([^/]+)\/venice-signature$/.exec(request.url);
       if (!matched || !UUID.test(matched[1])) return respond(response, 404, { error: 'not_found' });
       const body = await jsonBody(request);
-      if (Object.keys(body).length !== 1 || !['resource', 'challenge', 'message'].includes(Object.keys(body)[0])) return respond(response, 400, { error: 'invalid_authentication_request' });
+      const { reservationId, ...input } = body;
+      if (Object.keys(input).length !== 1 || !['resource', 'challenge', 'message'].includes(Object.keys(input)[0])) return respond(response, 400, { error: 'invalid_authentication_request' });
+      const balanceOnly = input.resource === 3;
+      if (role === 'worker' && !balanceOnly) return respond(response, 403, { error: 'scope_forbidden' });
+      if (!balanceOnly) {
+        // Inference signatures exist only for a durable, not yet dispatched reservation of this project.
+        if (!UUID.test(reservationId ?? '')) return respond(response, 409, { error: 'reservation_required' });
+        const reservation = await loadReservation(matched[1], reservationId);
+        if (!reservation || reservation.state !== 'reserved' || reservation.dispatched_at) return respond(response, 409, { error: 'reservation_required' });
+      } else if (reservationId !== undefined) return respond(response, 400, { error: 'invalid_authentication_request' });
       const binding = await loadSignerBinding(matched[1]);
       if (!binding || binding.status === 'disabled') return respond(response, 404, { error: 'binding_unavailable' });
       let result;
-      try { result = await signVeniceAuthentication({ binding, ...body, encryptionKey, now: now() }); }
+      try { result = await signVeniceAuthentication({ binding, ...input, encryptionKey, previousEncryptionKey, now: now() }); }
       catch { return respond(response, 400, { error: 'authentication_policy_rejected' }); }
       return respond(response, 200, result);
     } catch (error) {
@@ -104,7 +132,10 @@ export function createSignerServer({ loadSignerBinding, saveSignerPreparation, s
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 5, connectionTimeoutMillis: 5000, query_timeout: 5000 });
-  const server = createSignerServer({ ...createPostgresSignerStore(pool), serviceSecret: process.env.AUTH_SIGNER_SERVICE_SECRET, encryptionKey: process.env.SIGNER_ENCRYPTION_KEY });
+  const server = createSignerServer({ ...createPostgresSignerStore(pool),
+    serviceSecrets: { gateway: process.env.AUTH_SIGNER_GATEWAY_SECRET, worker: process.env.AUTH_SIGNER_WORKER_SECRET },
+    encryptionKey: process.env.SIGNER_ENCRYPTION_KEY,
+    previousEncryptionKey: process.env.SIGNER_ENCRYPTION_KEY_PREVIOUS || undefined });
   server.listen(Number(process.env.PORT ?? 3001), '::');
   const shutdown = () => {
     server.close(() => { void pool.end(); });

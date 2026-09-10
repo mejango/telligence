@@ -110,6 +110,8 @@ states and do not establish that a real vault can spend Venice credit.
 Read [DEPLOYING.md](DEPLOYING.md) for Railway topology, configuration, rollout,
 recovery, and funded-canary acceptance. [INVARIANTS.md](INVARIANTS.md) maps the
 asset, authority, budget, and transaction boundaries to their tests.
+[docs/resilience.md](docs/resilience.md) maps each dependency and credential to
+what its failure or compromise stops.
 [CONTRIBUTING.md](CONTRIBUTING.md) describes the test-first development loop and
 upstream update conventions.
 

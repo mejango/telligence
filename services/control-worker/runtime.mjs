@@ -1,5 +1,6 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { readProviderCapacity } from './capacity.mjs';
-import { safeErrorCode } from './errors.mjs';
+import { fault, safeErrorCode } from './errors.mjs';
 
 async function bounded(items, concurrency, fn) {
   let next = 0;
@@ -8,26 +9,38 @@ async function bounded(items, concurrency, fn) {
   }));
 }
 
+/** Reject after `ms`; the abandoned work is left to its own transport timeouts. */
+function withDeadline(promise, ms) {
+  const abort = new AbortController();
+  const timeout = delay(ms, undefined, { signal: abort.signal }).then(() => { throw fault('REFRESH_DEADLINE'); }, () => {});
+  return Promise.race([promise, timeout]).finally(() => abort.abort());
+}
+
 export class ControlRuntime {
-  constructor({ store, chain, worker, signer, log = () => {} }) {
-    Object.assign(this, { store, chain, worker, signer, log });
+  constructor({ store, chain, worker, signer, log = () => {}, concurrency = 8, refreshDeadlineMs = 25_000, readCapacity = readProviderCapacity }) {
+    Object.assign(this, { store, chain, worker, signer, log, concurrency, refreshDeadlineMs, readCapacity });
   }
 
+  async refreshProject(project) {
+    const diem = await this.chain.readDiemEvidence(project);
+    if (!await this.store.reconcileProjectState(project.id, diem)) return;
+    const snapshot = await this.readCapacity({ project, diem, getAuthHeader: async () => {
+      const auth = await this.signer.getHeader(project, 3);
+      if (auth.headerName !== 'SIGN-IN-WITH-X') throw new Error('Unexpected signer response');
+      return auth.headerValue;
+    } });
+    // Reconfirm the exact chain observation before making this provider capacity usable.
+    if ((await this.chain.getBlockHash(diem.blockNumber)).toLowerCase() !== diem.blockHash.toLowerCase()) throw fault('REORG');
+    await this.store.updateProviderCapacity(project.id, { ...snapshot,
+      signerAddress: diem.signerAddress, signerGeneration: diem.signerGeneration, authenticationEnabled: diem.authenticationEnabled });
+  }
+
+  /** Stalest projects first, several at a time, each time-boxed so one silent dependency cannot hold the sweep. */
   async refreshCapacity() {
     const projects = await this.store.listRefreshableProjects();
-    await bounded(projects, 4, async project => {
+    await bounded(projects, this.concurrency, async project => {
       try {
-        const diem = await this.chain.readDiemEvidence(project);
-        if (!await this.store.reconcileProjectState(project.id, diem)) return;
-        const snapshot = await readProviderCapacity({ project, diem, getAuthHeader: async () => {
-          const auth = await this.signer.getHeader(project, 3);
-          if (auth.headerName !== 'SIGN-IN-WITH-X') throw new Error('Unexpected signer response');
-          return auth.headerValue;
-        } });
-        // Reconfirm the exact chain observation before making this provider capacity usable.
-        if ((await this.chain.getBlockHash(diem.blockNumber)).toLowerCase() !== diem.blockHash.toLowerCase()) throw Object.assign(new Error('Reorg'), { code: 'REORG' });
-        await this.store.updateProviderCapacity(project.id, { ...snapshot,
-          signerAddress: diem.signerAddress, signerGeneration: diem.signerGeneration, authenticationEnabled: diem.authenticationEnabled });
+        await withDeadline(this.refreshProject(project), this.refreshDeadlineMs);
       } catch (error) {
         await this.store.markCapacityUnavailable(project.id);
         this.log({ event: 'capacity_refresh_failed', projectId: project.id, code: safeErrorCode(error) });

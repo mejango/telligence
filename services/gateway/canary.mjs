@@ -211,8 +211,8 @@ export async function runCanary({
       store,
       prices,
       fetchImpl,
-      authHeader: async (id) =>
-        (await signerClient.getHeader(id, 0)).headerValue,
+      authHeader: async (id, reservationId) =>
+        (await signerClient.getHeader(id, 0, reservationId)).headerValue,
       requestTimeoutMs: 30000,
       maxResponseBytes: 65536,
     });

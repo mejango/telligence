@@ -30,15 +30,121 @@ export class GatewayStore {
     {
       keyPepper,
       capacityMaxAgeMs = 30000,
+      capacityGraceMs = 180000,
       safetyMarginMicroUsd = 1000n,
       canaryRunId = null,
+      instanceId = randomUUID(),
     },
   ) {
     this.pool = pool;
     this.keyPepper = keyPepper;
     this.capacityMaxAgeMs = capacityMaxAgeMs;
+    // Aging observations stay usable: every local debit since the observation is
+    // subtracted, the epoch must match, and onchain signer state governs the
+    // provider's own validation. Beyond the grace window admission stops.
+    this.capacityGraceMs = Math.max(capacityGraceMs, capacityMaxAgeMs);
     this.safetyMarginMicroUsd = safetyMarginMicroUsd;
     this.canaryRunId = canaryRunId;
+    this.instanceId = instanceId;
+    this.ledgerUntrusted = false;
+  }
+  async heartbeat(client = this.pool) {
+    await client.query(
+      "INSERT INTO gateway_instances(id) VALUES($1) ON CONFLICT(id) DO UPDATE SET heartbeat_at=clock_timestamp()",
+      [this.instanceId],
+    );
+  }
+  async stop() {
+    await this.pool.query(
+      "UPDATE gateway_instances SET stopped_at=clock_timestamp() WHERE id=$1",
+      [this.instanceId],
+    );
+  }
+  /** The provider request may be sent only after this commit succeeds. */
+  async markDispatched(id) {
+    const result = await this.pool.query(
+      "UPDATE usage_reservations SET dispatched_at=clock_timestamp() WHERE id=$1 AND gateway_instance=$2 AND state='reserved' AND dispatched_at IS NULL",
+      [id, this.instanceId],
+    );
+    if (!result.rowCount)
+      throw new ApiError(
+        409,
+        "reservation_not_owned",
+        "This reservation is not dispatchable by this process.",
+      );
+  }
+  /**
+   * Orphans belong to a stopped or silent instance, or predate instance tracking.
+   * Undispatched rows of a tracked instance are proven never sent and released.
+   * Everything else may have reached the provider and is held as uncertain.
+   */
+  async recoverOrphans({ staleAfterMs = 60000 } = {}) {
+    const { rows } = await this.pool.query(
+      `SELECT u.id FROM usage_reservations u LEFT JOIN gateway_instances g ON g.id=u.gateway_instance
+       WHERE u.state='reserved' AND (u.gateway_instance IS NULL OR g.id IS NULL OR g.stopped_at IS NOT NULL
+         OR g.heartbeat_at < clock_timestamp()-($1||' milliseconds')::interval)
+         AND (u.gateway_instance IS DISTINCT FROM $2)`,
+      [String(staleAfterMs), this.instanceId],
+    );
+    const counts = { released: 0, uncertain: 0 };
+    for (const { id } of rows) {
+      const state = await transaction(this.pool, async (c) => {
+        const found = await c.query(
+          "SELECT project_id FROM usage_reservations WHERE id=$1",
+          [id],
+        );
+        await c.query("SELECT id FROM projects WHERE id=$1 FOR UPDATE", [
+          found.rows[0].project_id,
+        ]);
+        const {
+          rows: [r],
+        } = await c.query(
+          `SELECT u.*, g.stopped_at, g.heartbeat_at < clock_timestamp()-($2||' milliseconds')::interval AS silent, g.id AS instance
+           FROM usage_reservations u LEFT JOIN gateway_instances g ON g.id=u.gateway_instance WHERE u.id=$1 FOR UPDATE OF u`,
+          [id, String(staleAfterMs)],
+        );
+        const orphan =
+          r.state === "reserved" &&
+          (r.gateway_instance === null ||
+            r.instance === null ||
+            r.stopped_at !== null ||
+            r.silent === true);
+        if (!orphan) return null;
+        const proven = r.gateway_instance !== null && r.instance !== null && r.dispatched_at === null;
+        const next = proven ? "released" : "uncertain";
+        await c.query(
+          "UPDATE usage_reservations SET state=$2,settled_at=clock_timestamp() WHERE id=$1",
+          [id, next],
+        );
+        await c.query(
+          "INSERT INTO audit_events(project_id,kind,object_id) VALUES($1,$2,$3)",
+          [
+            r.project_id,
+            proven ? "usage.recovered_undispatched" : "usage.recovered_uncertain",
+            id,
+          ],
+        );
+        return next;
+      });
+      if (state) counts[state]++;
+    }
+    return counts;
+  }
+  /** `<iso>:<count>`: at least `count` reservations must exist at or before `iso`. */
+  async verifyLedgerCheckpoint(checkpoint) {
+    const match = /^(\d{4}-\d{2}-\d{2}T[0-9:.]+Z):(0|[1-9]\d{0,15})$/.exec(
+      checkpoint ?? "",
+    );
+    if (!match || !Number.isFinite(Date.parse(match[1])))
+      throw new Error("Invalid ledger checkpoint.");
+    const {
+      rows: [{ n }],
+    } = await this.pool.query(
+      "SELECT count(*) AS n FROM usage_reservations WHERE created_at<=$1",
+      [match[1]],
+    );
+    this.ledgerUntrusted = BigInt(n) < BigInt(match[2]);
+    return !this.ledgerUntrusted;
   }
   async authenticate(secret, client = this.pool) {
     const id = keyId(secret);
@@ -106,6 +212,12 @@ export class GatewayStore {
         "invalid_idempotency",
         "Invalid idempotency key.",
       );
+    if (this.ledgerUntrusted)
+      throw new ApiError(
+        503,
+        "ledger_untrusted",
+        "The usage ledger has not been reconciled after restoration.",
+      );
     return transaction(this.pool, async (c) => {
       const initial = await this.authenticate(secret, c);
       const { rows: projects } = await c.query(
@@ -155,7 +267,7 @@ export class GatewayStore {
         (canary && canary.signer_generation !== provider.signer_generation) ||
         provider.provider_epoch !== epoch ||
         !provider.observed_at ||
-        now - provider.observed_at > this.capacityMaxAgeMs ||
+        now - provider.observed_at > this.capacityGraceMs ||
         provider.observed_at > now
       )
         throw new ApiError(
@@ -215,8 +327,11 @@ export class GatewayStore {
           "The project has too many active requests.",
         );
       const id = randomUUID();
+      // The owning instance is registered in the same transaction so a
+      // reservation can never appear to belong to an unknown process.
+      await this.heartbeat(c);
       await c.query(
-        `INSERT INTO usage_reservations(id,project_id,key_id,provider_epoch,idempotency_hash,maximum_microusd,model) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+        `INSERT INTO usage_reservations(id,project_id,key_id,provider_epoch,idempotency_hash,maximum_microusd,model,gateway_instance) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           id,
           project.id,
@@ -225,6 +340,7 @@ export class GatewayStore {
           idempotencyHash,
           maximumMicroUsd.toString(),
           model,
+          this.instanceId,
         ],
       );
       if (canary)
@@ -326,11 +442,12 @@ export class GatewayStore {
       id ? [id] : [],
     );
     return rows.map((p) => {
-      const fresh =
-        p.observed_at &&
-        Date.now() - p.observed_at.getTime() <= this.capacityMaxAgeMs &&
-        p.observed_at.getTime() <= Date.now() &&
+      const age = p.observed_at ? Date.now() - p.observed_at.getTime() : Infinity;
+      const usable =
+        age <= this.capacityGraceMs &&
+        age >= 0 &&
         p.provider_epoch === new Date().toISOString().slice(0, 10);
+      const fresh = usable && age <= this.capacityMaxAgeMs;
       const remaining =
         BigInt(p.remaining_microusd ?? 0) -
         BigInt(p.reserved) -
@@ -343,7 +460,7 @@ export class GatewayStore {
               p.provider_status === "pending" ||
               !p.observed_at
             ? "provisioning"
-            : !fresh
+            : !usable
               ? "stale"
               : remaining <= 0n
                 ? "exhausted"
@@ -370,6 +487,7 @@ export class GatewayStore {
           dailyCreditUsd: microToUsd(p.provider_daily ?? 0),
           remainingCreditUsd: microToUsd(remaining > 0n ? remaining : 0n),
           observedAt: p.observed_at?.toISOString() ?? null,
+          freshness: !usable ? "stale" : fresh ? "fresh" : "aging",
         },
       };
     });

@@ -24,10 +24,12 @@ test("local setup generates private independent credentials, and leaves deployme
   const filename = path.join(root, ".env");
   const config = values(await readFile(filename, "utf8"));
   assert.equal((await stat(filename)).mode & 0o777, 0o600);
-  for (const name of ["POSTGRES_PASSWORD", "API_KEY_PEPPER", "AUTH_SIGNER_SERVICE_SECRET"]) {
+  const secrets = ["POSTGRES_PASSWORD", "API_KEY_PEPPER", "AUTH_SIGNER_GATEWAY_SECRET", "AUTH_SIGNER_WORKER_SECRET"];
+  for (const name of secrets) {
     assert.match(config[name], /^[A-Za-z0-9_-]{43}$/);
   }
-  assert.equal(new Set([config.POSTGRES_PASSWORD, config.API_KEY_PEPPER, config.AUTH_SIGNER_SERVICE_SECRET]).size, 3);
+  assert.equal(new Set(secrets.map((name) => config[name])).size, secrets.length);
+  assert.equal(config.AUTH_SIGNER_SERVICE_SECRET, undefined, "each signer caller has its own credential");
   assert.equal(Buffer.from(config.SIGNER_ENCRYPTION_KEY, "base64").length, 32);
   assert.equal(config.SIGNER_ENCRYPTION_KEY, Buffer.from(config.SIGNER_ENCRYPTION_KEY, "base64").toString("base64"));
   assert.equal(config.MODEL_PRICES_JSON, "");

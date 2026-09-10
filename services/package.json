@@ -7,9 +7,9 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "test": "node --test gateway/test/*.test.mjs auth-signer/test/*.test.mjs control-worker/test/*.test.mjs",
+    "test": "node --test gateway/test/*.test.mjs auth-signer/test/*.test.mjs control-worker/test/*.test.mjs && node --test db/test/*.test.mjs",
     "test:gateway": "node --test gateway/test/*.test.mjs",
-    "test:db": "node --test gateway/test/postgres.test.mjs gateway/test/http.test.mjs gateway/test/authentication.test.mjs gateway/test/canary.test.mjs gateway/test/reconcile.test.mjs gateway/test/target.test.mjs control-worker/test/postgres.test.mjs",
+    "test:db": "node --test gateway/test/postgres.test.mjs gateway/test/http.test.mjs gateway/test/authentication.test.mjs gateway/test/canary.test.mjs gateway/test/reconcile.test.mjs gateway/test/target.test.mjs control-worker/test/postgres.test.mjs gateway/test/lifecycle.test.mjs && node --test db/test/*.test.mjs",
     "migrate": "node db/migrate.mjs",
     "start:gateway": "node gateway/server.mjs",
     "start:signer": "node auth-signer/server.mjs",
@@ -17,6 +17,9 @@
     "canary": "node gateway/canary.mjs",
     "audit": "npm audit --omit=dev --audit-level=high",
     "reconcile": "node gateway/reconcile.mjs",
+    "roles": "node db/roles.mjs",
+    "restore:check": "node db/restore-check.mjs",
+    "signer:rotate-key": "node auth-signer/rotate-encryption-key.mjs",
     "manifest:create": "node control-worker/create-manifest.mjs",
     "manifest:check": "node control-worker/check-manifest.mjs"
   },
