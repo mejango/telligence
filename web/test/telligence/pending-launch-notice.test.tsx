@@ -21,6 +21,7 @@ const saved = {
     name: "Public archive",
     purpose: "Make historical research accessible to everyone.",
     workload: "Summarize archival documents",
+    recoveryAddress: "0x4444444444444444444444444444444444444444",
   },
 };
 

@@ -46,3 +46,69 @@ describe("public compute metadata", () => {
     );
   });
 });
+
+describe("last-known-good public reads", () => {
+  const snapshot = (id: string) => ({
+    project: {
+      id,
+      chainId: 8453,
+      revnetId: "12",
+      name: "Public archive",
+      purpose: "Make historical research accessible to everyone.",
+      workload: "Summarize archival documents",
+      targetDailyCreditUsd: null,
+      status: "active",
+      policyVersion: "1",
+      createdAt: "2026-09-09T12:00:00Z",
+      wrapperAddress: "0x1111111111111111111111111111111111111111",
+      vaultAddress: "0x2222222222222222222222222222222222222222",
+      creatorAddress: "0x3333333333333333333333333333333333333333",
+      capacity: { status: "ready", dailyCreditUsd: "1", remainingCreditUsd: "1", observedAt: null },
+    },
+  });
+  const ok = (body: unknown) =>
+    new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+
+  it("serves the last successful copy, marked stale with its time, when the gateway fails", async () => {
+    vi.stubEnv("TELLIGENCE_GATEWAY_URL", "https://api.example.test");
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-09-09T12:00:00Z"));
+    const fetch = vi.fn().mockResolvedValueOnce(ok(snapshot("stale-1")));
+    vi.stubGlobal("fetch", fetch);
+    const { readComputeProjectRecord } = await import("@/lib/telligence/project.server");
+    const fresh = await readComputeProjectRecord("stale-1");
+    expect(fresh).toMatchObject({ stale: false, at: "2026-09-09T12:00:00.000Z" });
+    expect(fresh?.project.name).toBe("Public archive");
+    vi.setSystemTime(Date.parse("2026-09-09T12:30:00Z"));
+    fetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    const saved = await readComputeProjectRecord("stale-1");
+    expect(saved).toMatchObject({ stale: true, at: "2026-09-09T12:00:00.000Z" });
+    expect(saved?.project.id).toBe("stale-1");
+    fetch.mockResolvedValueOnce(new Response("down", { status: 503 }));
+    expect(await readComputeProjectRecord("stale-1")).toMatchObject({ stale: true });
+    // A project that was never read successfully still has nothing to show.
+    fetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    expect(await readComputeProjectRecord("stale-2")).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("keeps the plain reader's contract and bounds the saved copies", async () => {
+    vi.stubEnv("TELLIGENCE_GATEWAY_URL", "https://api.example.test");
+    const fetch = vi
+      .fn()
+      .mockImplementation(async (url: string) =>
+        ok(snapshot(decodeURIComponent(String(url).split("/").at(-1)!))),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const { readComputeProject, readComputeProjectRecord, PUBLIC_READ_CACHE_LIMIT } =
+      await import("@/lib/telligence/project.server");
+    expect((await readComputeProject("bound-0"))?.id).toBe("bound-0");
+    for (let i = 1; i <= PUBLIC_READ_CACHE_LIMIT; i += 1) await readComputeProject(`bound-${i}`);
+    fetch.mockRejectedValue(new Error("down"));
+    // The oldest entry was evicted; the newest survives.
+    expect(await readComputeProjectRecord("bound-0")).toBeNull();
+    expect(await readComputeProjectRecord(`bound-${PUBLIC_READ_CACHE_LIMIT}`)).toMatchObject({
+      stale: true,
+    });
+  });
+});

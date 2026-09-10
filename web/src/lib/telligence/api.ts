@@ -44,7 +44,8 @@ export async function gatewayRequest<T>(
   path: string,
   options: GatewayRequestOptions = {},
 ): Promise<T> {
-  if (!/^\/(?:v1|api\/v1)\/[a-zA-Z0-9/_-]+$/.test(path) || path.includes("..")) {
+  // Bearer-key traffic (`/api/v1/...`) never passes through this site; only session routes do.
+  if (!/^\/v1\/[a-zA-Z0-9/_-]+$/.test(path) || path.includes("..")) {
     throw new Error("Invalid gateway path.");
   }
   const method = options.method ?? "GET";

@@ -19,12 +19,26 @@ export type Profile = {
 // only a fallback for its avatar.
 const priority: Record<string, number> = { ens: 2, ethereum: 1 };
 
-export async function fetchProfiles(addresses: string[], chunkSize = 10) {
+// Public Server Actions: every argument is attacker-supplied. Batches are fixed
+// so the loop always advances, and the list is bounded before any request.
+const CHUNK_SIZE = 10;
+const MAX_ADDRESSES = 200;
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+const validAddress = (value: unknown): value is string =>
+  typeof value === "string" && ADDRESS.test(value);
+
+export async function fetchProfiles(addresses: string[]) {
+  if (
+    !Array.isArray(addresses) ||
+    addresses.length > MAX_ADDRESSES ||
+    !addresses.every(validAddress)
+  )
+    return {};
   const uniqueAddresses = Array.from(new Set(addresses.map((a) => a.toLowerCase()))).sort();
   const profiles: Record<string, Profile | null> = {};
 
-  for (let i = 0; i < uniqueAddresses.length; i += chunkSize) {
-    const chunk = uniqueAddresses.slice(i, i + chunkSize);
+  for (let i = 0; i < uniqueAddresses.length; i += CHUNK_SIZE) {
+    const chunk = uniqueAddresses.slice(i, i + CHUNK_SIZE);
     const ids = chunk.flatMap((addr) => [`ethereum,${addr}`, `ens,${addr}`]);
 
     try {
@@ -34,7 +48,7 @@ export async function fetchProfiles(addresses: string[], chunkSize = 10) {
       );
 
       if (!res.ok) {
-        console.warn(`Failed to fetch profiles for batch ${i / chunkSize + 1}: ${res.status}`);
+        console.warn(`Failed to fetch profiles for batch ${i / CHUNK_SIZE + 1}: ${res.status}`);
         continue;
       }
 
@@ -48,7 +62,7 @@ export async function fetchProfiles(addresses: string[], chunkSize = 10) {
         profiles[match] = selectPreferredProfile(current, item);
       }
     } catch (error) {
-      console.error(`Error fetching profiles for batch ${i / chunkSize + 1}:`, error);
+      console.error(`Error fetching profiles for batch ${i / CHUNK_SIZE + 1}:`, error);
     }
   }
 
@@ -56,6 +70,7 @@ export async function fetchProfiles(addresses: string[], chunkSize = 10) {
 }
 
 export async function fetchProfile(_address: string): Promise<Profile | null> {
+  if (!validAddress(_address)) return null;
   const address = _address.toLowerCase();
   try {
     const res = await fetch(`https://api.web3.bio/profile/${address}`, {

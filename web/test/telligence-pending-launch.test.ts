@@ -13,6 +13,7 @@ const pending = {
     name: "Archive",
     purpose: "Archive public records for anyone to search",
     workload: "Search records",
+    recoveryAddress: "0x3333333333333333333333333333333333333333",
   },
 };
 describe("interrupted project registration", () => {

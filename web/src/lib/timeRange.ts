@@ -4,6 +4,10 @@ const SECONDS_PER_DAY = 86400;
 
 const VALID_RANGES: TimeRange[] = ["1h", "6h", "1d", "7d", "30d", "3m", "1y", "all"];
 
+export function isTimeRange(value: unknown): value is TimeRange {
+  return typeof value === "string" && VALID_RANGES.includes(value as TimeRange);
+}
+
 export function parseTimeRange(range?: string | null): TimeRange {
   if (range && VALID_RANGES.includes(range as TimeRange)) {
     return range as TimeRange;

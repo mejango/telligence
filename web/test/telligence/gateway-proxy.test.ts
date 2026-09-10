@@ -9,7 +9,6 @@ const project = "11111111-1111-4111-8111-111111111111";
 const key = "22222222-2222-4222-8222-222222222222";
 const session = "s".repeat(43);
 const json = (value: unknown = { ok: true }, init?: ResponseInit) => Response.json(value, init);
-const encode = (value: string) => new TextEncoder().encode(value);
 function request(path: string, init: RequestInit = {}) {
   return new Request(`${site}/api/telligence${path}`, init);
 }
@@ -46,8 +45,6 @@ describe("fixed Telligence gateway boundary", () => {
     [`/v1/projects/${project}/keys`, "GET"],
     [`/v1/projects/${project}/keys`, "POST"],
     [`/v1/projects/${project}/keys/${key}`, "DELETE"],
-    ["/api/v1/models", "GET"],
-    ["/api/v1/chat/completions", "POST"],
   ])("forwards only the supported %s %s operation", async (path, method) => {
     const response = await call(path, {
       method,
@@ -76,7 +73,10 @@ describe("fixed Telligence gateway boundary", () => {
     "/v1/config/",
     "/healthz",
     "/readyz",
+    "/api/v1/models",
+    "/api/v1/chat/completions",
     "/api/v1/embeddings",
+    "/api/v1/requests/abc",
     "/api/v1/chat/completions/extra",
     "/v1/%63onfig",
     "/v1//config",
@@ -90,7 +90,6 @@ describe("fixed Telligence gateway boundary", () => {
   it.each([
     ["/v1/config", "POST"],
     ["/v1/projects", "DELETE"],
-    ["/api/v1/models", "POST"],
     ["/v1/auth/session", "DELETE"],
     [`/v1/projects/${project}/keys/${key}`, "GET"],
     [`/v1/projects/${project}/signer`, "GET"],
@@ -265,24 +264,19 @@ describe("fixed Telligence gateway boundary", () => {
     expect([...sentHeaders().keys()]).toEqual(["accept"]);
   });
 
-  it("forwards only inference authorization and idempotency credentials without requiring browser origin", async () => {
-    await call("/api/v1/chat/completions", {
-      method: "POST",
-      body: "{}",
+  it("never forwards bearer keys or idempotency headers on any route", async () => {
+    await call(`/v1/projects/${project}/keys`, {
       headers: {
-        "Content-Type": "application/json",
+        "Sec-Fetch-Site": "same-origin",
+        Cookie: `telligence_session=${session}`,
         Authorization: "Bearer tlg_secret",
         "Idempotency-Key": "request-123",
-        Cookie: `telligence_session=${session}`,
-        "X-CSRF-Token": "private",
-        "SIGN-IN-WITH-X": "private",
       },
     });
     expect(Object.fromEntries(sentHeaders())).toEqual({
-      accept: "application/json, text/event-stream",
-      "content-type": "application/json",
-      authorization: "Bearer tlg_secret",
-      "idempotency-key": "request-123",
+      accept: "application/json",
+      origin: site,
+      cookie: `telligence_session=${session}`,
     });
   });
 
@@ -369,20 +363,6 @@ describe("fixed Telligence gateway boundary", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 
-  it.each([undefined, "Basic private", "Bearer two secrets", `Bearer ${"s".repeat(513)}`])(
-    "requires a bounded bearer token for inference",
-    async (authorization) => {
-      expect(
-        (
-          await call("/api/v1/models", {
-            headers: authorization ? { Authorization: authorization } : {},
-          })
-        ).status,
-      ).toBe(401);
-      expect(fetch).not.toHaveBeenCalled();
-    },
-  );
-
   it("cancels a rejected request upload without awaiting its cancellation", async () => {
     const cancel = vi.fn(() => new Promise<void>(() => {}));
     const req = new Request(`${site}/api/telligence/v1/auth/challenge`, {
@@ -459,78 +439,9 @@ describe("fixed Telligence gateway boundary", () => {
   });
 });
 
-describe("bounded streaming and cancellation", () => {
-  const inference = (signal?: AbortSignal) =>
-    call("/api/v1/chat/completions", {
-      method: "POST",
-      body: '{"stream":true}',
-      headers: { "Content-Type": "application/json", Authorization: "Bearer tlg_secret" },
-      signal,
-    });
-
-  it("delivers SSE incrementally with backpressure and no buffered transcript", async () => {
-    const cancel = vi.fn();
-    let controller!: ReadableStreamDefaultController<Uint8Array>;
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(
-        new ReadableStream(
-          {
-            start(value) {
-              controller = value;
-            },
-            cancel,
-          },
-          { highWaterMark: 0 },
-        ),
-        { headers: { "Content-Type": "text/event-stream" } },
-      ),
-    );
-    const response = await inference();
-    expect(response.headers.get("x-accel-buffering")).toBe("no");
-    const reader = response.body!.getReader();
-    const first = reader.read();
-    controller.enqueue(encode("data: first\n\n"));
-    expect(await first).toEqual({ done: false, value: encode("data: first\n\n") });
-    controller.enqueue(encode("data: [DONE]\n\n"));
-    expect((await reader.read()).value).toEqual(encode("data: [DONE]\n\n"));
-    controller.close();
-    expect((await reader.read()).done).toBe(true);
-    expect(cancel).not.toHaveBeenCalled();
-    expect(upstream()[1]?.signal?.aborted).toBe(false);
-  });
-
-  it("propagates downstream cancellation to upstream without waiting on hostile cancellation", async () => {
-    const cancel = vi.fn(() => new Promise<void>(() => {}));
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(new ReadableStream({ cancel }), {
-        headers: { "Content-Type": "text/event-stream" },
-      }),
-    );
-    const response = await inference();
-    await response.body!.cancel("user stopped");
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(upstream()[1]?.signal?.aborted).toBe(true);
-  });
-
-  it("aborts an active stream on client disconnect and errors an outstanding read", async () => {
-    const controller = new AbortController();
-    const cancel = vi.fn();
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(new ReadableStream({ cancel }), {
-        headers: { "Content-Type": "text/event-stream" },
-      }),
-    );
-    const response = await inference(controller.signal);
-    const read = response.body!.getReader().read();
-    const observed = expect(read).rejects.toThrow();
-    controller.abort();
-    await observed;
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(upstream()[1]?.signal?.aborted).toBe(true);
-  });
-
+describe("bounded timeouts and cancellation", () => {
   it("refuses an already aborted request without initiating an upstream call", async () => {
-    expect((await inference(AbortSignal.abort())).status).toBe(499);
+    expect((await call("/v1/config", { signal: AbortSignal.abort() })).status).toBe(499);
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -569,54 +480,17 @@ describe("bounded streaming and cancellation", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("allows inference startup latency but bounds idle reads and aborts the upstream fetch", async () => {
+  it("aborts a stalled upstream JSON body read and cancels it", async () => {
     vi.useFakeTimers();
     const cancel = vi.fn();
     vi.mocked(fetch).mockResolvedValue(
       new Response(new ReadableStream({ cancel }), {
-        headers: { "Content-Type": "text/event-stream" },
+        headers: { "Content-Type": "application/json" },
       }),
     );
-    const response = await inference();
-    const observed = expect(response.body!.getReader().read()).rejects.toThrow();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(upstream()[1]?.signal?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(30_001);
-    await observed;
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(upstream()[1]?.signal?.aborted).toBe(true);
-  });
-
-  it("bounds total stream lifetime even when the consumer stops reading", async () => {
-    vi.useFakeTimers();
-    const cancel = vi.fn();
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(new ReadableStream({ cancel }), {
-        headers: { "Content-Type": "text/event-stream" },
-      }),
-    );
-    const response = await inference();
-    await vi.advanceTimersByTimeAsync(130_001);
-    await expect(response.body!.getReader().read()).rejects.toThrow();
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(upstream()[1]?.signal?.aborted).toBe(true);
-  });
-
-  it("enforces the full stream byte budget", async () => {
-    const cancel = vi.fn();
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(new Uint8Array(8 * 1024 * 1024 + 1));
-          },
-          cancel,
-        }),
-        { headers: { "Content-Type": "text/event-stream" } },
-      ),
-    );
-    const response = await inference();
-    await expect(response.body!.getReader().read()).rejects.toThrow();
+    const response = call("/v1/config");
+    await vi.advanceTimersByTimeAsync(15_001);
+    expect((await response).status).toBe(504);
     expect(cancel).toHaveBeenCalledOnce();
     expect(upstream()[1]?.signal?.aborted).toBe(true);
   });

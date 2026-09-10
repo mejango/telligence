@@ -25,6 +25,34 @@ export function parseRecoveryProjectId(value: string) {
   return BigInt(value);
 }
 
+/**
+ * A user-supplied Base RPC for reading the registry when the site's providers fail.
+ * Empty means "use the site's default"; anything but a plain https URL is refused.
+ */
+export function parseRecoveryRpcUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const invalid = () =>
+    new Error("Enter an https RPC URL without credentials, query parameters, or fragments.");
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw invalid();
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    trimmed.includes("?") ||
+    trimmed.includes("#")
+  )
+    throw invalid();
+  return url.href;
+}
+
 export function configuredRecoveryFactory(
   value = process.env.NEXT_PUBLIC_TELLIGENCE_FACTORY_ADDRESS,
 ): Address {

@@ -11,18 +11,15 @@ const PROJECT_AUTHENTICATION_PATH = new RegExp(
   `^/v1/projects/${UUID}/(?:signer|authentication/sync)$`,
 );
 const REQUEST_BYTES = 16 * 1024;
-const INFERENCE_REQUEST_BYTES = 128 * 1024;
 const RESPONSE_BYTES = 1024 * 1024;
-const INFERENCE_RESPONSE_BYTES = 8 * 1024 * 1024;
 const READ_TIMEOUT_MS = 15_000;
-const INFERENCE_READ_TIMEOUT_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
-// The gateway's own inference deadline is 120 seconds. Leave it time to settle.
-const INFERENCE_TIMEOUT_MS = 130_000;
 
+// Bearer-key application traffic (`/api/v1/...`, request status) goes straight to
+// the gateway. This proxy only carries the browser's session and CSRF traffic.
 type Operation = {
   methods: readonly string[];
-  access: "public" | "auth" | "session" | "inference";
+  access: "public" | "auth" | "session";
   body?: "required" | "optional";
 };
 
@@ -77,20 +74,11 @@ function operationFor(path: string): Operation | null {
   if (KEYS_PATH.test(path))
     return { methods: ["GET", "POST"], access: "session", body: "required" };
   if (KEY_PATH.test(path)) return { methods: ["DELETE"], access: "session" };
-  if (path === "/api/v1/models") return { methods: ["GET"], access: "inference" };
-  if (path === "/api/v1/chat/completions") {
-    return { methods: ["POST"], access: "inference", body: "required" };
-  }
   return null;
 }
 
 function requestHeaders(req: Request, operation: Operation, siteOrigin: string) {
-  const headers = new Headers({
-    accept:
-      operation.access === "inference" && req.method === "POST"
-        ? "application/json, text/event-stream"
-        : "application/json",
-  });
+  const headers = new Headers({ accept: "application/json" });
   const origin = req.headers.get("origin");
   if (origin !== null && origin !== siteOrigin) {
     throw new ProxyError(403, "origin_forbidden", "This web origin is not permitted.");
@@ -130,22 +118,6 @@ function requestHeaders(req: Request, operation: Operation, siteOrigin: string) 
         if (!/^[a-f0-9]{64}$/.test(csrf))
           throw new ProxyError(400, "invalid_csrf", "Invalid request token.");
         headers.set("x-csrf-token", csrf);
-      }
-    }
-  }
-  if (operation.access === "inference") {
-    const authorization = req.headers.get("authorization");
-    if (authorization === null || !/^Bearer [A-Za-z0-9_.-]{1,512}$/i.test(authorization)) {
-      throw new ProxyError(401, "unauthorized", "Valid credentials are required.");
-    }
-    headers.set("authorization", authorization);
-    if (req.method === "POST") {
-      const idempotency = req.headers.get("idempotency-key");
-      if (idempotency !== null) {
-        if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(idempotency)) {
-          throw new ProxyError(400, "invalid_idempotency", "Invalid idempotency key.");
-        }
-        headers.set("idempotency-key", idempotency);
       }
     }
   }
@@ -228,7 +200,6 @@ async function readBounded(
   maxBytes: number,
   budget: Deadline,
   request = false,
-  readTimeoutMs = READ_TIMEOUT_MS,
 ) {
   if (!body) return new Uint8Array();
   const reader = body.getReader();
@@ -236,7 +207,7 @@ async function readBounded(
   let total = 0;
   try {
     for (;;) {
-      const { done, value } = await budget.wait(reader.read(), readTimeoutMs);
+      const { done, value } = await budget.wait(reader.read(), READ_TIMEOUT_MS);
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
@@ -261,16 +232,13 @@ async function readBounded(
   return result;
 }
 
-function responseHeaders(upstream: Response, path: string, siteOrigin: string, streaming: boolean) {
+function responseHeaders(upstream: Response, path: string, siteOrigin: string) {
   const headers = new Headers({
-    "content-type": streaming
-      ? "text/event-stream; charset=utf-8"
-      : "application/json; charset=utf-8",
+    "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store, no-transform",
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
   });
-  if (streaming) headers.set("x-accel-buffering", "no");
   const requestId = upstream.headers.get("x-request-id");
   if (requestId && /^[A-Za-z0-9_-]{1,128}$/.test(requestId)) headers.set("x-request-id", requestId);
   if (upstream.ok && (path === "/v1/auth/verify" || path === "/v1/auth/logout")) {
@@ -301,61 +269,10 @@ function responseHeaders(upstream: Response, path: string, siteOrigin: string, s
   return headers;
 }
 
-function streamResponse(body: ReadableStream<Uint8Array>, budget: Deadline, maxBytes: number) {
-  const reader = body.getReader();
-  let total = 0;
-  let finished = false;
-  let stop: () => void;
-  const finish = (cancel: boolean) => {
-    if (finished) return;
-    finished = true;
-    budget.signal.removeEventListener("abort", stop);
-    if (cancel) cancelReader(reader);
-    releaseReader(reader);
-    budget.cleanup();
-  };
-  return new ReadableStream<Uint8Array>(
-    {
-      start(controller) {
-        stop = () => {
-          if (finished) return;
-          controller.error(budget.signal.reason);
-          finish(true);
-        };
-        budget.signal.addEventListener("abort", stop, { once: true });
-        if (budget.signal.aborted) stop();
-      },
-      async pull(controller) {
-        try {
-          const { done, value } = await budget.wait(reader.read(), INFERENCE_READ_TIMEOUT_MS);
-          if (finished) return;
-          if (done) {
-            controller.close();
-            finish(false);
-            return;
-          }
-          total += value.byteLength;
-          if (total > maxBytes) throw unavailable();
-          controller.enqueue(value);
-        } catch (error) {
-          if (!finished) budget.abort(error);
-        }
-      },
-      cancel() {
-        // Finish before abort so cancelling a consumer never errors its closed stream.
-        finish(true);
-        budget.abort(disconnected());
-      },
-    },
-    { highWaterMark: 0 },
-  );
-}
-
 /** Fixed same-origin browser/API boundary, never a general-purpose HTTP proxy. */
 export async function proxyGateway(req: Request, segments: readonly string[]): Promise<Response> {
   let budget: Deadline | undefined;
   let upstream: Response | undefined;
-  let streamed = false;
   try {
     const url = new URL(req.url);
     if (
@@ -388,8 +305,7 @@ export async function proxyGateway(req: Request, segments: readonly string[]): P
       throw new ProxyError(503, "gateway_not_configured", "The compute service is not configured.");
     }
     const headers = requestHeaders(req, operation, siteOrigin);
-    const inference = operation.access === "inference";
-    budget = deadline(req.signal, inference ? INFERENCE_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
+    budget = deadline(req.signal, REQUEST_TIMEOUT_MS);
     if (budget.signal.aborted) throw budget.signal.reason;
     let body: Uint8Array<ArrayBuffer> | undefined;
     if (req.method === "POST" && (req.body || operation.body === "required")) {
@@ -399,9 +315,8 @@ export async function proxyGateway(req: Request, segments: readonly string[]): P
       ) {
         throw new ProxyError(415, "content_type", "Use an uncompressed application/json body.");
       }
-      const maxBytes = inference ? INFERENCE_REQUEST_BYTES : REQUEST_BYTES;
-      checkLength(req.headers, maxBytes, true);
-      body = await readBounded(req.body, maxBytes, budget, true);
+      checkLength(req.headers, REQUEST_BYTES, true);
+      body = await readBounded(req.body, REQUEST_BYTES, budget, true);
       headers.set("content-type", "application/json");
     } else if (req.body || Number(req.headers.get("content-length") ?? 0) !== 0) {
       throw new ProxyError(400, "unexpected_body", "This request does not accept a body.");
@@ -430,30 +345,10 @@ export async function proxyGateway(req: Request, segments: readonly string[]): P
     )
       throw unavailable();
     const contentType = upstream.headers.get("content-type") ?? "";
-    const streaming =
-      path === "/api/v1/chat/completions" &&
-      upstream.ok &&
-      /^text\/event-stream(?:\s*;.*)?$/i.test(contentType);
-    if (!streaming && !/^application\/json(?:\s*;.*)?$/i.test(contentType)) throw unavailable();
-    const maxBytes = inference ? INFERENCE_RESPONSE_BYTES : RESPONSE_BYTES;
-    checkLength(upstream.headers, maxBytes);
-    const outgoingHeaders = responseHeaders(upstream, path, siteOrigin, streaming);
-    if (streaming) {
-      if (!upstream.body) throw unavailable();
-      const response = new Response(streamResponse(upstream.body, budget, maxBytes), {
-        status: upstream.status,
-        headers: outgoingHeaders,
-      });
-      streamed = true;
-      return response;
-    }
-    const bytes = await readBounded(
-      upstream.body,
-      maxBytes,
-      budget,
-      false,
-      inference ? INFERENCE_READ_TIMEOUT_MS : READ_TIMEOUT_MS,
-    );
+    if (!/^application\/json(?:\s*;.*)?$/i.test(contentType)) throw unavailable();
+    checkLength(upstream.headers, RESPONSE_BYTES);
+    const outgoingHeaders = responseHeaders(upstream, path, siteOrigin);
+    const bytes = await readBounded(upstream.body, RESPONSE_BYTES, budget);
     return new Response(bytes, { status: upstream.status, headers: outgoingHeaders });
   } catch (error) {
     budget?.abort(error);
@@ -461,6 +356,6 @@ export async function proxyGateway(req: Request, segments: readonly string[]): P
     if (upstream?.body && !upstream.body.locked) cancelBody(upstream.body);
     return errorResponse(error);
   } finally {
-    if (!streamed) budget?.cleanup();
+    budget?.cleanup();
   }
 }

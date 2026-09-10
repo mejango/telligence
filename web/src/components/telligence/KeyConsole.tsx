@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCreatorSession } from "@/hooks/useCreatorSession";
-import { GatewayError, gatewayOrigin, gatewayRequest } from "@/lib/telligence/api";
+import { GatewayError, gatewayRequest } from "@/lib/telligence/api";
+import { parseApiBaseUrl } from "@/lib/telligence/project-data";
 import { requireNoViewAs } from "@/lib/view-as";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useAccount } from "wagmi";
@@ -127,7 +128,10 @@ function AuthenticatedKeys({
   const limitId = useId();
   const expiryId = useId();
   const endpointId = useId();
-  const endpoint = `${gatewayOrigin()}/api/v1`;
+  const endpointHelpId = useId();
+  // The base URL is the gateway's own origin from its config. This site is never on
+  // the inference path, so no proxy URL is ever shown as a fallback.
+  const [apiBaseUrl, setApiBaseUrl] = useState<string | null | undefined>(undefined);
   const path = `/v1/projects/${encodeURIComponent(projectId)}/keys`;
   const numericLimit = Number(limit);
   const validExpiry =
@@ -179,6 +183,19 @@ function AuthenticatedKeys({
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    gatewayRequest<unknown>("/v1/config", { signal: controller.signal }).then(
+      (config) => {
+        if (!controller.signal.aborted) setApiBaseUrl(parseApiBaseUrl(config));
+      },
+      () => {
+        if (!controller.signal.aborted) setApiBaseUrl(null);
+      },
+    );
+    return () => controller.abort();
+  }, []);
 
   async function createKey() {
     if (!canCreate || busy.current) return;
@@ -421,14 +438,26 @@ function AuthenticatedKeys({
         <Label htmlFor={endpointId}>API base URL</Label>
         <Input
           id={endpointId}
-          value={
-            endpoint.startsWith("/") && typeof window !== "undefined"
-              ? `${window.location.origin}${endpoint}`
-              : endpoint
-          }
+          value={apiBaseUrl ?? "Unavailable"}
           readOnly
+          aria-describedby={endpointHelpId}
           className="font-mono"
         />
+        <p id={endpointHelpId} className="text-xs text-zinc-500">
+          {apiBaseUrl === undefined ? (
+            "Loading the gateway’s API base URL…"
+          ) : apiBaseUrl ? (
+            <>
+              Request status is available at{" "}
+              <code className="break-all">
+                GET {apiBaseUrl}/requests/{"{x-request-id}"}
+              </code>{" "}
+              with your key as the bearer token.
+            </>
+          ) : (
+            "The gateway’s API base URL is unavailable right now. Reload to try again."
+          )}
+        </p>
         <p className="text-xs text-zinc-500">
           Keys grant compute access. They cannot move project funds.
         </p>

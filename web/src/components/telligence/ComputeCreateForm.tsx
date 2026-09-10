@@ -310,6 +310,34 @@ export function ComputeCreateForm() {
                   ones.
                 </p>
               </fieldset>
+              <div className="mt-7">
+                <label htmlFor="compute-recoveryAddress" className="block text-sm">
+                  Recovery wallet
+                </label>
+                <Input
+                  {...fieldProps("recoveryAddress")}
+                  value={draft.recoveryAddress ?? ""}
+                  onChange={(event) =>
+                    update(
+                      "recoveryAddress",
+                      event.target.value.trim()
+                        ? (event.target.value.trim() as `0x${string}`)
+                        : undefined,
+                    )
+                  }
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="0x… · a wallet separate from your creator wallet"
+                  className="mt-3 h-12"
+                />
+                {errorFor("recoveryAddress")}
+                <p className="mt-3 text-xs leading-6 text-melon-700">
+                  Choose a separate recovery wallet. If the creator wallet is lost, this address is
+                  the only way to start recovery: it can pause allocation and begin the published
+                  wind-down. Recovered backing returns to the revnet. This authority is fixed at
+                  launch.
+                </p>
+              </div>
               <details className="mt-5 border-y border-melon-300 py-5">
                 <summary className="text-sm">Inspect the starting terms</summary>
                 <dl className="mt-6 space-y-4 text-xs">
@@ -326,33 +354,6 @@ export function ComputeCreateForm() {
                     <dd>{draft.cashOutTaxBps / 100}%</dd>
                   </div>
                 </dl>
-                <div className="mt-6 border-t border-melon-300 pt-5">
-                  <label htmlFor="compute-recoveryAddress" className="block text-sm">
-                    Recovery wallet (optional)
-                  </label>
-                  <Input
-                    {...fieldProps("recoveryAddress")}
-                    value={draft.recoveryAddress ?? ""}
-                    onChange={(event) =>
-                      update(
-                        "recoveryAddress",
-                        event.target.value.trim()
-                          ? (event.target.value.trim() as `0x${string}`)
-                          : undefined,
-                      )
-                    }
-                    autoComplete="off"
-                    spellCheck={false}
-                    placeholder="0x… · defaults to your creator wallet"
-                    className="mt-3 h-12"
-                  />
-                  {errorFor("recoveryAddress")}
-                  <p className="mt-3 text-xs leading-6 text-melon-700">
-                    Leave blank to use your connected creator wallet. A separate recovery wallet can
-                    pause allocation and begin the published wind-down. Recovered backing returns to
-                    the revnet. This authority is fixed at launch.
-                  </p>
-                </div>
                 <p className="mt-5 text-xs leading-6 text-melon-700">
                   Normal issuance and buybacks apply. A 40% production split does not mean 40% of
                   money raised becomes compute. Cash-out economics and execution affect the actual

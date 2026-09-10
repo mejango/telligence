@@ -24,6 +24,7 @@ const draft = {
   name: "A public archive",
   purpose: "Make historical records searchable.",
   workload: "Embeddings and summaries.",
+  recoveryAddress: "0x4444444444444444444444444444444444444444" as const,
 };
 const launchPolicy = {
   conversionCadence: "3600",

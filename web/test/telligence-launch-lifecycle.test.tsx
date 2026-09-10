@@ -78,6 +78,7 @@ const FACTORY = "0x3333333333333333333333333333333333333333" as const;
 const TERMINAL = "0x4444444444444444444444444444444444444444" as const;
 const POLICY = "0x5555555555555555555555555555555555555555" as const;
 const VAULT = "0x6666666666666666666666666666666666666666" as const;
+const RECOVERY = "0x7777777777777777777777777777777777777777" as const;
 const HASH = `0x${"ab".repeat(32)}` as const;
 const EXECUTION_HASH = `0x${"cd".repeat(32)}` as const;
 const PREPARATION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -86,6 +87,7 @@ const DRAFT = {
   name: "Public archive",
   purpose: "Make public records searchable for everyone",
   workload: "Summarize public records",
+  recoveryAddress: RECOVERY,
 };
 const CONFIG = {
   ready: true,

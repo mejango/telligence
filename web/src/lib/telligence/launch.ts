@@ -59,8 +59,13 @@ export function buildComputeLaunch({
     draft.cashOutTaxBps >= 10_000
   )
     throw new Error("Invalid cash-out tax.");
-  const errors = validateComputeDraft(draft);
+  // Recovery must be independent of the creator: if that wallet is lost, the
+  // recovery wallet is the only authority left to start the wind-down.
+  const errors = validateComputeDraft(draft, creator);
   if (Object.keys(errors).length) throw new Error(Object.values(errors)[0]);
+  const recovery = draft.recoveryAddress;
+  if (!recovery || recovery.toLowerCase() === creator.toLowerCase())
+    throw new Error("Choose a separate recovery wallet.");
   if (!/^ipfs:\/\/[a-zA-Z0-9]+$/.test(metadataUri))
     throw new Error("Pin project metadata before launching.");
   if (
@@ -73,7 +78,7 @@ export function buildComputeLaunch({
     creationFee >= 2n ** 256n
   )
     throw new Error("Invalid deployment context.");
-  for (const address of [creator, inferenceSigner, draft.recoveryAddress ?? creator]) {
+  for (const address of [creator, inferenceSigner, recovery]) {
     if (!isAddress(address) || address.toLowerCase() === zeroAddress)
       throw new Error("Invalid project authority.");
   }
@@ -109,7 +114,7 @@ export function buildComputeLaunch({
         },
       ],
       policyConfig,
-      draft.recoveryAddress ?? creator,
+      recovery,
       inferenceSigner,
     ] as const,
   };

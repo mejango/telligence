@@ -297,7 +297,7 @@ export function BridgeDialog(props: PropsWithChildren<Props>) {
           setSlippagePercent("1");
           setSourceChainId(sourceChains[0]);
           setTargetChainId(undefined);
-          revalidateCacheTag("suckerTransactions", 8000).then(router.refresh);
+          revalidateCacheTag("suckerTransactions").then(router.refresh);
         }
       }}
     >

@@ -1,6 +1,7 @@
 "use server";
 
 import { getRulesets } from "@/app/[slug]/terms/getRulesets";
+import { isSupportedChainId } from "@/app/constants";
 import {
   accountingIsAxisUnit,
   baseIsUsd,
@@ -13,7 +14,7 @@ import {
 import { getCurrentCashOutTax } from "@/lib/cashOutTax";
 import { minimumCashOutPriceAtIssuancePrice } from "@/lib/minimumCashOutPrice";
 import { smoothPriceSeries } from "@/lib/priceSeries";
-import { getStartTimeForRange, getTimeRangeConfig, TimeRange } from "@/lib/timeRange";
+import { getStartTimeForRange, getTimeRangeConfig, isTimeRange, TimeRange } from "@/lib/timeRange";
 import { getTokenAddress } from "@/lib/token";
 import { JBChainId, NATIVE_TOKEN } from "@bananapus/nana-sdk-core";
 import { calculateIssuancePriceHistory } from "./calculateIssuancePriceHistory";
@@ -36,6 +37,35 @@ export type PriceDataPoint = {
   cashOutTaxRate?: number;
 };
 
+// A public Server Action: bound every argument before it reaches an indexer or RPC.
+const PROJECT_ID = /^[1-9]\d{0,17}$/;
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+const validDecimals = (value: unknown) =>
+  Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 36;
+
+function validChartParams(params: unknown): params is Parameters<typeof getTokenPriceChartData>[0] {
+  if (!params || typeof params !== "object") return false;
+  const { projectId, chainId, range, suckerGroupId, baseToken } = params as Record<string, unknown>;
+  const token = baseToken as Record<string, unknown> | null | undefined;
+  return (
+    typeof projectId === "string" &&
+    PROJECT_ID.test(projectId) &&
+    typeof chainId === "number" &&
+    isSupportedChainId(chainId) &&
+    isTimeRange(range) &&
+    typeof suckerGroupId === "string" &&
+    suckerGroupId.length > 0 &&
+    suckerGroupId.length <= 200 &&
+    !!token &&
+    typeof token === "object" &&
+    typeof token.address === "string" &&
+    ADDRESS.test(token.address) &&
+    typeof token.symbol === "string" &&
+    token.symbol.length <= 32 &&
+    validDecimals(token.decimals)
+  );
+}
+
 export async function getTokenPriceChartData(params: {
   projectId: string;
   chainId: JBChainId;
@@ -43,6 +73,7 @@ export async function getTokenPriceChartData(params: {
   suckerGroupId: string;
   baseToken: { address: string; symbol: string; decimals: number };
 }) {
+  if (!validChartParams(params)) return null;
   const { projectId, chainId, baseToken, suckerGroupId, range } = params;
   const startTime = getStartTimeForRange(range);
 

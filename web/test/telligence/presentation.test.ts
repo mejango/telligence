@@ -102,6 +102,7 @@ describe("purpose-first launch validation", () => {
       name: "Public archive",
       purpose: "Make historical research accessible to everyone.",
       workload: "Summarize archival documents",
+      recoveryAddress: "0x4444444444444444444444444444444444444444" as const,
     };
     expect(validateComputeDraft(draft)).toEqual({});
     for (const targetDailyCreditUsd of ["-1", "0", "NaN", "1e3", "0.001", "1000001"])
@@ -118,6 +119,7 @@ describe("purpose-first launch validation", () => {
           name: "Public archive",
           purpose: "Make historical research accessible to everyone.",
           workload: "Summarize archival documents",
+          recoveryAddress: "0x4444444444444444444444444444444444444444",
           targetDailyCreditUsd,
         }),
       ).toEqual({});
@@ -130,6 +132,7 @@ describe("purpose-first launch validation", () => {
       name: "Public archive",
       purpose: "Make historical research accessible to everyone.",
       workload: "Summarize archival documents",
+      recoveryAddress: "0x4444444444444444444444444444444444444444" as const,
     };
     for (const operatorSplitBps of [0, 1, 2500, 5999])
       expect(validateComputeDraft({ ...draft, operatorSplitBps })).toEqual({});
@@ -163,5 +166,11 @@ describe("purpose-first launch validation", () => {
     expect(
       validateComputeDraft({ ...DEFAULT_COMPUTE_DRAFT, recoveryAddress: "0x00" }).recoveryAddress,
     ).toBeTruthy();
+  });
+  it("requires a separate recovery wallet instead of defaulting to the creator", () => {
+    expect(DEFAULT_COMPUTE_DRAFT.recoveryAddress).toBeUndefined();
+    expect(validateComputeDraft(DEFAULT_COMPUTE_DRAFT).recoveryAddress).toBe(
+      "Choose a separate recovery wallet. If the creator wallet is lost, this address is the only way to start recovery.",
+    );
   });
 });

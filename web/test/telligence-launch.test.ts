@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const address = "0x1111111111111111111111111111111111111111" as const;
 const factory = "0x2222222222222222222222222222222222222222" as const;
+const recovery = "0x3333333333333333333333333333333333333333" as const;
 const config = {
   ready: true,
   policyVersion: "2" as const,
@@ -29,6 +30,7 @@ const args = {
     name: "A public archive",
     purpose: "Make historical records searchable.",
     workload: "Embeddings and summaries.",
+    recoveryAddress: recovery,
   },
   metadataUri: "ipfs://bafyexample",
   salt: `0x${"ab".repeat(32)}` as `0x${string}`,
@@ -55,14 +57,35 @@ describe("compute project launch", () => {
         operatorSplitPercent: 0,
       },
     ]);
-    expect(tx.args[3]).toBe(address);
+    expect(tx.args[3]).toBe(recovery);
     expect(tx.args[4]).toBe(factory);
   });
   it("encodes the operator share separately from the compute allocation", () => {
     const tx = buildComputeLaunch({ ...args, draft: { ...args.draft, operatorSplitBps: 2500 } });
     expect(tx.args[1][0]).toMatchObject({ splitPercent: 4000, operatorSplitPercent: 2500 });
-    expect(tx.args[3]).toBe(address);
+    expect(tx.args[3]).toBe(recovery);
     expect(tx.args[4]).toBe(factory);
+  });
+  it("requires a recovery wallet that is separate from the creator", () => {
+    const separate = /separate recovery wallet/i;
+    expect(() =>
+      buildComputeLaunch({ ...args, draft: { ...args.draft, recoveryAddress: undefined } }),
+    ).toThrow(separate);
+    expect(() =>
+      buildComputeLaunch({ ...args, draft: { ...args.draft, recoveryAddress: address } }),
+    ).toThrow(separate);
+    expect(() =>
+      buildComputeLaunch({
+        ...args,
+        draft: { ...args.draft, recoveryAddress: address.toUpperCase() as `0x${string}` },
+      }),
+    ).toThrow(separate);
+    expect(() =>
+      buildComputeLaunch({
+        ...args,
+        draft: { ...args.draft, recoveryAddress: `0x${"0".repeat(40)}` },
+      }),
+    ).toThrow(/recovery|authority/i);
   });
   it.each([undefined, null, "2500", false, NaN, Infinity, -1, 1.5, 6000, 10000])(
     "rejects invalid operator allocation before constructing a wallet request: %j",

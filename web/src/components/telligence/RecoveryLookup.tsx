@@ -2,19 +2,31 @@
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { base } from "@/lib/chains";
 import {
   configuredRecoveryFactory,
   lookupRecoveryProject,
   parseRecoveryProjectId,
+  parseRecoveryRpcUrl,
   type RecoveryProject,
 } from "@/lib/telligence/recovery-lookup";
 import { getViemPublicClient } from "@/lib/wagmiTransports";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPublicClient, http } from "viem";
 import { ProjectRecoveryControls } from "./ProjectRecoveryControls";
 
 export function RecoveryLookup({ initialProjectId = "" }: { initialProjectId?: string }) {
   const [projectId, setProjectId] = useState(initialProjectId);
+  const [rpcUrl, setRpcUrl] = useState("");
   const [project, setProject] = useState<RecoveryProject | null>(null);
+  // Shown so a user can check the pinned factory against the published deployment.
+  const pinnedFactory = useMemo(() => {
+    try {
+      return configuredRecoveryFactory();
+    } catch {
+      return null;
+    }
+  }, []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const operation = useRef(0);
@@ -34,7 +46,14 @@ export function RecoveryLookup({ initialProjectId = "" }: { initialProjectId?: s
     try {
       const id = parseRecoveryProjectId(projectId.trim());
       const factory = configuredRecoveryFactory();
-      const found = await lookupRecoveryProject(getViemPublicClient(8453), factory, id);
+      const ownRpc = parseRecoveryRpcUrl(rpcUrl);
+      const client = ownRpc
+        ? createPublicClient({
+            chain: base,
+            transport: http(ownRpc, { retryCount: 0, timeout: 10_000 }),
+          })
+        : getViemPublicClient(8453);
+      const found = await lookupRecoveryProject(client, factory, id);
       if (operation.current === current) setProject(found);
     } catch (failure) {
       if (operation.current === current)
@@ -88,7 +107,45 @@ export function RecoveryLookup({ initialProjectId = "" }: { initialProjectId?: s
         <p id="recovery-id-help" className="mt-3 text-xs leading-6 text-melon-700">
           Find this number in your project&apos;s Base / Project label or its launch transaction.
         </p>
+        <div className="mt-6">
+          <label htmlFor="recovery-rpc-url" className="text-sm">
+            Base RPC URL (optional)
+          </label>
+          <Input
+            id="recovery-rpc-url"
+            value={rpcUrl}
+            onChange={(event) => {
+              setRpcUrl(event.target.value);
+              setError(null);
+            }}
+            inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="https://mainnet.base.org"
+            aria-describedby="recovery-rpc-help"
+            className="mt-3 h-12 sm:max-w-md"
+          />
+          <p id="recovery-rpc-help" className="mt-3 text-xs leading-6 text-melon-700">
+            Read the registry through your own https Base RPC if this site&apos;s providers fail.
+          </p>
+        </div>
       </form>
+      <p className="mt-6 break-all text-xs leading-6 text-melon-700">
+        Pinned compute factory:{" "}
+        {pinnedFactory ? (
+          <a
+            className="compute-text-link"
+            href={`https://basescan.org/address/${pinnedFactory}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {pinnedFactory}
+          </a>
+        ) : (
+          "not configured for this deployment"
+        )}
+        . Verify it against the published deployment before acting.
+      </p>
       {error && (
         <p role="alert" className="mt-6 border border-melon-300 p-5 text-sm leading-7">
           {error}

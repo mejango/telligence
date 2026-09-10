@@ -56,7 +56,7 @@ export function LaunchPolicyReview({
         </div>
         <div className="flex flex-wrap justify-between gap-x-5">
           <dt className="text-melon-700">Recovery authority</dt>
-          <dd className="break-all">{recoveryAddress ?? "Connected creator wallet"}</dd>
+          <dd className="break-all">{recoveryAddress ?? "Not set"}</dd>
         </div>
         <div className="flex flex-wrap justify-between gap-x-5">
           <dt className="text-melon-700">Factory on Base</dt>

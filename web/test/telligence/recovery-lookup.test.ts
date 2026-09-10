@@ -60,3 +60,25 @@ describe("gateway-independent recovery lookup", () => {
     await expect(lookupRecoveryProject(unregistered, factory, 12n)).rejects.toThrow(/registered/);
   });
 });
+
+describe("user-supplied Base RPC", () => {
+  it("accepts only a plain https URL without credentials, query or fragment", async () => {
+    const { parseRecoveryRpcUrl } = await import("@/lib/telligence/recovery-lookup");
+    expect(parseRecoveryRpcUrl("")).toBeNull();
+    expect(parseRecoveryRpcUrl("   ")).toBeNull();
+    expect(parseRecoveryRpcUrl(" https://mainnet.base.org ")).toBe("https://mainnet.base.org/");
+    expect(parseRecoveryRpcUrl("https://rpc.example/base/v1")).toBe("https://rpc.example/base/v1");
+    for (const value of [
+      "http://mainnet.base.org",
+      "https://user:pass@rpc.example",
+      "https://user@rpc.example",
+      "https://rpc.example/?key=secret",
+      "https://rpc.example/#fragment",
+      "wss://rpc.example",
+      "file:///etc/passwd",
+      "mainnet.base.org",
+      "javascript:alert(1)",
+    ])
+      expect(() => parseRecoveryRpcUrl(value)).toThrow(/https/i);
+  });
+});

@@ -124,7 +124,11 @@ export function inspectProjectHref(revnetId: string) {
   return `/base:${revnetId}`;
 }
 
-export function validateComputeDraft(draft: ComputeProjectDraft) {
+export const RECOVERY_WALLET_REQUIRED =
+  "Choose a separate recovery wallet. If the creator wallet is lost, this address is the only way to start recovery.";
+
+/** `creator`, when known, must differ from the recovery wallet; the form validates without it. */
+export function validateComputeDraft(draft: ComputeProjectDraft, creator?: string) {
   const errors: Partial<Record<keyof ComputeProjectDraft, string>> = {};
   if (draft.name.trim().length < 2 || draft.name.trim().length > 80)
     errors.name = "Give your project a name between 2 and 80 characters.";
@@ -165,8 +169,13 @@ export function validateComputeDraft(draft: ComputeProjectDraft) {
   )
     errors.cashOutTaxBps = "The cash-out tax must be at least 0% and below 100%.";
   if (
-    draft.recoveryAddress &&
-    (!/^0x[0-9a-fA-F]{40}$/.test(draft.recoveryAddress) || /^0x0{40}$/.test(draft.recoveryAddress))
+    !draft.recoveryAddress ||
+    (creator !== undefined && draft.recoveryAddress.toLowerCase() === creator.toLowerCase())
+  )
+    errors.recoveryAddress = RECOVERY_WALLET_REQUIRED;
+  else if (
+    !/^0x[0-9a-fA-F]{40}$/.test(draft.recoveryAddress) ||
+    /^0x0{40}$/.test(draft.recoveryAddress)
   )
     errors.recoveryAddress = "Use a nonzero Base wallet address for recovery.";
   return errors;

@@ -67,3 +67,30 @@ export function parseProjectResponse(value: unknown, expectedId?: string) {
     throw new Error("The response does not match the requested project.");
   return project;
 }
+
+/**
+ * The gateway's own public API origin for bearer-key traffic, from `GET /v1/config`.
+ * Null when it is missing or not a plain absolute https URL; never a site-relative path.
+ */
+export function parseApiBaseUrl(value: unknown): string | null {
+  const raw = (value as { apiBaseUrl?: unknown } | null)?.apiBaseUrl;
+  if (typeof raw !== "string" || raw.length > 2048 || /\s/.test(raw)) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    raw.includes("?") ||
+    raw.includes("#") ||
+    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+  )
+    return null;
+  return url.href.replace(/\/$/, "");
+}

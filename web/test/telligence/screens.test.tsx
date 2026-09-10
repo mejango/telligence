@@ -45,7 +45,11 @@ const project = {
 };
 
 afterEach(cleanup);
-beforeEach(() => mocks.request.mockReset());
+// Braces matter: a function returned from beforeEach becomes an after-test hook,
+// and `mockReset()` returns the mock, which vitest would then call after each test.
+beforeEach(() => {
+  mocks.request.mockReset();
+});
 
 describe("project discovery", () => {
   it("shows a real loading state followed by verified project observations", async () => {
@@ -165,7 +169,7 @@ describe("compute launch", () => {
     expect(screen.queryByRole("heading", { name: "Review your project" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Operator token share"), { target: { value: "10.25" } });
     fireEvent.click(screen.getByText("Inspect the starting terms"));
-    fireEvent.change(screen.getByLabelText("Recovery wallet (optional)"), {
+    fireEvent.change(screen.getByLabelText("Recovery wallet"), {
       target: { value: "0x4444444444444444444444444444444444444444" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Review" }));
@@ -199,5 +203,56 @@ describe("compute launch", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Launch project" })).toBeDisabled(),
     );
+  });
+});
+
+describe("compute project during a gateway outage", () => {
+  const savedAt = "2026-09-09T11:30:00.000Z";
+  it("shows the saved purpose with a stale notice and no funding or live capacity", async () => {
+    mocks.request.mockRejectedValue(new Error("The gateway is unavailable."));
+    render(
+      <ComputeProjectPage
+        projectId="base-12"
+        initialProject={{ project: project as never, at: savedAt }}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: "Public archive" })).toBeInTheDocument();
+    expect(screen.getByText(/Make historical research accessible/)).toBeInTheDocument();
+    expect(screen.getByText("Summarize archival documents")).toBeInTheDocument();
+    expect(screen.getByText("0x2222222222222222222222222222222222222222")).toBeInTheDocument();
+    const notice = screen.getByRole("status", { name: /saved copy/i });
+    expect(notice).toHaveTextContent(/Showing the last saved copy from/);
+    expect(notice).toHaveTextContent(/live capacity and funding are unavailable/i);
+    expect(notice.querySelector("time")).toHaveAttribute("dateTime", savedAt);
+    expect(screen.queryByRole("button", { name: /Fund/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("$12.50")).not.toBeInTheDocument();
+    expect(screen.queryByText("$4.10")).not.toBeInTheDocument();
+    expect(screen.queryByText("Remaining today")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Recover backing directly on Base" })).toHaveAttribute(
+      "href",
+      "/recover?project=12",
+    );
+    expect(screen.getByRole("link", { name: "Inspect the revnet" })).toHaveAttribute(
+      "href",
+      "/base:12",
+    );
+  });
+  it("prefers the live project over the saved copy once the gateway answers", async () => {
+    mocks.request.mockResolvedValue({ project: { ...project, name: "Live archive" } });
+    render(
+      <ComputeProjectPage
+        projectId="base-12"
+        initialProject={{ project: project as never, at: savedAt }}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: "Live archive" })).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: /saved copy/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fund Live archive" })).toBeInTheDocument();
+  });
+  it("keeps the plain error when there is no saved copy", async () => {
+    mocks.request.mockRejectedValue(new Error("The gateway is unavailable."));
+    render(<ComputeProjectPage projectId="base-12" initialProject={null} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("The gateway is unavailable.");
+    expect(screen.queryByRole("heading", { name: "Public archive" })).not.toBeInTheDocument();
   });
 });
