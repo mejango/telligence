@@ -152,7 +152,7 @@ Effective changes to the production environment:
 | Change | State |
 | --- | --- |
 | Database roles | `telligence_gateway`, `telligence_signer`, `telligence_worker` created with `node db/roles.mjs` from the gateway container; each service's `DATABASE_URL` is now its own role. The gateway keeps `MIGRATION_DATABASE_URL` (owner) for the pre-deploy migration only. |
-| Signer credentials | `AUTH_SIGNER_GATEWAY_SECRET` and `AUTH_SIGNER_WORKER_SECRET` on the signer; the gateway and worker each carry their own value in `AUTH_SIGNER_SERVICE_SECRET`. The signer's obsolete `AUTH_SIGNER_SERVICE_SECRET` variable remains set but unread (this CLI release cannot unset variables); delete it in the dashboard. |
+| Signer credentials | `AUTH_SIGNER_GATEWAY_SECRET` and `AUTH_SIGNER_WORKER_SECRET` on the signer; the gateway and worker each carry their own value in `AUTH_SIGNER_SERVICE_SECRET`. The signer's obsolete `AUTH_SIGNER_SERVICE_SECRET` variable was removed through the Railway API (`variableDelete`) after the cutover. |
 | Schema | `gateway_instances`, `usage_reservations.gateway_instance`, `usage_reservations.dispatched_at` applied by the pre-deploy migration. |
 | Gateway domain | `api.telligence.money` is attached to the gateway service on port 8080 with a valid Let's Encrypt certificate, and `PUBLIC_API_BASE_URL` is `https://api.telligence.money/api/v1`; `GET /v1/config` reports it on both the direct and site-proxied paths. The Railway-provided gateway domain remains as a fallback. The registrar CNAME for `api` targets the value Railway assigned to this custom-domain record; recreating the record assigns a new target. |
 | Secrets | Owner-only, gitignored local backup `artifacts/local/production-backend-secrets-20260910.json`. |
