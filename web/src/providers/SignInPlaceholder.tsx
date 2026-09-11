@@ -53,7 +53,6 @@ export function SignInPlaceholder({
       <div className="w-full max-w-sm border border-zinc-200 bg-white p-6">
         <div className="w-full">
           <h2 className="text-lg font-medium text-zinc-900">Sign in</h2>
-          <p className="mt-1 text-sm text-zinc-600">Use your passkey, or receive a code.</p>
           <input
             type="text"
             value={entry}
