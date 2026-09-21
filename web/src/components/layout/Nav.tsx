@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import { WalletButton } from "@/components/WalletButton";
-import { BrainMark } from "@/components/telligence/BrainMark";
+import { TreeMark } from "@/components/telligence/TreeMark";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Magnifier, RevnetSearch } from "./RevnetSearch";
@@ -80,7 +80,7 @@ export function Nav({ wide = false }: { wide?: boolean }) {
             aria-label="Telligence home"
             className="inline-flex min-h-11 min-w-11 items-center justify-center text-melon-700"
           >
-            <BrainMark className="size-9" />
+            <TreeMark className="size-9" />
           </Link>
           <GuideLinks className="hidden md:flex md:min-h-11" />
         </div>

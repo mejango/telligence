@@ -1,6 +1,6 @@
 "use client";
 
-import { BrainMark } from "@/components/telligence/BrainMark";
+import { TreeMark } from "@/components/telligence/TreeMark";
 import { WalletButton } from "@/components/WalletButton";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -25,7 +25,7 @@ export function ComputeNav() {
             aria-label="Telligence home"
             className="compute-wordmark inline-flex min-h-11 items-center text-2xl font-bold tracking-[-0.07em] sm:text-3xl"
           >
-            <BrainMark className="mr-2.5 size-8 shrink-0 text-melon-700 sm:size-9" />
+            <TreeMark className="mr-2.5 size-8 shrink-0 text-melon-700 sm:size-9" />
             telligence<span className="text-melon-600">.</span>
           </Link>
           <Link

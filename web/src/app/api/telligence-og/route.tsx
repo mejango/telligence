@@ -1,4 +1,4 @@
-import { BrainMark } from "@/components/telligence/BrainMark";
+import { TreeMark } from "@/components/telligence/TreeMark";
 import { ImageResponse } from "next/og";
 
 export const runtime = "nodejs";
@@ -28,7 +28,7 @@ export function GET() {
           paddingBottom: 23,
         }}
       >
-        <BrainMark width={42} height={42} style={{ color: "#3D7955", marginRight: 12 }} />
+        <TreeMark width={42} height={42} style={{ color: "#3D7955", marginRight: 12 }} />
         telligence.
       </div>
       <div
