@@ -45,9 +45,9 @@ The separate `plugin/` application is outside this repository.
 
 ## Develop
 
-Use Node **26.5.0**, npm **12.0.1**, Foundry **v1.7.0**, and Docker Compose v2.
+Use Node **26.12.1**, npm **12.0.1**, Foundry **v1.7.0**, and Docker Compose v2.
 Solidity is pinned to **0.8.28** in `contracts/foundry.toml`. Service images use
-Node 22.23.1; the services are also tested on the repository's Node 26 toolchain.
+Node 22.23.4; the services are also tested on the repository's Node 26 toolchain.
 
 ```sh
 nvm use

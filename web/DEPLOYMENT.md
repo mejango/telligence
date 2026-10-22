@@ -16,7 +16,7 @@ npm run build
 
 `build:browser` is the deterministic production-shaped test build. Deploy with
 `build` or the Dockerfile so fixture transport configuration is never shipped.
-The Dockerfile uses pinned Node 26.5.0/npm 12.0.1, standalone output, an unprivileged
+The Dockerfile uses pinned Node 26.12.1/npm 12.0.1, standalone output, an unprivileged
 UID/GID 1001, and a process-only `/api/healthz` check. Railway derives the immutable
 revision from `RAILWAY_GIT_COMMIT_SHA`. Runtime server reads use the fixed
 `TELLIGENCE_GATEWAY_URL`; public build values never contain backend secrets.
