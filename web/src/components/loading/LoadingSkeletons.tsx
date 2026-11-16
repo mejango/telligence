@@ -228,41 +228,6 @@ function NavigationSkeleton() {
   );
 }
 
-export function DiscoverPageSkeleton() {
-  return (
-    <div className="container mt-40 px-6 sm:px-8" role="status" aria-label="Loading discover page">
-      <span className="sr-only">Loading discover page</span>
-      <Skeleton className="aspect-[7/2] w-[840px] max-w-full" />
-      <Skeleton className="mt-8 h-7 w-[34rem] max-w-[90%]" />
-      <Skeleton className="mt-8 h-16 w-24 md:h-12" />
-      <div className="mt-10 border-t border-zinc-100 pt-6">
-        <Skeleton className="mb-4 h-7 w-72 max-w-[80%]" />
-        <DiscoverGridSkeleton />
-      </div>
-    </div>
-  );
-}
-
-export function CreatePageSkeleton() {
-  return (
-    <div className="min-h-screen" role="status" aria-label="Loading creation form">
-      <span className="sr-only">Loading creation form</span>
-      <NavigationSkeleton />
-      <div className="mx-auto my-20 grid max-w-6xl gap-6 px-4 sm:px-8 md:grid-cols-3 xl:px-0">
-        {Array.from({ length: 3 }, (_, column) => (
-          <div key={column} className="space-y-5 border border-zinc-100 bg-melon-50 p-5">
-            <Skeleton className="h-7 w-40 max-w-[80%]" />
-            <SkeletonLines lines={4} />
-            <Skeleton className="h-11 w-full" />
-            <Skeleton className="h-24 w-full" />
-            <SkeletonLines lines={3} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export function ProjectHeaderSkeleton({ hint }: { hint?: ProjectNavigationHint | null }) {
   return (
     <div className="mb-4 flex flex-col items-start gap-4 sm:mb-6 sm:flex-row sm:items-center">

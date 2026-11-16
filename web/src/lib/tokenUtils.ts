@@ -30,7 +30,7 @@ export type TokenIdentity = {
 };
 
 /** Canonical reserve identity is chain and address; an ERC-20 symbol is only a label. */
-export function canonicalTokenSymbol(
+function canonicalTokenSymbol(
   row: Pick<TokenIdentity, "chainId" | "token">,
 ): "ETH" | "USDC" | null {
   if (isNativeToken(row.token)) return "ETH";

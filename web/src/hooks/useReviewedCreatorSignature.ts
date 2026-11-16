@@ -1,12 +1,12 @@
 "use client";
 
-import { requireTransactionReview } from "@/lib/transaction-review";
+import { loadEngine, reviewedWalletAdapter } from "@/hooks/useReviewedAction";
 import { requireNoViewAs } from "@/lib/view-as";
 import { useCallback } from "react";
 import { type Address, type Hex } from "viem";
 import { createSiweMessage, parseSiweMessage } from "viem/siwe";
-import { useConfig, useSwitchChain } from "wagmi";
-import { getAccount, getWalletClient } from "wagmi/actions";
+import { useConfig } from "wagmi";
+import { getAccount } from "wagmi/actions";
 
 export type CreatorChallenge = { challengeId: string; message: string; expiresAt: string };
 const STATEMENT = "Sign in to Telligence to manage your compute projects.";
@@ -61,55 +61,36 @@ function validateChallenge(challenge: CreatorChallenge, address: Address): void 
 
 export function useReviewedCreatorSignature() {
   const config = useConfig();
-  const { switchChainAsync } = useSwitchChain();
   const signCreatorMessageAsync = useCallback(
     async (request: CreatorChallenge): Promise<Hex> => {
       requireNoViewAs();
-      const before = getAccount(config);
-      if (!before.address) throw new Error("Connect a wallet first.");
-      const address = before.address;
+      const { address, connector } = getAccount(config);
+      if (!address) throw new Error("Connect a wallet first.");
       const challenge = { ...request };
       validateChallenge(challenge, address);
-      await requireTransactionReview({
-        kind: "authorization",
-        calls: [],
-        title: "Sign in to Telligence",
-        description:
-          "This signature creates a short session for managing your compute projects and API keys.",
-        confirmLabel: "Agree & sign in",
-        authorization: {
-          type: "EIP-4361 Sign-In with Ethereum",
-          chainId: CHAIN_ID,
-          address,
-          message: challenge.message,
+      const { signReviewed } = await loadEngine();
+      const adapter = reviewedWalletAdapter(config, address, connector);
+      // wallet-action:telligence-creator-signature
+      const [signature] = await signReviewed(
+        [{ kind: "message", chainId: CHAIN_ID, message: challenge.message }],
+        {
+          account: address,
+          title: "Sign in to Telligence",
+          description:
+            "This signature creates a short session for managing your compute projects and API keys.",
+          reverify: async () => {
+            requireNoViewAs();
+            validateChallenge(challenge, address);
+          },
         },
-      });
-      await switchChainAsync({ chainId: CHAIN_ID });
-      const verifyAccount = () => {
-        requireNoViewAs();
-        const current = getAccount(config);
-        if (
-          current.address?.toLowerCase() !== address.toLowerCase() ||
-          current.chainId !== CHAIN_ID
-        ) {
-          throw new Error("Connected account or network changed. Sign in again.");
-        }
-        validateChallenge(challenge, address);
-      };
-      verifyAccount();
-      const wallet = await getWalletClient(config, { chainId: CHAIN_ID, account: address });
-      if (wallet.account?.address.toLowerCase() !== address.toLowerCase()) {
-        throw new Error("Connected account or network changed. Sign in again.");
-      }
-      verifyAccount();
-      const signature = await wallet.signMessage({
-        account: wallet.account,
-        message: challenge.message,
-      });
-      verifyAccount();
-      return signature;
+        { adapter },
+      );
+      // A wallet prompt has no time bound: the wallet and the challenge are checked again.
+      adapter.requireUnchanged();
+      validateChallenge(challenge, address);
+      return signature!;
     },
-    [config, switchChainAsync],
+    [config],
   );
   return { signCreatorMessageAsync };
 }

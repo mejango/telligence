@@ -124,7 +124,7 @@ export function inspectProjectHref(revnetId: string) {
   return `/base:${revnetId}`;
 }
 
-export const RECOVERY_WALLET_REQUIRED =
+const RECOVERY_WALLET_REQUIRED =
   "Choose a separate recovery wallet. If the creator wallet is lost, this address is the only way to start recovery.";
 
 /** `creator`, when known, must differ from the recovery wallet; the form validates without it. */

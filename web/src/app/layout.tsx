@@ -5,7 +5,6 @@ import { twMerge } from "tailwind-merge";
 import "./globals.css";
 import { Providers } from "./providers";
 
-import { REVNET_ONE_LINER } from "@/lib/one-liner";
 import localFont from "next/font/local";
 
 const simplonMono = localFont({

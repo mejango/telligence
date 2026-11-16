@@ -2,7 +2,13 @@
 
 import { ButtonWithWallet } from "@/components/ButtonWithWallet";
 import { useCreatorSession } from "@/hooks/useCreatorSession";
-import { requireOnchainExecution, useWriteContract } from "@/hooks/useReviewedWriteContract";
+import {
+  failedLine,
+  reviewedCall,
+  SAFE_PROPOSAL_PENDING_LINE,
+  useReviewedAction,
+} from "@/hooks/useReviewedAction";
+import { revertedStep } from "@/lib/reviewed-call";
 import { jbCenterIpfs } from "@/lib/jbcenter-ipfs";
 import { gatewayRequest } from "@/lib/telligence/api";
 import { computeFactoryAbi, computeReadAbi } from "@/lib/telligence/factory";
@@ -31,9 +37,10 @@ import { transactionActivityForHash } from "@/lib/transaction-activity";
 import { requireNoViewAs } from "@/lib/view-as";
 import { getViemPublicClient } from "@/lib/wagmiTransports";
 import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
+import { intent as intentValue, writeIntentKey } from "@bananapus/nana-sdk-core/review";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { bytesToHex, isAddress, zeroAddress } from "viem";
+import { bytesToHex, isAddress, zeroAddress, type TransactionReceipt } from "viem";
 import { useAccount, useConfig } from "wagmi";
 import { getAccount } from "wagmi/actions";
 
@@ -50,12 +57,7 @@ export function LaunchComputeProjectButton({
   const wallet = useConfig();
   const router = useRouter();
   const auth = useCreatorSession();
-  const submissionBoundary = useRef<(() => void) | null>(null);
-  const { writeContractAsync } = useWriteContract({
-    beforeSubmission: async () => {
-      submissionBoundary.current?.();
-    },
-  });
+  const { run } = useReviewedAction();
   const [pending, setPending] = useState<PendingLaunch | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -111,7 +113,6 @@ export function LaunchComputeProjectButton({
       )
         throw new Error("Connected wallet changed. Resume with the project creator.");
     };
-    submissionBoundary.current = assertCreator;
     try {
       assertCreator();
       if (!creator) throw new Error("Connect a wallet first.");
@@ -125,6 +126,7 @@ export function LaunchComputeProjectButton({
             "The saved launch recovery record is unreadable. Recover its transaction before launching again; the record has been preserved.",
           );
         let intent = savedPending ?? ownPending;
+        let receipt: TransactionReceipt | undefined;
         if (intent) setPending(intent);
         setMessage("Verifying the Base deployment…");
         const deployment = await gatewayRequest<
@@ -229,47 +231,84 @@ export function LaunchComputeProjectButton({
               "Another saved launch needs recovery. Resume its registration before launching again.",
             );
           }
-          setMessage("Review the exact project terms in your wallet…");
-          const hash = await writeContractAsync(transaction);
-          intent = {
+          setMessage("Review the exact project terms…");
+          const saved = (hash: `0x${string}`): PendingLaunch => ({
             version: 1,
             creator,
             factory: deployment.factoryAddress,
             hash,
             preparationId: preparation.preparationId,
             draft: { ...draft },
-          };
-          setPending(intent);
-          try {
-            localStorage.setItem(pendingLaunchKey(creator), JSON.stringify(intent));
-          } catch {
-            throw new Error(
-              `Launch submitted as ${hash}. Browser storage failed; keep this hash to recover registration. Do not launch again.`,
-            );
+          });
+          const result = await run({
+            account: creator,
+            title: "Review your project launch",
+            // One unresolved launch per creator, whatever the draft or salt.
+            calls: [
+              reviewedCall(transaction, {
+                intent: writeIntentKey("telligence-launch", {
+                  chainId: 8453,
+                  account: intentValue.address(creator),
+                }),
+              }),
+            ],
+            assertWriteState: assertCreator,
+            // The hash is saved before its receipt is awaited, so a reload resumes registration.
+            onSubmitted: (_call, _step, hash) => {
+              intent = saved(hash);
+              setPending(intent);
+              try {
+                localStorage.setItem(pendingLaunchKey(creator), JSON.stringify(intent));
+              } catch {
+                throw new Error(
+                  `Launch submitted as ${hash}. Browser storage failed; keep this hash to recover registration. Do not launch again.`,
+                );
+              }
+            },
+          });
+          if (!result) return null;
+          if (result.status === "failed") {
+            if (revertedStep(result.failure) === 0) {
+              localStorage.removeItem(pendingLaunchKey(creator));
+              setPending(null);
+              throw new Error("The launch reverted. No project was created; review and try again.");
+            }
+            throw new Error(failedLine(result));
           }
+          if (result.status === "proposed") throw new Error(SAFE_PROPOSAL_PENDING_LINE);
+          receipt = result.receipts.at(-1);
+          intent ??= saved(result.hashes.at(-1)!);
         }
-        return { intent, deployment, client };
+        return { intent, deployment, client, receipt };
       };
       // Different drafts/salts still represent one unresolved launch for this creator. Release only after its hash is durable,
       // before waiting for a receipt, so the next tab resumes that saved intent instead of opening a second wallet request.
       const locks = navigator.locks;
-      const { intent, deployment, client } = locks
+      const prepared = locks
         ? await locks.request(`telligence:launch:8453:${creator.toLowerCase()}`, prepare)
         : await prepare();
+      // The review was closed with nothing sent.
+      if (!prepared) return;
+      const { intent, deployment, client } = prepared;
       // A wallet may resolve after navigation; the submitted hash above remains recoverable, but no dependent action proceeds.
       assertCreator();
       if (intent.factory.toLowerCase() !== deployment.factoryAddress.toLowerCase())
         throw new Error(
           "The saved launch belongs to a different factory. Recover its registration before launching again.",
         );
-      requireOnchainExecution(intent.hash, "Project launch");
-      setMessage("Waiting for the launch transaction. You can safely resume this step…");
-      const executionHash = transactionActivityForHash(intent.hash)?.executionHash ?? intent.hash;
-      const receipt = await waitForReceiptWithRetry(client, executionHash);
-      if (receipt.status === "reverted") {
-        localStorage.removeItem(pendingLaunchKey(creator));
-        setPending(null);
-        throw new Error("The launch reverted. No project was created; review and try again.");
+      let receipt = prepared.receipt;
+      if (!receipt) {
+        // A resumed launch: a Safe proposal has a receipt only once the Safe executed it.
+        const activity = transactionActivityForHash(intent.hash);
+        if (activity?.status === "safe-proposed" && !activity.executionHash)
+          throw new Error(SAFE_PROPOSAL_PENDING_LINE);
+        setMessage("Waiting for the launch transaction. You can safely resume this step…");
+        receipt = await waitForReceiptWithRetry(client, activity?.executionHash ?? intent.hash);
+        if (receipt.status === "reverted") {
+          localStorage.removeItem(pendingLaunchKey(creator));
+          setPending(null);
+          throw new Error("The launch reverted. No project was created; review and try again.");
+        }
       }
       const result = decodeComputeDeployment(receipt, intent.factory, creator);
       assertCreator();
