@@ -22,9 +22,9 @@ export const defaultStageData: StageData = {
   initialOperator: PERMANENTLY_DISABLED_OPERATOR,
   initialIssuance: "10000",
 
-  priceCeilingIncreasePercentage: "10",
-  priceCeilingIncreaseFrequency: "30",
-  priceFloorTaxIntensity: "20",
+  priceCeilingIncreasePercentage: "0",
+  priceCeilingIncreaseFrequency: "0",
+  priceFloorTaxIntensity: "10",
   extraMetadata: 0,
 
   autoIssuance: [],

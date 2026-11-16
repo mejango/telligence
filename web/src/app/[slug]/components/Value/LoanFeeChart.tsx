@@ -42,7 +42,7 @@ export function LoanFeeChart({
   const series: ChartSeries<(typeof validFeeData)[number]>[] = [
     {
       key: "totalCost",
-      label: "Total paid to unlock",
+      label: "Repayment amount",
       color: "#D98909",
       value: (datum) => datum.totalCost,
     },
@@ -50,9 +50,12 @@ export function LoanFeeChart({
 
   return (
     <div className="mt-2">
+      <p className="text-sm text-gray-600">
+        Paying more upfront delays the point when repayment cost starts rising.
+      </p>
       <div className="mt-2 mb-2">
         <label className="block text-gray-700 text-sm font-bold mb-2">
-          Prepaid Fee: {prepaidPercent}%
+          Fee paid upfront: {prepaidPercent}%
         </label>
         <input
           type="range"
@@ -61,7 +64,7 @@ export function LoanFeeChart({
           step="2.5"
           value={prepaidPercent}
           onChange={(e) => setPrepaidPercent(e.target.value)}
-          aria-label="Prepaid fee percentage"
+          aria-label="Fee paid upfront, percent"
           className="w-full"
         />
         <div className="flex justify-between text-xs text-gray-500">
@@ -75,10 +78,10 @@ export function LoanFeeChart({
             data={validFeeData}
             xValue={(datum) => datum.year}
             series={series}
-            ariaLabel="Loan unlock cost over time"
-            description={`The additional ${tokenSymbol} cost to unlock ${collateralAmount} ${
+            ariaLabel="Loan repayment cost over time"
+            description={`The ${tokenSymbol} repayment needed to recover ${collateralAmount} ${
               collateralTokenSymbol || tokenSymbol
-            } over ten years.`}
+            } before the ten-year deadline.`}
             className="h-full w-full"
             margin={{ top: 18, right: 18, bottom: 48, left: 48 }}
             xDomain={[0, 10]}
@@ -87,14 +90,16 @@ export function LoanFeeChart({
             showYTickLabels={false}
             formatXTick={(year) => `${year}`}
             xAxisLabel="Time (years)"
-            yAxisLabel="Additional cost to unlock"
+            yAxisLabel="Repayment amount"
             grid="both"
             tooltip={({ datum }) => {
               if (datum.year >= 9.99) {
                 return (
-                  <div className="rounded-md border border-zinc-200 bg-white p-3 text-sm shadow-xl">
-                    <div className="font-medium">Final period – no collateral will be returned</div>
-                    <div className="mt-1 text-zinc-600">No collateral can be reclaimed.</div>
+                  <div className="border border-zinc-200 bg-white p-3 text-sm shadow-xl">
+                    <div className="font-medium">Ten-year deadline: token recovery ends</div>
+                    <div className="mt-1 text-zinc-600">
+                      The right to recover the tokens has ended.
+                    </div>
                   </div>
                 );
               }
@@ -104,15 +109,15 @@ export function LoanFeeChart({
               const remMonths = months % 12;
               const collateralSymbol = collateralTokenSymbol || tokenSymbol;
               return (
-                <div className="rounded-md border border-zinc-200 bg-white p-3 text-sm shadow-xl whitespace-nowrap">
+                <div className="border border-zinc-200 bg-white p-3 text-sm shadow-xl whitespace-nowrap">
                   <div className="font-medium">
                     {months} months ({years}y {remMonths}m)
                   </div>
                   <div className="mt-1 text-zinc-700">
-                    Total paid to unlock: {datum.totalCost.toFixed(8)} {tokenSymbol}
+                    Repayment: {datum.totalCost.toFixed(8)} {tokenSymbol}
                   </div>
                   <div className="text-zinc-600">
-                    Collateral returned: {collateralAmount} {collateralSymbol}
+                    Tokens returned: {collateralAmount} {collateralSymbol}
                   </div>
                 </div>
               );
@@ -123,12 +128,12 @@ export function LoanFeeChart({
             className="flex h-full items-center justify-center text-sm text-zinc-500"
             role="status"
           >
-            No loan fee data available
+            Repayment estimate unavailable
           </div>
         )}
       </div>
       <p className="text-sm text-gray-600 mt-3 text-center">
-        Fees increase after{" "}
+        Repayment cost starts rising after{" "}
         {displayYears > 0
           ? `${displayYears} year${displayYears > 1 ? "s" : ""}${displayMonths > 0 ? ` and ${displayMonths} month${displayMonths > 1 ? "s" : ""}` : ""}`
           : `${displayMonths} month${displayMonths > 1 ? "s" : ""}`}

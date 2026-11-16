@@ -1,26 +1,33 @@
 import { Nav } from "@/components/layout/Nav";
-import { getEnsPublicClient } from "@/lib/ensPublicClient.server";
+import { ProjectHeaderSkeleton, ProjectPageSkeleton } from "@/components/loading/LoadingSkeletons";
 import { ipfsUriToGatewayUrl } from "@/lib/ipfs";
+import { REVNET_ONE_LINER } from "@/lib/one-liner";
 import { formatProjectPreviewBalance, projectPreviewSlogan } from "@/lib/project-link-preview";
-import { readExactProjectHandle } from "@/lib/projectHandles";
+import { indexedGroupStatus } from "@/lib/projectIndexStatus";
 import { decodeProjectRouteSlug, slugFor } from "@/lib/slug";
 import type { Metadata } from "next";
-import { unstable_cache } from "next/cache";
 import { notFound } from "next/navigation";
-import { PropsWithChildren } from "react";
+import { connection } from "next/server";
+import { PropsWithChildren, Suspense } from "react";
+import { lookupCanonicalHandle } from "./canonicalHandle.server";
 import { ActivityFeed } from "./components/ActivityFeed/ActivityFeed";
 import { Header } from "./components/Header/Header";
 import { NewProjectNotice } from "./components/NewProjectNotice";
 import { PayCard } from "./components/PayCard/PayCard";
+import { ProjectContractWarning } from "./components/ProjectContractWarning";
+import { ProjectDataNotice, ProjectDiagnosticsProvider } from "./components/ProjectDiagnostics";
+import { PROJECT_SECTIONS_ID } from "./components/projectSections";
 import { ResponsiveProjectLayout } from "./components/ResponsiveProjectLayout";
 import { ShopCartProvider } from "./components/v6/ShopCartContext";
 import { getProject } from "./getProject";
 import { getProjectWithFallback } from "./getProjectFallback";
-import { getIndexedProjectOperatorAddresses, getProjectOperator } from "./getProjectOperator";
-import { getSuckerGroup } from "./getSuckerGroup";
+import { getProjectOperator } from "./getProjectOperator";
+import { getIndexedSuckerGroup, getSuckerGroup } from "./getSuckerGroup";
 import { ProjectProviders } from "./ProjectProviders";
+import { ProjectRouteBoundary } from "./ProjectRouteBoundary";
+import { projectRouteSnapshot } from "./projectRouteIdentity";
 import { resolveProjectRoute } from "./resolveProjectRoute.server";
-import { getRulesets } from "./terms/getRulesets";
+import { getRulesets, type Ruleset } from "./terms/getRulesets";
 
 export const revalidate = 300;
 
@@ -66,43 +73,6 @@ function ProjectJsonLd({
   );
 }
 
-/**
- * The verified handle names the revnet, so it is the canonical URL for every
- * route that reaches it — each chain's slug and the handle itself. The
- * registry keys handles by (chainId, projectId), so every deployment in the
- * group is checked, and only the operator (the callable authority) counts as
- * a trusted setter. handleOf() already enforces the bidirectional ENS check.
- */
-const lookupCanonicalHandle = unstable_cache(
-  async (
-    chainId: number,
-    projectId: number,
-    suckerGroupId: string | null,
-  ): Promise<string | null> => {
-    const operators = await getIndexedProjectOperatorAddresses(projectId, chainId).catch(() => []);
-    if (!operators.length) return null;
-    const deployments: [number, number][] = [[chainId, projectId]];
-    if (suckerGroupId) {
-      const group = await getSuckerGroup(suckerGroupId, chainId);
-      for (const sibling of group?.projects?.items ?? []) {
-        const pair: [number, number] = [Number(sibling.chainId), Number(sibling.projectId)];
-        if (!deployments.some(([chain, id]) => chain === pair[0] && id === pair[1])) {
-          deployments.push(pair);
-        }
-      }
-    }
-    const client = getEnsPublicClient();
-    const handles = await Promise.all(
-      deployments.flatMap(([chain, id]) =>
-        operators.map((operator) => readExactProjectHandle(client, chain, id, operator)),
-      ),
-    );
-    return handles.find((handle) => handle) ?? null;
-  },
-  ["telligence-project-canonical-handle-base"],
-  { revalidate: 900 },
-);
-
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const origin = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3002";
   // The custom domain is the public name; the Railway host is only the fallback for a
@@ -119,7 +89,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const route = await resolveProjectRoute(encodedSlug ?? "");
   if (!route) {
     const title = "Revnet";
-    const description = "An autonomous business model for the open web. 100% open source.";
+    const description = REVNET_ONE_LINER;
     const imageUrl = new URL("/assets/img/revnet-social.png", assetOrigin).href;
     return buildMetadata({
       title,
@@ -134,7 +104,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   // Scrapers cache og:image by URL, so bake the numbers into it: the card refreshes
   // whenever the balance or payment count moves.
   const suckerGroup = project?.suckerGroupId
-    ? await getSuckerGroup(project.suckerGroupId, chainId)
+    ? await getSuckerGroup(project.suckerGroupId, chainId, projectId)
     : null;
   const version = `${suckerGroup?.paymentsCount ?? 0}-${formatProjectPreviewBalance(
     suckerGroup?.projects?.items ?? [],
@@ -159,14 +129,16 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return buildMetadata({
     title: project?.name ? `${project.name} | REVNET` : "Revnet",
     description:
-      projectPreviewSlogan(project?.projectTagline, project?.description) ||
-      "An autonomous business model for the open web. 100% open source.",
+      projectPreviewSlogan(project?.projectTagline, project?.description) || REVNET_ONE_LINER,
     imageUrl,
     url: canonicalUrl.href,
   });
 }
 
 export default async function SlugLayout({ children, params }: PropsWithChildren<Props>) {
+  // The bounded display cache owns reuse; never turn a cache hit into a
+  // longer-lived Full Route Cache entry on a request that makes no new fetches.
+  await connection();
   const { slug } = await params;
   const route = await resolveProjectRoute(slug);
   if (!route) notFound();
@@ -174,6 +146,50 @@ export default async function SlugLayout({ children, params }: PropsWithChildren
 
   const resolved = await getProjectWithFallback(projectId, chainId);
   if (!resolved) notFound();
+
+  // Existence and alias checks must finish before the first streamed byte so
+  // missing projects retain their HTTP 404. Secondary display reads can stream.
+  return (
+    <Suspense
+      fallback={
+        <ProjectPageSkeleton
+          hint={{
+            name: resolved.project.name || `Revnet ${projectId}`,
+            logoUri: resolved.project.logoUri,
+          }}
+        />
+      }
+    >
+      <ProjectLayoutContent slug={slug} route={route} resolved={resolved}>
+        {children}
+      </ProjectLayoutContent>
+    </Suspense>
+  );
+}
+
+async function ProjectStartNotice({ rulesets }: { rulesets: Promise<Ruleset[] | null> }) {
+  const stages = await rulesets;
+  if (!stages)
+    return (
+      <p role="status" className="text-sm text-zinc-500">
+        Start time is unavailable.
+      </p>
+    );
+  const startDate = stages[0]?.start;
+  return startDate ? <NewProjectNotice startDate={startDate} /> : null;
+}
+
+async function ProjectLayoutContent({
+  children,
+  slug,
+  route,
+  resolved,
+}: PropsWithChildren<{
+  slug: string;
+  route: NonNullable<Awaited<ReturnType<typeof resolveProjectRoute>>>;
+  resolved: NonNullable<Awaited<ReturnType<typeof getProjectWithFallback>>>;
+}>) {
+  const { chainId, projectId } = route;
   const { project } = resolved;
 
   // `undefined` = the operator could not be read, which is not the same claim
@@ -183,24 +199,27 @@ export default async function SlugLayout({ children, params }: PropsWithChildren
     ? Promise.resolve({ address: route.verifiedOperator })
     : getProjectOperator(Number(projectId), chainId).catch(() => undefined);
   const suckerGroupPromise = project.suckerGroupId
-    ? getSuckerGroup(project.suckerGroupId, chainId)
-    : Promise.resolve(null);
-  const isRevnet = project.isRevnet !== false;
+    ? getIndexedSuckerGroup(project.suckerGroupId, chainId, projectId)
+    : Promise.resolve({ data: null, status: "not-checked" as const });
+  // Alias verification already proved the live REVOwner; the indexed flag may lag.
+  const isRevnet = Boolean(route.verifiedOperator) || project.isRevnet !== false;
   const rulesetsPromise = isRevnet
-    ? getRulesets(projectId.toString(), chainId)
+    ? getRulesets(projectId.toString(), chainId).catch(() => null)
     : Promise.resolve([]);
 
-  const [indexedSuckerGroup, rulesets] = await Promise.all([suckerGroupPromise, rulesetsPromise]);
+  const indexedGroup = await suckerGroupPromise;
 
-  // A missing sucker group means the indexer hasn't caught up (or is down),
-  // not that the project is gone: render a degraded page from what the chain
-  // provides instead of a false 404.
-  const degraded = resolved.degraded || !indexedSuckerGroup;
-  const suckerGroup = indexedSuckerGroup ?? {
+  const indexStatus = {
+    project: resolved.indexStatus,
+    group:
+      indexedGroup.status === "unavailable" || indexedGroup.status === "not-checked"
+        ? indexedGroup.status
+        : indexedGroupStatus(indexedGroup.data, Number(projectId), chainId),
+  };
+  const degraded = resolved.degraded || indexStatus.group !== "available";
+  // Incomplete groups must not omit the requested project or leave the header with no rows.
+  const suckerGroup = (indexStatus.group === "available" ? indexedGroup.data : null) ?? {
     id: project.suckerGroupId,
-    paymentsCount: 0,
-    tokenSupply: "0",
-    volumeUsd: "0",
     projects: {
       items: [
         {
@@ -220,7 +239,6 @@ export default async function SlugLayout({ children, params }: PropsWithChildren
   };
 
   const projects = suckerGroup.projects?.items ?? [];
-  const startDate = rulesets[0]?.start;
 
   return (
     <>
@@ -234,50 +252,80 @@ export default async function SlugLayout({ children, params }: PropsWithChildren
         path={`/${decodeProjectRouteSlug(slug) ?? slug}`}
         identifier={slugFor(chainId, projectId) ?? `${chainId}:${projectId}`}
       />
-      <ProjectProviders
-        chainId={chainId}
-        projectId={projectId}
-        project={project}
-        projects={projects}
-      >
-        <ShopCartProvider>
-          <div id="project-top">
-            <Nav wide />
-          </div>
+      <ProjectRouteBoundary slug={slug} snapshot={projectRouteSnapshot(route)}>
+        <ProjectProviders
+          chainId={chainId}
+          projectId={projectId}
+          project={project}
+          projects={projects}
+        >
+          <ProjectDiagnosticsProvider chainId={chainId} projectId={projectId}>
+            <ShopCartProvider scope={project.suckerGroupId || `${chainId}:${projectId}`}>
+              <div id="project-top">
+                <Nav wide skipTo={isRevnet ? PROJECT_SECTIONS_ID : undefined} />
+              </div>
 
-          {degraded && (
-            <div className="w-full px-4 sm:container pt-4">
-              <p className="border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                This project was found onchain but hasn't finished indexing. Some stats may be
-                missing or out of date.
-              </p>
-            </div>
-          )}
-          <div className="w-full px-4 sm:container pt-6">
-            <Header
-              isRevnet={isRevnet}
-              operatorPromise={operatorPromise}
-              projects={projects}
-              createdAt={project.createdAt}
-            />
-          </div>
-          {isRevnet ? (
-            <ResponsiveProjectLayout
-              sidebar={
-                <>
-                  {startDate && <NewProjectNotice startDate={startDate} />}
-                  <div className="mt-1 mb-4">
-                    <PayCard />
-                  </div>
-                </>
-              }
-              activity={<ActivityFeed suckerGroupId={suckerGroup.id} projects={projects} />}
-            >
-              {children}
-            </ResponsiveProjectLayout>
-          ) : null}
-        </ShopCartProvider>
-      </ProjectProviders>
+              {degraded && (
+                <div className="w-full px-4 sm:container pt-4">
+                  <ProjectDataNotice
+                    status={indexStatus}
+                    project={{
+                      chainId,
+                      projectId: Number(projectId),
+                      groupId: project.suckerGroupId,
+                    }}
+                  />
+                </div>
+              )}
+              <div className="w-full px-4 sm:container empty:hidden pt-4">
+                <ProjectContractWarning projects={projects} isRevnet={isRevnet} />
+              </div>
+              <div className="w-full px-4 sm:container pt-6">
+                <Suspense
+                  fallback={
+                    <ProjectHeaderSkeleton
+                      hint={{
+                        name: project.name || `Revnet ${projectId}`,
+                        logoUri: project.logoUri,
+                      }}
+                    />
+                  }
+                >
+                  <Header
+                    isRevnet={isRevnet}
+                    operatorPromise={operatorPromise}
+                    projects={projects}
+                    createdAt={project.createdAt}
+                  />
+                </Suspense>
+              </div>
+              {isRevnet ? (
+                <ResponsiveProjectLayout
+                  sidebar={
+                    <>
+                      <Suspense
+                        fallback={
+                          <p role="status" className="text-sm text-zinc-500">
+                            Loading start time…
+                          </p>
+                        }
+                      >
+                        <ProjectStartNotice rulesets={rulesetsPromise} />
+                      </Suspense>
+                      <div className="mt-1 mb-4">
+                        <PayCard />
+                      </div>
+                    </>
+                  }
+                  activity={<ActivityFeed suckerGroupId={suckerGroup.id} projects={projects} />}
+                >
+                  {children}
+                </ResponsiveProjectLayout>
+              ) : null}
+            </ShopCartProvider>
+          </ProjectDiagnosticsProvider>
+        </ProjectProviders>
+      </ProjectRouteBoundary>
     </>
   );
 }

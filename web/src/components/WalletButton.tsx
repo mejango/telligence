@@ -1,14 +1,15 @@
 "use client";
 
-import { USDC_DECIMALS } from "@/app/constants";
+import { chainDisplayName, USDC_DECIMALS } from "@/app/constants";
 import { GetFunds } from "@/components/GetFunds";
 import { ViewAsDialog } from "@/components/ViewAsDialog";
 import { useEnsName } from "@/hooks/ens/useEnsName";
 import { IS_DETERMINISTIC_BROWSER } from "@/lib/browserEnvironment";
 import { useJBProject, useJBTokenContext } from "@/lib/nana/project";
-import { useSuckers, useSuckersUserTokenBalance } from "@/lib/nana/suckers";
+import { isPairCheckPending, useSuckers, useSuckersUserTokenBalance } from "@/lib/nana/suckers";
 import { cn, formatEthAddress, formatTokenSymbol } from "@/lib/utils";
 import { useViewAs } from "@/lib/view-as";
+import { signOutOnce } from "@/providers/para-bridge";
 import {
   logoutParaSession,
   ParaLocalDisconnectError,
@@ -16,7 +17,7 @@ import {
 } from "@/providers/para-logout";
 import { useParaAuth } from "@/providers/ParaAuthContext";
 import { preloadParaHost } from "@/providers/preload-para";
-import { JBProjectToken, USDC_ADDRESSES, type JBChainId } from "@bananapus/nana-sdk-core";
+import { USDC_ADDRESSES, type JBChainId } from "@bananapus/nana-sdk-core";
 import { useQuery } from "@tanstack/react-query";
 import { getConnections } from "@wagmi/core";
 import Link from "next/link";
@@ -43,9 +44,17 @@ type WalletConnectButtonProps = Omit<ButtonProps, "children"> & {
 const MENU_ITEM_SELECTOR = '[role="menuitem"]:not([disabled])';
 
 function formattedWalletBalance(value: bigint, decimals: number, symbol: string) {
-  return `${Number(formatUnits(value, decimals)).toLocaleString(undefined, {
-    maximumFractionDigits: 4,
-  })} ${symbol}`;
+  const amount = Number(formatUnits(value, decimals));
+  // A real amount never reads as nothing: below the digit budget, show its first significant figure.
+  const text =
+    amount > 0 && amount < 0.0001
+      ? amount.toFixed(Math.ceil(-Math.log10(amount))).replace(/0+$/, "")
+      : amount.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  return `${text} ${symbol}`;
+}
+
+function walletBalanceStatus(value: string | undefined, isError: boolean, isLoading: boolean) {
+  return isError ? "Unavailable" : isLoading ? "Loading…" : (value ?? "Unavailable");
 }
 
 function BalanceRow({ label, value }: { label: string; value: string }) {
@@ -58,17 +67,23 @@ function BalanceRow({ label, value }: { label: string; value: string }) {
 }
 
 function ProjectWalletBalance() {
-  const { data: balances, isLoading } = useSuckersUserTokenBalance();
+  const { data: balances, isLoading, isError, isComplete } = useSuckersUserTokenBalance();
   const { token } = useJBTokenContext();
-  const total = new JBProjectToken(
-    balances?.reduce((sum, balance) => sum + balance.balance.value, 0n) ?? 0n,
-  );
+  const total = balances?.reduce((sum, balance) => sum + balance.balance.value, 0n) ?? 0n;
   const symbol = formatTokenSymbol(token) || "tokens";
 
   return (
     <BalanceRow
       label={symbol}
-      value={isLoading || token.isLoading ? "Loading…" : `${total.format(4)} ${symbol}`}
+      value={
+        isError
+          ? "Unavailable"
+          : isLoading || token.isLoading
+            ? "Loading…"
+            : isComplete
+              ? formattedWalletBalance(total, 18, symbol)
+              : "Unavailable"
+      }
     />
   );
 }
@@ -109,32 +124,41 @@ function ProjectWalletBalances({ address }: { address: `0x${string}` }) {
       };
     },
   });
-  const isLoading = suckers.isLoading || balances.isLoading;
+  const isLoading = isPairCheckPending(suckers) || balances.isLoading;
+  const isError = suckers.isError || balances.isError;
 
   return (
     <>
       <div className="mb-1.5">
-        {pairs.length ? `Across ${pairs.length} project chains` : "Across project chains"}
+        {pairs.length === 1
+          ? "On 1 project chain"
+          : pairs.length
+            ? `Across ${pairs.length} project chains`
+            : "Across project chains"}
       </div>
       <dl className="space-y-1">
         <BalanceRow
           label={balances.data?.nativeSymbol ?? "ETH"}
           value={
-            isLoading
-              ? "Loading…"
-              : balances.data
-                ? formattedWalletBalance(balances.data.native, 18, balances.data.nativeSymbol)
-                : "Unavailable"
+            isError
+              ? "Unavailable"
+              : isLoading
+                ? "Loading…"
+                : balances.data
+                  ? formattedWalletBalance(balances.data.native, 18, balances.data.nativeSymbol)
+                  : "Unavailable"
           }
         />
         <BalanceRow
           label="USDC"
           value={
-            isLoading
-              ? "Loading…"
-              : balances.data
-                ? formattedWalletBalance(balances.data.usdc, USDC_DECIMALS, "USDC")
-                : "Unavailable"
+            isError
+              ? "Unavailable"
+              : isLoading
+                ? "Loading…"
+                : balances.data
+                  ? formattedWalletBalance(balances.data.usdc, USDC_DECIMALS, "USDC")
+                  : "Unavailable"
           }
         />
         <ProjectWalletBalance />
@@ -272,9 +296,19 @@ export function WalletButton() {
   const config = useConfig();
   const { viewAs, clearViewAs } = useViewAs();
   const balanceAddress = viewAs ?? address;
-  const { data: balance } = useBalance({ address: balanceAddress });
+  const {
+    data: balance,
+    isError: balanceError,
+    isLoading: balanceLoading,
+  } = useBalance({ address: balanceAddress });
   const usdcAddress = chain?.id ? USDC_ADDRESSES[chain.id as JBChainId] : undefined;
-  const { data: usdcBalance } = useReadContract({
+  const {
+    data: usdcBalance,
+    isError: usdcError,
+    isLoading: usdcLoading,
+    isFetching: usdcFetching,
+    refetch: refetchUsdc,
+  } = useReadContract({
     abi: erc20Abi,
     address: usdcAddress,
     chainId: chain?.id,
@@ -299,10 +333,13 @@ export function WalletButton() {
    */
   const endSession = useCallback(async () => {
     if (!IS_DETERMINISTIC_BROWSER) {
-      const { getParaClient } = await import("@/providers/para-config");
-      const hasParaSession = await getParaClient()
-        .isFullyLoggedIn()
-        .catch(() => false);
+      let hasParaSession: boolean;
+      try {
+        const { getParaClient } = await import("@/providers/para-config");
+        hasParaSession = await getParaClient().isFullyLoggedIn();
+      } catch {
+        throw new ParaSessionLogoutError();
+      }
       if (hasParaSession) {
         await logoutParaSession({ disconnect: disconnectAsync });
         return;
@@ -332,15 +369,18 @@ export function WalletButton() {
   const viewAsDialog = viewAsOpen ? (
     <ViewAsDialog open={viewAsOpen} onOpenChange={setViewAsOpen} />
   ) : null;
-  const formattedBalance = balance
-    ? formattedWalletBalance(balance.value, balance.decimals, balance.symbol)
-    : null;
-  const formattedUsdcBalance =
+  const formattedBalance = walletBalanceStatus(
+    balance ? formattedWalletBalance(balance.value, balance.decimals, balance.symbol) : undefined,
+    balanceError,
+    balanceLoading,
+  );
+  const formattedUsdcBalance = walletBalanceStatus(
     usdcBalance !== undefined
       ? formattedWalletBalance(usdcBalance, USDC_DECIMALS, "USDC")
-      : usdcAddress
-        ? "Loading…"
-        : "Unavailable";
+      : undefined,
+    usdcError,
+    usdcLoading,
+  );
 
   if (mounted && viewAs) {
     return (
@@ -395,12 +435,11 @@ export function WalletButton() {
                 <ProjectWalletBalances address={viewAs} />
               ) : (
                 <>
-                  <div className="mb-1.5">{chain?.name ?? "Unsupported network"}</div>
+                  <div className="mb-1.5">
+                    {chain ? chainDisplayName(chain.id) : "Unsupported network"}
+                  </div>
                   <dl className="space-y-1">
-                    <BalanceRow
-                      label={balance?.symbol ?? "Native"}
-                      value={formattedBalance ?? "Unavailable"}
-                    />
+                    <BalanceRow label={balance?.symbol ?? "Native"} value={formattedBalance} />
                     <BalanceRow label="USDC" value={formattedUsdcBalance} />
                   </dl>
                 </>
@@ -449,7 +488,9 @@ export function WalletButton() {
   }
 
   if (!mounted || !isConnected || !address) {
-    return <WalletConnectButton menuAlign="right" />;
+    return (
+      <WalletConnectButton menuAlign="right" variant="secondary" className="border-teal-500" />
+    );
   }
 
   return (
@@ -503,14 +544,24 @@ export function WalletButton() {
               <ProjectWalletBalances address={address} />
             ) : (
               <>
-                <div className="mb-1.5">{chain?.name ?? "Unsupported network"}</div>
+                <div className="mb-1.5">
+                  {chain ? chainDisplayName(chain.id) : "Unsupported network"}
+                </div>
                 <dl className="space-y-1">
-                  <BalanceRow
-                    label={balance?.symbol ?? "Native"}
-                    value={formattedBalance ?? "Unavailable"}
-                  />
+                  <BalanceRow label={balance?.symbol ?? "Native"} value={formattedBalance} />
                   <BalanceRow label="USDC" value={formattedUsdcBalance} />
                 </dl>
+                {usdcError && usdcAddress ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="mt-2 underline disabled:opacity-50"
+                    disabled={usdcFetching}
+                    onClick={() => void refetchUsdc()}
+                  >
+                    {usdcFetching ? "Retrying USDC balance…" : "Retry USDC balance"}
+                  </button>
+                ) : null}
               </>
             )}
           </div>
@@ -556,7 +607,7 @@ export function WalletButton() {
             onClick={() => {
               setDisconnectError(undefined);
               setParaLogoutPending(true);
-              void endSession()
+              void signOutOnce(endSession)
                 .then(() => setOpen(false))
                 .catch((error: unknown) => {
                   setDisconnectError(

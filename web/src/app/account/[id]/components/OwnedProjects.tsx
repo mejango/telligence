@@ -1,6 +1,7 @@
 "use client";
 
 import { publicClientFor } from "@/app/[slug]/components/v6/operator/operatorLib";
+import { chainDisplayName, MAINNET_CHAIN_IDS } from "@/app/constants";
 import { ChainLogo } from "@/components/ChainLogo";
 import { EthereumAddress } from "@/components/EthereumAddress";
 import { ProjectLink } from "@/components/ProjectLink";
@@ -8,11 +9,11 @@ import { SkeletonLines } from "@/components/ui/skeleton";
 import { useCompleteProjectsByOwner } from "@/hooks/useCompleteBendystrawLists";
 import type { OwnedProjectRow } from "@/lib/bendystraw/types";
 import { mainnet } from "@/lib/chains";
-import { readAuthorityIdentity } from "@/lib/cross-chain-authority";
 import type { JBChainId } from "@/lib/nana/types";
-import { fetchSafesOwnedBy, type OwnedSafe } from "@/lib/safeOwners";
+import { fetchSafesOwnedBy } from "@/lib/safe-service-config";
 import { slugFor } from "@/lib/slug";
 import { JB_CHAINS } from "@bananapus/nana-sdk-core";
+import { readAuthorityIdentity } from "@bananapus/nana-sdk-core/safe";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import type { Address } from "viem";
@@ -33,7 +34,6 @@ function ProjectCard({
   safePolicy?: SafePolicy;
 }) {
   const slug = slugFor(project.chainId, project.projectId);
-  const chain = JB_CHAINS[project.chainId as JBChainId]?.chain;
   const body = (
     <div className="flex items-center gap-3 py-3">
       <ChainLogo chainId={project.chainId as JBChainId} width={16} height={16} standalone />
@@ -56,7 +56,7 @@ function ProjectCard({
           </span>
         ) : null}
       </div>
-      <span className="text-xs text-zinc-500">{chain?.name ?? `Chain ${project.chainId}`}</span>
+      <span className="text-xs text-zinc-500">{chainDisplayName(project.chainId)}</span>
     </div>
   );
   if (!slug) return body;
@@ -80,7 +80,7 @@ export function OwnedProjects({ address }: { address: Address }) {
 
   const safesQuery = useQuery({
     queryKey: ["safes-owned-by", address.toLowerCase()],
-    queryFn: () => fetchSafesOwnedBy(address),
+    queryFn: () => fetchSafesOwnedBy(address, MAINNET_CHAIN_IDS),
     staleTime: 60_000,
   });
   const safes = useMemo(() => safesQuery.data ?? [], [safesQuery.data]);
@@ -102,7 +102,7 @@ export function OwnedProjects({ address }: { address: Address }) {
     staleTime: 60_000,
     queryFn: async (): Promise<Record<string, SafePolicy>> => {
       const entries = await Promise.all(
-        safes.map(async (safe: OwnedSafe): Promise<[string, SafePolicy] | null> => {
+        safes.map(async (safe): Promise<[string, SafePolicy] | null> => {
           if (!JB_CHAINS[safe.chainId as JBChainId]) return null;
           try {
             const client = publicClientFor(safe.chainId as JBChainId);

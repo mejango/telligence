@@ -1,8 +1,9 @@
+import { DescriptionSection } from "@/app/[slug]/about/components/DescriptionSection";
 import { useUserPermissions } from "@/hooks/useUserPermissions";
 import { getJBContractAddress, JBCoreContracts } from "@bananapus/nana-sdk-core";
 import { JBPermissionIdsV6 } from "@bananapus/nana-sdk-core/v6";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { PropsWithChildren } from "react";
 import type { Address } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +33,9 @@ vi.mock("@/hooks/useViewedAccount", () => ({
   }),
 }));
 vi.mock("@/lib/nana/project", () => ({
+  useJBProjectMetadataContext: () => ({
+    metadata: { data: { description: "Project description" } },
+  }),
   useJBChainId: () => mocks.chainId,
   useJBContractContext: () => ({ projectId: mocks.projectId }),
 }));
@@ -42,6 +46,12 @@ vi.mock("@/lib/bendystraw", () => ({
   ProjectWithPermissionsOperation: {},
   useBendystrawQuery: mocks.indexedQuery,
 }));
+
+vi.mock("next/dynamic", () => ({ default: () => () => <button>Edit metadata</button> }));
+vi.mock("@/app/[slug]/about/components/RichPreview", () => ({
+  RichPreview: () => <p>Project description</p>,
+}));
+vi.mock("@/app/[slug]/about/components/ProjectLinks", () => ({ ProjectLinks: () => null }));
 
 const queryClients: QueryClient[] = [];
 function renderPermissions() {
@@ -170,6 +180,8 @@ describe("live viewed-account project permissions", () => {
     });
     await waitFor(() => expect(result.current.permissions).toEqual([]));
     expect(result.current.hasPermission("SET_PROJECT_URI")).toBe(false);
+    expect(result.current.isError).toBe(true);
+    expect(result.current.isLoading).toBe(false);
   });
 
   it("fails closed when one of the required grant scopes cannot be read", async () => {
@@ -212,5 +224,89 @@ describe("live viewed-account project permissions", () => {
     expect(result.current.permissions).toEqual([]);
     expect(result.current.isLoading).toBe(false);
     expect(mocks.readContract).not.toHaveBeenCalled();
+  });
+});
+
+describe("metadata permission availability", () => {
+  function renderDescription() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    queryClients.push(client);
+    render(
+      <QueryClientProvider client={client}>
+        <DescriptionSection projects={[]} />
+      </QueryClientProvider>,
+    );
+    return client;
+  }
+
+  it("distinguishes initial verification from denial without hiding project content", async () => {
+    let resolve!: (value: Address) => void;
+    mocks.readContract.mockReturnValueOnce(
+      new Promise<Address>((done) => {
+        resolve = done;
+      }),
+    );
+    renderDescription();
+    expect(screen.getByRole("status")).toHaveTextContent("Checking permissions");
+    expect(screen.getByText("Project description")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Edit metadata" })).toBeNull();
+    await act(async () => {
+      resolve(OWNER);
+    });
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry permissions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit metadata" })).toBeNull();
+  });
+
+  it("offers a retry after RPC failure and restores the verified owner's editor", async () => {
+    mocks.readContract.mockRejectedValue(new Error("RPC unavailable, private transport detail"));
+    renderDescription();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not verify your project permissions.",
+    );
+    expect(screen.queryByText(/private transport/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit metadata" })).toBeNull();
+    let resolve!: (value: Address) => void;
+    mocks.readContract.mockReturnValueOnce(
+      new Promise<Address>((done) => {
+        resolve = done;
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry permissions" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Checking permissions");
+    expect(screen.queryByRole("button", { name: "Edit metadata" })).toBeNull();
+    await act(async () => {
+      resolve(VIEWED);
+    });
+    expect(await screen.findByRole("button", { name: "Edit metadata" })).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("removes a previously verified editor after failed refetch and lets the owner recover", async () => {
+    mocks.owner = VIEWED;
+    const client = renderDescription();
+    expect(await screen.findByRole("button", { name: "Edit metadata" })).toBeVisible();
+    mocks.readContract.mockRejectedValue(new Error("RPC unavailable"));
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["live-project-permissions"] });
+    });
+    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Edit metadata" })).toBeNull();
+    let resolve!: (value: Address) => void;
+    mocks.readContract.mockReturnValueOnce(
+      new Promise<Address>((done) => {
+        resolve = done;
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry permissions" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Checking permissions…" })).toBeDisabled(),
+    );
+    expect(screen.queryByRole("button", { name: "Edit metadata" })).toBeNull();
+    await act(async () => {
+      resolve(VIEWED);
+    });
+    expect(await screen.findByRole("button", { name: "Edit metadata" })).toBeVisible();
   });
 });

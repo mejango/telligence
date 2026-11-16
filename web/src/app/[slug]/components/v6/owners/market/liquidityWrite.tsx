@@ -1,12 +1,20 @@
 "use client";
 
-import { submittedViaSafe } from "@/hooks/useReviewedWriteContract";
-import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
+import { erc20ApproveAbi } from "@/lib/erc20-approve";
+import { legacyBatchNamespace } from "@/lib/legacy-intents";
+import { reviewedCall, type WriteRequest } from "@/lib/reviewed-call";
 import type { JBChainId } from "@bananapus/nana-sdk-core";
-import { erc20Abi, parseUnits, type Address, type Hex, type PublicClient } from "viem";
-import { PERMIT2_ADDRESS, permit2AllowanceCovers, permit2ApprovalArgs } from "./lib";
-
-export { SummaryRow } from "@/components/ui/TxConfirmDialog";
+import { approvalIntent, type ReviewedCall } from "@bananapus/nana-sdk-core/review";
+import { erc20Abi, parseUnits, type Abi, type Address, type Hex, type PublicClient } from "viem";
+import {
+  lpDeadline,
+  PERMIT2_ABI,
+  PERMIT2_ADDRESS,
+  permit2AllowanceCovers,
+  permit2ApprovalArgs,
+  POSITION_MANAGER_ABI,
+  POSITION_MANAGER_BY_CHAIN,
+} from "./lib";
 
 /**
  * A wallet prompt a liquidity write will actually raise. Deciding the sequence
@@ -66,46 +74,98 @@ export async function approvalStepsFor({
   return steps;
 }
 
-export type ApprovalContext = {
-  chainId: JBChainId;
-  address: Address;
-  publicClient: PublicClient;
-  ensureAllowance: (token: Address, spender: Address, amount: bigint) => Promise<unknown>;
-  /** Send `Permit2.approve(args)` through the caller's reviewed write and return its hash. */
-  approvePermit2: (args: ReturnType<typeof permit2ApprovalArgs>) => Promise<Hex>;
+export type LiquidityBatchCall = Omit<WriteRequest, "chainId" | "abi"> & {
+  abi: Abi;
+  /** Needs an earlier call's effect (an allowance), so it cannot simulate alone. */
+  dependsOnPrior?: boolean;
 };
 
 /**
- * Run one approval step. Permit2 allowances are re-checked rather than
- * trusted, since the review's reading can age out. A Safe connection turns
- * the Permit2 approval into a proposal that must execute before the flow can
- * continue, so that outcome is reported instead of waited on.
+ * The reviewed step list as ONE Safe batch: each approval becomes its call,
+ * and the position-manager write comes last, marked as depending on them so
+ * a standalone simulation never runs it before its allowances exist.
  */
-export async function runApprovalStep(
-  step: LiquidityStep,
-  context: ApprovalContext,
-): Promise<"done" | "safe-proposed"> {
-  if (!step.approval) return "done";
-  if (step.approval.kind === "erc20") {
-    await context.ensureAllowance(step.approval.currency, PERMIT2_ADDRESS, step.approval.max);
-    return "done";
-  }
-  const covered = await permit2AllowanceCovers(
-    context.chainId,
-    context.address,
-    step.approval.currency,
-    step.approval.max,
+export function liquidityBatchCalls({
+  chainId,
+  steps,
+  unlockData,
+  value,
+  safe = true,
+}: {
+  chainId: JBChainId;
+  steps: readonly LiquidityStep[];
+  unlockData: Hex;
+  value: bigint;
+  /** A Safe's proposal waits for its signers, so it gets the long deadline. */
+  safe?: boolean;
+}): LiquidityBatchCall[] {
+  const positionManager = POSITION_MANAGER_BY_CHAIN[Number(chainId)];
+  if (!positionManager) throw new Error("LP management is unavailable on this chain.");
+  return steps.map((step) =>
+    step.approval?.kind === "erc20"
+      ? {
+          address: step.approval.currency,
+          abi: erc20ApproveAbi,
+          functionName: "approve",
+          args: [PERMIT2_ADDRESS, step.approval.max],
+        }
+      : step.approval
+        ? {
+            address: PERMIT2_ADDRESS,
+            abi: PERMIT2_ABI,
+            functionName: "approve",
+            args: permit2ApprovalArgs(chainId, step.approval.currency, step.approval.max),
+          }
+        : {
+            address: positionManager,
+            abi: POSITION_MANAGER_ABI,
+            functionName: "modifyLiquidities",
+            args: [unlockData, lpDeadline(safe)],
+            value,
+            dependsOnPrior: true,
+          },
   );
-  if (covered) return "done";
-  const approvalHash = await context.approvePermit2(
-    permit2ApprovalArgs(context.chainId, step.approval.currency, step.approval.max),
+}
+
+/**
+ * The reviewed step list as one reviewed action of `lpIntent`: each approval held as a step of it
+ * (the SDK's approvalIntent; the plan's calculated maxima are not part of it), then the
+ * position-manager write. Everything that touches funds is frozen inside unlockData; the deadline
+ * is stamped when the review opens. Sent with `batch`, a Safe proposes them as one transaction,
+ * held by the first call's intent, so that call carries `lpIntent` (and the batch namespace the
+ * build before held every batch by).
+ */
+export function liquidityReviewedCalls(
+  lpIntent: string,
+  input: Parameters<typeof liquidityBatchCalls>[0],
+): ReviewedCall[] {
+  const writes = liquidityBatchCalls(input);
+  const batch = input.safe && writes.length > 1;
+  return writes.map(({ dependsOnPrior, ...call }, index) =>
+    reviewedCall(
+      { chainId: input.chainId, ...call },
+      batch && index === 0
+        ? { intent: lpIntent, legacyIntents: [legacyBatchNamespace(writes)] }
+        : {
+            dependsOnPrior: index > 0 && !!dependsOnPrior,
+            intent:
+              call.functionName === "modifyLiquidities"
+                ? lpIntent
+                : approvalIntent(lpIntent, {
+                    step: call.address === PERMIT2_ADDRESS ? "permit2" : "erc20",
+                    token: (call.address === PERMIT2_ADDRESS
+                      ? call.args![0]
+                      : call.address) as Address,
+                    spender: call.args![call.address === PERMIT2_ADDRESS ? 1 : 0] as Address,
+                  }),
+          },
+    ),
   );
-  if (submittedViaSafe(approvalHash)) return "safe-proposed";
-  const receipt = await waitForReceiptWithRetry(context.publicClient, approvalHash);
-  if (receipt.status !== "success") {
-    throw new Error(`Permit2 authorization ${approvalHash} reverted.`);
-  }
-  return "done";
+}
+
+/** The confirm's intro line when the whole step list goes to a Safe at once. */
+export function safeBatchIntro(steps: readonly unknown[]): string {
+  return `Goes to your Safe as one batch of ${steps.length} calls: approved once, executed together.`;
 }
 
 /** A typed amount as raw units; "" is zero, anything unparsable names the side. */

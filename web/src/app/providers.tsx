@@ -2,6 +2,7 @@
 
 import React from "react";
 import { AppSpecificProviders } from "./AppSpecificProviders";
+import { ShopCartsProvider } from "./[slug]/components/v6/ShopCartContext";
 
 /**
  * These providers used to load through `dynamic(..., { ssr: false })`, a workaround
@@ -11,5 +12,9 @@ import { AppSpecificProviders } from "./AppSpecificProviders";
  * without a `window`, so nothing below here needs the browser in order to render.
  */
 export function Providers({ children }: { children: React.ReactNode }) {
-  return <AppSpecificProviders>{children}</AppSpecificProviders>;
+  return (
+    <AppSpecificProviders>
+      <ShopCartsProvider>{children}</ShopCartsProvider>
+    </AppSpecificProviders>
+  );
 }

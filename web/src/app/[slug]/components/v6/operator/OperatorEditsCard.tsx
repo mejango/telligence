@@ -62,6 +62,7 @@ export function OperatorEditsCard({
               stageIdx={currentStageIdx}
               initialChainId={chainId}
               triggerVariant="secondary"
+              deniedNote="Connect an account with this permission to change recipients."
             />
           ) : (
             <Skeleton className="h-8 w-36" />

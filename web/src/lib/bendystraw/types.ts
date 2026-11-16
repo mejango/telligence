@@ -1,8 +1,24 @@
 type BigNumberish = string | number;
 export type BendystrawFilter = Record<string, unknown>;
 
-export type Project = {
+/** One token a project's terminals hold: the exact store balance and its value at the token's
+ *  latest indexed USD rate (18 decimals). `tokenSymbol` is null when unreadable. */
+export type ProjectTokenBalance = {
+  token: string;
+  tokenSymbol: string | null;
+  decimals: number;
   balance: BigNumberish;
+  balanceUsd?: BigNumberish;
+  usdRate?: BigNumberish | null;
+};
+type ProjectTokenBalances = { projectTokenBalances?: { items: ProjectTokenBalance[] } | null };
+
+export type Project = {
+  /** More than one means the raw `balance` adds different token units. */
+  accountingTokenCount?: number | null;
+  balance: BigNumberish;
+  /** Flow-accrued USD balance, 18-dec. */
+  balanceUsd?: BigNumberish | null;
   chainId: number;
   createdAt: number;
   currency: BigNumberish | null;
@@ -79,6 +95,15 @@ export type ProjectQueryVariables = {
   chainId: number;
   version: number;
 };
+/** One deployment's indexed payment notice. */
+export type ProjectPayNoticeQuery = {
+  project: {
+    chainId: number;
+    projectId: number;
+    version: number;
+    payDisclosure: string | null;
+  } | null;
+};
 export type ProjectQuery = {
   project: Pick<
     Project,
@@ -107,6 +132,7 @@ export type ProjectAccountingContextQuery = {
 
 type SuckerGroupProject = Pick<
   Project,
+  | "accountingTokenCount"
   | "balance"
   | "chainId"
   | "currency"
@@ -116,7 +142,7 @@ type SuckerGroupProject = Pick<
   | "tokenSymbol"
   | "version"
   | "suckerGroupId"
-> & { tokenSupply: BigNumberish };
+> & { tokenSupply: BigNumberish } & ProjectTokenBalances;
 
 export type SuckerGroupQueryVariables = { id: string };
 export type SuckerGroupQuery = {
@@ -131,11 +157,13 @@ export type SuckerGroupQuery = {
 
 export type IndexedProjectSummary = Pick<
   Project,
+  | "accountingTokenCount"
   | "chainId"
   | "createdAt"
   | "handle"
   | "isRevnet"
   | "logoUri"
+  | "metadataUri"
   | "name"
   | "projectId"
   | "projectTagline"
@@ -143,12 +171,13 @@ export type IndexedProjectSummary = Pick<
   | "tokenSymbol"
   | "version"
 > & {
-  volume: BigNumberish;
+  volumeUsd?: BigNumberish | null;
   currency?: BigNumberish | null;
   decimals?: number | null;
   trendingPaymentsCount?: number;
   trendingScore?: BigNumberish;
   trendingVolume?: BigNumberish;
+  trendingVolumeUsd?: BigNumberish | null;
 };
 export type IndexedProjectsQueryVariables = {
   where: BendystrawFilter;
@@ -210,6 +239,7 @@ type ActivityProject = Pick<Project, "projectId" | "handle" | "version"> & {
   chainId?: number;
   name?: string | null;
   logoUri?: string | null;
+  metadataUri?: string | null;
   projectTagline?: string | null;
   tokenSymbol?: string | null;
   decimals?: number | null;
@@ -231,6 +261,12 @@ type ActivityPayment = {
   distributionFromProjectId: number | null;
   projectId: number;
   project: ActivityProject | null;
+} & EventToken;
+/** The token a terminal event moved. Null when the indexer could not tell (valued at 0 USD). */
+export type EventToken = {
+  token?: string | null;
+  decimals?: number | null;
+  tokenSymbol?: string | null;
 };
 type ActivityCashOut = {
   id: string;
@@ -242,7 +278,19 @@ type ActivityCashOut = {
   reclaimAmountUsd: BigNumberish;
   cashOutCount: BigNumberish;
   metadata: string;
+  /** Whose tokens were cashed out. A sucker's own cash out is the inside of a bridge send. */
+  holder?: string;
   project: ActivityProject | null;
+} & EventToken;
+/** Tokens queued on a sucker for another chain (`prepare`). */
+type ActivityBridgeSend = {
+  txHash: string;
+  timestamp: number;
+  /** Who called the sucker: a Safe here, not the account that executed its transaction. */
+  caller: string;
+  peerChainId: number;
+  projectTokenCount: BigNumberish;
+  sucker: string;
 };
 type ActivityBase = { txHash: string; timestamp: number; from: string };
 
@@ -264,7 +312,27 @@ export type ActivityEventsQuery = {
       project?: ActivityProject | null;
       payEvent: ActivityPayment | null;
       cashOutTokensEvent: ActivityCashOut | null;
-      addToBalanceEvent: (ActivityBase & { amount: BigNumberish; memo: string | null }) | null;
+      bridgeToOutboxEvent?: ActivityBridgeSend | null;
+      /** Tokens claimed here from another chain. `beneficiary` can be a 32-byte value. */
+      bridgeClaimEvent?: {
+        txHash: string;
+        timestamp: number;
+        beneficiary: string;
+        peerChainId: number;
+        projectTokenCount: BigNumberish;
+      } | null;
+      borrowLoanEvent?: (ActivityBase & { beneficiary: string; collateral: BigNumberish }) | null;
+      /** `caller` called the loans contract: a Safe here, not the account that executed for it. */
+      repayLoanEvent?: { txHash: string; timestamp: number; caller: string } | null;
+      liquidateLoanEvent?: { txHash: string; timestamp: number; caller: string } | null;
+      addToBalanceEvent:
+        | (ActivityBase &
+            EventToken & {
+              amount: BigNumberish;
+              amountUsd?: BigNumberish | null;
+              memo: string | null;
+            })
+        | null;
       mintTokensEvent:
         | (ActivityBase & {
             id: string;
@@ -300,13 +368,22 @@ export type ActivityEventsQuery = {
           })
         | null;
       buybackPoolEvent: (ActivityBase & { caller: string }) | null;
+      mintNftEvent?:
+        | (ActivityBase & {
+            beneficiary: string;
+            hook: string;
+            tierId: number;
+            tokenId: BigNumberish;
+            totalAmountPaid: BigNumberish;
+          })
+        | null;
       sendPayoutsEvent?:
         | (ActivityBase & {
             caller: string;
             amount: BigNumberish;
             amountPaidOut: BigNumberish;
             amountPaidOutUsd: BigNumberish;
-          })
+          } & EventToken)
         | null;
       sendReservedTokensToSplitsEvent?: (ActivityBase & { tokenCount: BigNumberish }) | null;
       sendReservedTokensToSplitEvent?:
@@ -315,6 +392,8 @@ export type ActivityEventsQuery = {
             tokenCount: BigNumberish;
             beneficiary: string;
             splitProjectId: number;
+            /** The split hook; a Sticky split's splitProjectId is its holder group. */
+            hook?: string;
           })
         | null;
     }>;
@@ -545,8 +624,11 @@ export type CashOutTaxSnapshotsQuery = {
 
 export type SuckerGroupMoment = {
   timestamp: number;
+  /** Raw sum of every token's balance: mixes units when the group holds more than one token. */
   balance: BigNumberish;
-  volume: BigNumberish;
+  /** 18-dec USD: each token's balance at its latest indexed rate. */
+  balanceUsd?: BigNumberish | null;
+  volumeUsd?: BigNumberish | null;
   tokenSupply: BigNumberish;
   suckerGroupId: string;
   version: number;
@@ -565,7 +647,7 @@ export type SuckerGroupMomentsQuery = {
 type AddToBalanceInflow = {
   suckerGroupId: string;
   timestamp: number;
-  amount: BigNumberish;
+  amountUsd: BigNumberish | null;
 };
 export type AddToBalanceInflowsQueryVariables = { after?: string };
 export type AddToBalanceInflowsQuery = {
@@ -575,22 +657,26 @@ export type AddToBalanceInflowsQuery = {
   };
 };
 
-type ProjectMoment = {
+export type ProjectTokenBalanceMoment = {
   projectId: number;
   chainId: number;
   version: number;
+  token: string;
+  decimals: number;
   timestamp: number;
   balance: BigNumberish;
+  /** 18-dec USD per one whole token at this moment's block; null when unpriced. */
+  tokenUsdRate: BigNumberish | null;
 };
-export type ProjectMomentsQueryVariables = {
+export type ProjectTokenBalanceMomentsQueryVariables = {
   projectId: number;
   chainId: number;
   version: number;
   after?: string;
 };
-export type ProjectMomentsQuery = {
-  projectMoments: {
-    items: ProjectMoment[];
+export type ProjectTokenBalanceMomentsQuery = {
+  projectTokenBalanceMoments: {
+    items: ProjectTokenBalanceMoment[];
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
   };
 };
@@ -601,24 +687,23 @@ export type TopSuckerGroupsQuery = {
     totalCount?: number;
     items: Array<{
       id: string;
-      balance: BigNumberish;
-      volume: BigNumberish;
+      balanceUsd: BigNumberish | null;
+      volumeUsd: BigNumberish | null;
       projects: {
         items: Array<
           Pick<
             Project,
-            | "balance"
-            | "decimals"
-            | "currency"
+            | "balanceUsd"
             | "chainId"
             | "name"
             | "projectTagline"
-            | "tokenSymbol"
             | "logoUri"
+            | "metadataUri"
             | "projectId"
             | "version"
             | "isRevnet"
-          >
+          > &
+            ProjectTokenBalances
         >;
       } | null;
     }>;
@@ -712,6 +797,7 @@ export type V6AutoIssueEventsQuery = {
       stageId: string;
       beneficiary: string;
       count: string;
+      txHash: string;
     }>;
   };
 };
@@ -774,6 +860,7 @@ export type IndexedLpPositionsQuery = {
     totalCount?: number;
     items: Array<{
       chainId: number;
+      poolId: string;
       tokenId: string;
       owner: string;
       tickLower: number;
@@ -783,6 +870,26 @@ export type IndexedLpPositionsQuery = {
       feesClaimed1: string;
     }>;
   } | null;
+};
+
+export type IndexedPoolRangesQueryVariables = IndexedBuybackPoolsQueryVariables & {
+  poolId: string;
+  limit: number;
+  offset: number;
+};
+export type IndexedPoolRangesQuery = {
+  buybackPoolRanges: {
+    totalCount: number;
+    items: Array<{
+      chainId: number;
+      projectId: number;
+      version: number;
+      poolId: string;
+      tickLower: number;
+      tickUpper: number;
+      liquidity: string;
+    }>;
+  };
 };
 
 export type IndexedPoolLiquidityEventsQueryVariables = IndexedBuybackPoolsQueryVariables & {
@@ -899,34 +1006,53 @@ export type PayEventRatesQuery = {
 export type ShieldGroupQueryVariables = { id: string };
 export type ShieldGroupQuery = {
   suckerGroup: {
-    balance: BigNumberish;
-    volume: BigNumberish;
+    balanceUsd: BigNumberish | null;
     volumeUsd: BigNumberish;
     projects: {
-      items: Array<{
-        balance: BigNumberish;
-        chainId: number;
-        isRevnet: boolean | null;
-        id: string;
-        name: string | null;
-        volumeUsd: BigNumberish;
-        volume: BigNumberish;
-        /** Accounting context: what the project is paid in, and at what scale. */
-        token: string | null;
-        tokenSymbol: string | null;
-        decimals: number | null;
-        participants: {
-          totalCount: number;
-          items: Array<{
-            address: string;
-            chainId: number;
-            projectId: number;
-            lastPaidTimestamp: number;
-            balance: BigNumberish;
-          }>;
-        } | null;
-        metadata: unknown;
-      }>;
+      items: Array<
+        {
+          balance: BigNumberish;
+          chainId: number;
+          isRevnet: boolean | null;
+          id: string;
+          name: string | null;
+          volumeUsd: BigNumberish;
+          /** Accounting context: what the project is paid in, and at what scale. */
+          token: string | null;
+          tokenSymbol: string | null;
+          decimals: number | null;
+          participants: {
+            totalCount: number;
+            items: Array<{
+              address: string;
+              chainId: number;
+              projectId: number;
+              lastPaidTimestamp: number;
+              balance: BigNumberish;
+            }>;
+          } | null;
+          metadata: unknown;
+        } & ProjectTokenBalances
+      >;
     } | null;
   } | null;
+};
+export type IndexedRouterPendingCall = {
+  chainId: number;
+  version: number;
+  gateway: string;
+  pendingCallId: string;
+  projectId: number;
+  sourceProjectId: number;
+  token: string;
+  amount: string;
+  retainedAmount: string;
+  preferAddToBalance: boolean;
+  shouldReturnHeldFees: boolean;
+  beneficiary: string;
+  refundTo: string;
+  memo: string;
+  metadata: string;
+  callCommitment: string;
+  status: string;
 };

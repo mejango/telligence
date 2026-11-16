@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 describe("chain display order", () => {
   it("orders every supported chain, production first", () => {
     const all = [42161, 11155111, 8453, 10, 421614, 1, 84532, 11155420] as JBChainId[];
-    expect(sortChains(all)).toEqual([1, 10, 8453, 42161, 11155111, 11155420, 84532, 421614]);
+    expect(sortChains(all)).toEqual([1, 8453, 42161, 10, 11155111, 84532, 421614, 11155420]);
   });
 
   it("gives each production chain a distinct index", () => {
@@ -47,8 +47,8 @@ describe("chain membership", () => {
   });
 
   it("splits production from testnet off the chain definitions, in display order", () => {
-    expect(MAINNET_CHAIN_IDS).toEqual([1, 10, 8453, 42161]);
-    expect(TESTNET_CHAIN_IDS).toEqual([11155111, 11155420, 84532, 421614]);
+    expect(MAINNET_CHAIN_IDS).toEqual([1, 8453, 42161, 10]);
+    expect(TESTNET_CHAIN_IDS).toEqual([11155111, 84532, 421614, 11155420]);
     expect([...MAINNET_CHAIN_IDS, ...TESTNET_CHAIN_IDS].sort((a, b) => a - b)).toEqual(
       [...SUPPORTED_CHAIN_IDS].sort((a, b) => a - b),
     );

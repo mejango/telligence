@@ -12,8 +12,8 @@ import {
 } from "@/components/ui/table";
 import type { JBChainId, ProjectTokenData } from "@/lib/nana/types";
 import { exactNumber, prettyNumber } from "@/lib/number";
-import { formatPortion, formatTokenSymbol } from "@/lib/utils";
-import { formatUnits } from "@bananapus/nana-sdk-core";
+import { formatShare, formatTokenSymbol } from "@/lib/utils";
+import { formatUnits, JB_CHAINS } from "@bananapus/nana-sdk-core";
 import { useRef, useState, type ReactNode } from "react";
 import { Address } from "viem";
 
@@ -23,7 +23,6 @@ export const PARTICIPANTS_PAGE_SIZE = 30;
 export type ParticipantRow = {
   address: string;
   balance: string | number | bigint;
-  volume: string | number | bigint;
   chains: number[];
 };
 
@@ -31,20 +30,12 @@ export function ParticipantsTable({
   participants,
   token,
   totalSupply,
-  baseTokenSymbol = "ETH",
-  baseTokenDecimals = 18,
-  volumeComparable = true,
   condensed = false,
   pageSize = PARTICIPANTS_PAGE_SIZE,
 }: {
   participants: ParticipantRow[];
   token: ProjectTokenData | null | undefined;
   totalSupply: bigint;
-  baseTokenSymbol?: string;
-  baseTokenDecimals?: number;
-  /** False when the group's chains use different accounting tokens — see
-   *  participantVolumeIsComparable. The column is suppressed rather than summed. */
-  volumeComparable?: boolean;
   condensed?: boolean;
   pageSize?: number;
 }) {
@@ -71,23 +62,24 @@ export function ParticipantsTable({
 
   return (
     <>
-      <Table className={condensed ? "min-w-[720px]" : undefined}>
+      <Table>
         <TableHeader>
           <TableRow>
             <TableHead className="w-auto md:w-1/2">Account</TableHead>
             <TableHead>{condensed ? "Share" : "Balance"}</TableHead>
             <TableHead>Chains</TableHead>
-            {volumeComparable ? <TableHead>Paid</TableHead> : null}
           </TableRow>
         </TableHeader>
         <TableBody>
           {visibleParticipants.map((participant) => (
+            // Explorer link follows the chain the holder is on, not the connected wallet.
             <TableRow key={participant?.address}>
               <TableCell>
                 <div className="flex flex-col sm:flex-row items-center">
                   <div className="hidden sm:flex">
                     <EthereumAddress
                       address={participant?.address as Address}
+                      chain={JB_CHAINS[participant.chains[0] as JBChainId]?.chain}
                       short
                       withEnsAvatar
                       withEnsName
@@ -96,6 +88,7 @@ export function ParticipantsTable({
                   <div className="flex sm:hidden">
                     <EthereumAddress
                       address={participant?.address as Address}
+                      chain={JB_CHAINS[participant.chains[0] as JBChainId]?.chain}
                       short
                       withEnsAvatar
                       withEnsName
@@ -106,10 +99,7 @@ export function ParticipantsTable({
               {token && condensed ? (
                 <TableCell className="whitespace-nowrap tabular-nums">
                   <span className="font-semibold">
-                    {participant.balance
-                      ? formatPortion(BigInt(participant.balance), totalSupply)
-                      : 0}
-                    %
+                    {formatShare(BigInt(participant.balance), totalSupply)}
                   </span>
                 </TableCell>
               ) : token ? (
@@ -127,14 +117,11 @@ export function ParticipantsTable({
                   )}{" "}
                   {formatTokenSymbol(token.symbol)} {" | "}
                   <span className="font-bold">
-                    {participant.balance
-                      ? formatPortion(BigInt(participant.balance), totalSupply)
-                      : 0}
-                    %
+                    {formatShare(BigInt(participant.balance), totalSupply)}
                   </span>
                 </TableCell>
               ) : null}
-              <TableCell className="whitespace-nowrap pr-20">
+              <TableCell className="whitespace-nowrap">
                 <div className="flex items-center gap-1">
                   {participant.chains.map((chain) => (
                     <ChainLogo
@@ -147,14 +134,6 @@ export function ParticipantsTable({
                   ))}
                 </div>
               </TableCell>
-              {volumeComparable ? (
-                <TableCell className="whitespace-nowrap">
-                  {formatUnits(BigInt(participant.volume), baseTokenDecimals, {
-                    fractionDigits: 3,
-                  })}{" "}
-                  {baseTokenSymbol}
-                </TableCell>
-              ) : null}
             </TableRow>
           ))}
         </TableBody>

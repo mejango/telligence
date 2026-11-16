@@ -19,7 +19,9 @@ const MAX_INDEXED_OPERATOR_ROWS = 64;
 export const getProjectOperator = unstable_cache(
   async (projectId: number, chainId: number) => {
     const address = await getCurrentProjectOperatorAddress(projectId, chainId);
-    return address ? await fetchProfile(address) : null;
+    if (!address) return null;
+    // A missing profile says nothing about the role: the operator is still known by address.
+    return (await fetchProfile(address)) ?? { address };
   },
   ["project-operator"],
   {

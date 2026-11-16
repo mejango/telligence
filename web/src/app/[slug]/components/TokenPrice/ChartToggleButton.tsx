@@ -2,6 +2,7 @@
 
 import { ConceptTerm } from "@/components/ui/ConceptTerm";
 import { cn } from "@/lib/utils";
+import { useProjectNavigation } from "../../ProjectRouteContext";
 
 interface Props {
   label: string;
@@ -22,32 +23,25 @@ export function ChartToggleButton({
   onClick,
   note,
 }: Props) {
+  const navigate = useProjectNavigation();
   const isActive = active && !disabled;
 
   return (
     <button
-      onClick={onClick}
+      aria-pressed={isActive}
+      data-project-navigation="local"
+      onClick={() => navigate(onClick)}
       disabled={disabled}
       className={cn(
-        "flex min-h-11 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-all",
+        "flex items-center gap-2 rounded-md bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-900 transition-opacity",
         disabled && "cursor-not-allowed",
-        isActive
-          ? `bg-[${colorVar}]/10 text-[${colorVar}] ring-1 ring-[${colorVar}]/30`
-          : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200",
+        !isActive && "opacity-45",
       )}
-      style={
-        isActive
-          ? {
-              backgroundColor: `color-mix(in srgb, var(${colorVar}) 10%, transparent)`,
-              color: "rgb(24 24 27)",
-              boxShadow: `inset 0 0 0 1px color-mix(in srgb, var(${colorVar}) 30%, transparent)`,
-            }
-          : undefined
-      }
     >
       <span
-        className={cn("w-2.5 h-2.5 rounded-full", !isActive && "bg-zinc-300")}
-        style={isActive ? { backgroundColor: `var(${colorVar})` } : undefined}
+        aria-hidden="true"
+        className="h-2 w-2 shrink-0 rounded-full"
+        style={{ backgroundColor: `var(${colorVar})` }}
       />
       {note ? <ConceptTerm note={note}>{label}</ConceptTerm> : label}
     </button>

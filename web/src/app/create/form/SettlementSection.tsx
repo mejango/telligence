@@ -11,15 +11,15 @@ export function SettlementSection({ disabled = false }: { disabled?: boolean }) 
   return (
     <>
       <div className="md:col-span-1">
-        <h2 className="mb-4 text-lg font-bold md:mb-2">2. Settlement</h2>
+        <h2 className="mb-4 text-lg font-bold md:mb-2">2. Money and chains</h2>
         <p className="text-lg text-zinc-600">
-          Pick which chains your revnet will accept money on and issue {revnetTokenSymbol} from, and
-          which reserve asset will back the value of {revnetTokenSymbol}.
+          Choose where your revnet runs and which tokens its reserve accepts. Holders can cash out{" "}
+          {revnetTokenSymbol} for a share of that reserve.
         </p>
         <p className="mt-2 text-lg text-zinc-600">
-          Holders of {revnetTokenSymbol} can cash out on any of the selected chains for the reserve
-          token(s), and can move their {revnetTokenSymbol} between chains at any time, which moves
-          proportional reserved tokens alongside.
+          Holders can cash out on a selected chain if it has enough reserves. They can also move
+          their {revnetTokenSymbol} between linked chains. The matching share of tokens set aside
+          for other recipients moves with them.
         </p>
       </div>
       <div className="mt-6 md:col-span-2 md:mt-0">

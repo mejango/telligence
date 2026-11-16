@@ -8,7 +8,9 @@ import type { SuckerGroupQuery } from "@/lib/bendystraw/types";
 import { useState } from "react";
 import { ProjectTabIcon } from "../ProjectTabIcon";
 import { ActivityItem, type ActivityEvent } from "./ActivityItem";
+import { PendingRoutingPayments } from "./PendingRoutingPayments";
 import {
+  groupCrossChainPoolEvents,
   groupSameTxEvents,
   isProjectFeedActivityEvent,
   mapActivityEvents,
@@ -40,7 +42,12 @@ type ActivityCategory =
   | "payout"
   | "buybackSwap"
   | "buybackPool"
-  | "reserved";
+  | "reserved"
+  | "bridge"
+  | "bridgeClaim"
+  | "borrowLoan"
+  | "repayLoan"
+  | "liquidateLoan";
 
 const ACTIVITY_CATEGORY_LABELS: Record<ActivityCategory, string> = {
   pay: "Payments",
@@ -55,12 +62,18 @@ const ACTIVITY_CATEGORY_LABELS: Record<ActivityCategory, string> = {
   payout: "Payouts",
   buybackSwap: "Buyback swaps",
   buybackPool: "Buyback pools",
-  reserved: "Reserved tokens",
+  reserved: "Splits",
+  bridge: "Bridge sends",
+  bridgeClaim: "Bridge claims",
+  borrowLoan: "Loans",
+  repayLoan: "Loan repayments",
+  liquidateLoan: "Liquidations",
 };
 
 export function activityCategory(event: ActivityEvent): ActivityCategory | null {
   switch (event.type) {
     case "in":
+    case "mintNft":
       return "pay";
     case "out":
       return "cashOut";
@@ -90,6 +103,13 @@ export function activityCategory(event: ActivityEvent): ActivityCategory | null 
     case "reserved":
     case "reservedSplit":
       return "reserved";
+    case "bridgeSend":
+      return "bridge";
+    case "bridgeClaim":
+    case "borrowLoan":
+    case "repayLoan":
+    case "liquidateLoan":
+      return event.type;
     case "operatorPermissionsSet":
       return null;
   }
@@ -121,7 +141,7 @@ function ActivityTypeFilter({
 
   return (
     <details className="group relative z-20">
-      <summary className="flex min-h-11 cursor-pointer list-none select-none items-center justify-between gap-2 border border-teal-200 bg-teal-50 px-3 text-sm text-zinc-600 transition-colors hover:border-teal-400 focus-visible:border-teal-500 focus-visible:outline-none [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-11 cursor-pointer list-none select-none items-center gap-2 text-sm text-zinc-600 transition-colors hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 [&::-webkit-details-marker]:hidden">
         <span>{selectedLabel}</span>
         <ChevronDown
           aria-hidden="true"
@@ -165,6 +185,7 @@ export function ActivityFeed({ suckerGroupId, projects }: Props) {
       where: { suckerGroupId },
     },
     Number(projects[0]?.chainId ?? 1),
+    Boolean(suckerGroupId),
   );
 
   const items = data ?? [];
@@ -183,11 +204,13 @@ export function ActivityFeed({ suckerGroupId, projects }: Props) {
   });
   // Filter by category first, then collapse same-tx rows — filtering to one
   // category still surfaces that category's own fragment on its own row.
-  const filteredEvents = groupSameTxEvents(
-    events.filter((event) => {
-      const category = activityCategory(event);
-      return selectedCategories === null || (!!category && selectedCategories.has(category));
-    }),
+  const filteredEvents = groupCrossChainPoolEvents(
+    groupSameTxEvents(
+      events.filter((event) => {
+        const category = activityCategory(event);
+        return selectedCategories === null || (!!category && selectedCategories.has(category));
+      }),
+    ),
   );
   const visibleEvents = filteredEvents.slice(0, visibleCount);
   const hasMore = filteredEvents.length > visibleCount;
@@ -195,6 +218,17 @@ export function ActivityFeed({ suckerGroupId, projects }: Props) {
 
   return (
     <div className="mt-6">
+      <PendingRoutingPayments
+        key={projects
+          .map(({ chainId, projectId, version }) => `${chainId}:${projectId}:${version}`)
+          .sort()
+          .join(",")}
+        projects={projects.map(({ chainId, projectId, version }) => ({
+          chainId,
+          projectId,
+          version,
+        }))}
+      />
       <div className="mb-2 flex items-center justify-between gap-3">
         {/* Same voice as the project tabs — the icon and type the Latest tab
             uses when the feed collapses into the tab bar. */}
@@ -213,7 +247,7 @@ export function ActivityFeed({ suckerGroupId, projects }: Props) {
       </div>
       <ProfilesProvider addresses={addresses}>
         <div className="pr-1">
-          {isError ? (
+          {!suckerGroupId || isError ? (
             <p className="py-4 text-center text-sm text-red-600">
               Activity is temporarily unavailable. Try again shortly.
             </p>

@@ -1,4 +1,5 @@
 import { ChainLogo } from "@/components/ChainLogo";
+import { TokenAmount } from "@/components/TokenAmount";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -11,22 +12,17 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useBorrowableAmountFrom } from "@/hooks/useBorrowableAmountFrom";
 import { useCompleteLoansByAccount } from "@/hooks/useCompleteBendystrawLists";
+import { useLoanToken } from "@/hooks/useLoanToken";
 import { ProjectOperation, SuckerGroupOperation, useBendystrawQuery } from "@/lib/bendystraw";
 import type { Project } from "@/lib/bendystraw/types";
 import { useJBChainId, useJBTokenContext } from "@/lib/nana/project";
-import { getTokenConfigForChain, getTokenSymbolFromAddress } from "@/lib/tokenUtils";
+import type { LoanTokenProject } from "@/lib/tokenUtils";
 import { formatSeconds } from "@/lib/utils";
 import { getRevnetLoanContract, JB_CHAINS, JBChainId } from "@bananapus/nana-sdk-core";
-import { formatUnits } from "viem";
 
 // Constants for loan calculations and display
 const LOAN_CONSTANTS = {
-  DECIMAL_PLACES: {
-    BORROWED_AMOUNT: 6,
-    COLLATERAL_AMOUNT: 6,
-  },
   POLL_INTERVAL: 3000, // Refresh every 3 seconds
-  TABLE_MAX_HEIGHT: "max-h-96",
 } as const;
 
 // Separate component for each loan row to avoid Rules of Hooks violation
@@ -50,18 +46,14 @@ function LoanRow({
   const { token } = useJBTokenContext();
   const projectTokenDecimals = token?.data?.decimals ?? 18;
 
-  // Null token config is LOADING: don't format or quote with ETH/18 defaults.
-  const chainTokenConfig = getTokenConfigForChain(suckerGroupData, loan.chainId);
-
-  const baseTokenSymbol = chainTokenConfig
-    ? (chainTokenConfig.symbol ?? getTokenSymbolFromAddress(chainTokenConfig.token))
-    : undefined;
+  const {
+    source: chainTokenConfig,
+    pending,
+    retry,
+  } = useLoanToken(loan, suckerGroupData?.suckerGroup?.projects?.items ?? [], true);
+  const baseTokenSymbol = chainTokenConfig?.symbol;
   const baseTokenDecimals = chainTokenConfig?.decimals;
-
-  const borrowAmount =
-    baseTokenDecimals !== undefined
-      ? Number(formatUnits(BigInt(loan.borrowAmount), baseTokenDecimals)).toFixed(4)
-      : undefined;
+  const sourceReady = chainTokenConfig?.currency !== undefined;
 
   // Calculate headroom: current value of collateral - borrowed amount. The quote is keyed
   // on the loan's OWN (chainId, projectId) — V6 project ids are per-chain, so the route
@@ -70,24 +62,22 @@ function LoanRow({
   const { capacity: currentCollateralValue } = useBorrowableAmountFrom({
     chainId: loan.chainId as JBChainId,
     address: getRevnetLoanContract(6, loan.chainId as JBChainId),
-    args: chainTokenConfig
-      ? [
-          BigInt(loan.projectId),
-          BigInt(loan.collateral),
-          BigInt(chainTokenConfig.decimals),
-          BigInt(chainTokenConfig.currency),
-        ]
-      : undefined,
+    args:
+      sourceReady && chainTokenConfig
+        ? [
+            BigInt(loan.projectId),
+            BigInt(loan.collateral),
+            BigInt(chainTokenConfig.decimals),
+            BigInt(chainTokenConfig.currency!),
+          ]
+        : undefined,
   });
 
   const headroom =
-    currentCollateralValue && currentCollateralValue > BigInt(loan.borrowAmount)
-      ? currentCollateralValue - BigInt(loan.borrowAmount)
-      : 0n;
-
-  const headroomAmount =
-    baseTokenDecimals !== undefined
-      ? Number(formatUnits(headroom, baseTokenDecimals)).toFixed(6)
+    currentCollateralValue !== undefined && sourceReady
+      ? currentCollateralValue > BigInt(loan.borrowAmount)
+        ? currentCollateralValue - BigInt(loan.borrowAmount)
+        : 0n
       : undefined;
 
   return (
@@ -103,7 +93,17 @@ function LoanRow({
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="whitespace-nowrap">
-              {borrowAmount !== undefined ? `${borrowAmount} ${baseTokenSymbol}` : "…"}
+              {baseTokenDecimals !== undefined ? (
+                <TokenAmount
+                  value={BigInt(loan.borrowAmount)}
+                  decimals={baseTokenDecimals}
+                  symbol={baseTokenSymbol}
+                />
+              ) : pending ? (
+                "…"
+              ) : (
+                "Unavailable"
+              )}
             </span>
           </TooltipTrigger>
           <TooltipContent>Loan ID: {loan.id?.toString() ?? "Unavailable"}</TooltipContent>
@@ -111,15 +111,22 @@ function LoanRow({
       </TableCell>
       <TableCell className="text-left px-3 py-2">
         <span className="whitespace-nowrap">
-          {Number(formatUnits(BigInt(loan.collateral), projectTokenDecimals)).toFixed(
-            LOAN_CONSTANTS.DECIMAL_PLACES.COLLATERAL_AMOUNT,
-          )}
-          &nbsp;{tokenSymbol}
+          <TokenAmount
+            value={BigInt(loan.collateral)}
+            decimals={projectTokenDecimals}
+            symbol={tokenSymbol}
+          />
         </span>
       </TableCell>
       <TableCell className="text-left px-3 py-2">
         <span className="whitespace-nowrap">
-          {headroomAmount !== undefined ? `${headroomAmount} ${baseTokenSymbol}` : "…"}
+          {baseTokenDecimals !== undefined && headroom !== undefined ? (
+            <TokenAmount value={headroom} decimals={baseTokenDecimals} symbol={baseTokenSymbol} />
+          ) : pending ? (
+            "…"
+          ) : (
+            "Unavailable"
+          )}
         </span>
       </TableCell>
       <TableCell className="text-left px-3 py-2">
@@ -127,10 +134,26 @@ function LoanRow({
           {formatSeconds(Math.max(0, loan.prepaidDuration - (now - Number(loan.createdAt))))}
         </span>
       </TableCell>
-      <TableCell className="text-center px-3 py-2">
+      <TableCell className="sticky right-0 bg-melon-50 text-center px-3 py-2">
+        {!sourceReady && (
+          <div className="mb-1 text-xs text-gray-600">
+            {pending ? (
+              "Checking loan token…"
+            ) : (
+              <>
+                Loan token context unavailable.{" "}
+                <button type="button" className="underline" onClick={() => void retry()}>
+                  Retry
+                </button>
+              </>
+            )}
+          </div>
+        )}
         <div className="flex gap-1 justify-center">
           <Button
             size="sm"
+            disabled={!sourceReady}
+            title={!sourceReady ? "Waiting for this loan’s source token context." : undefined}
             onClick={() => onSelectLoan?.(loan.id, Number(loan.chainId), Number(loan.projectId))}
             className="text-xs px-2 py-1 bg-teal-500 text-melon-950 hover:bg-teal-600"
           >
@@ -139,6 +162,8 @@ function LoanRow({
           {onReallocateLoan && (
             <Button
               size="sm"
+              disabled={!sourceReady}
+              title={!sourceReady ? "Waiting for this loan’s source token context." : undefined}
               onClick={() => onReallocateLoan(loan)}
               className="text-xs px-2 py-1 bg-teal-500 text-melon-950 hover:bg-teal-600"
             >
@@ -184,7 +209,7 @@ export function LoanDetailsTable({
   tokenSymbol: string;
   title?: string;
   selectedLoanId?: string;
-  projects: Array<Pick<Project, "projectId" | "chainId">>;
+  projects: Array<LoanTokenProject & Pick<Project, "chainId" | "projectId">>;
 }) {
   const currentChainId = useJBChainId();
 
@@ -244,22 +269,20 @@ export function LoanDetailsTable({
   return (
     <>
       {title && <p className="text-md font-semibold mt-6 mb-4 text-black">{title}</p>}
-      <div
-        className={
-          LOAN_CONSTANTS.TABLE_MAX_HEIGHT + " overflow-auto bg-zinc-50 border border-zinc-200"
-        }
-      >
-        <div className="flex flex-col overflow-x-auto">
+      <div className="border border-zinc-200">
+        <div className="flex flex-col">
           <div className="min-w-full">
-            <Table>
+            <Table containerClassName="max-h-96">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-left px-3 py-2">Chain</TableHead>
+                  <TableHead className="text-left px-3 py-2">Network</TableHead>
                   <TableHead className="text-left px-3 py-2">Borrowed</TableHead>
-                  <TableHead className="text-left px-3 py-2">Locked Collateral</TableHead>
-                  <TableHead className="text-left px-3 py-2">Refinanceable</TableHead>
-                  <TableHead className="text-left px-3 py-2">Fees Increase In</TableHead>
-                  <TableHead className="text-left px-3 py-2">Actions</TableHead>
+                  <TableHead className="text-left px-3 py-2">Tokens backing loan</TableHead>
+                  <TableHead className="text-left px-3 py-2">Extra borrowing capacity</TableHead>
+                  <TableHead className="text-left px-3 py-2">Repayment cost rises in</TableHead>
+                  <TableHead className="sticky right-0 bg-melon-100 text-left px-3 py-2">
+                    Actions
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

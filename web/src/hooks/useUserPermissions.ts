@@ -22,7 +22,7 @@ export function useUserPermissions() {
   const publicClient = usePublicClient({ chainId });
   const enabled = !!chainId && !!projectId && !!address && !!publicClient;
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ["live-project-permissions", chainId, projectId?.toString(), address?.toLowerCase()],
     enabled,
     staleTime: 15_000,
@@ -69,5 +69,8 @@ export function useUserPermissions() {
     hasPermission,
     permissions: userPermissions,
     isLoading,
+    isError: enabled && isError,
+    isFetching,
+    refetch,
   };
 }

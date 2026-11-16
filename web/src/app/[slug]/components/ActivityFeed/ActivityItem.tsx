@@ -1,14 +1,18 @@
 "use client";
 
+import { chainDisplayName } from "@/app/constants";
 import { ChainLogo } from "@/components/ChainLogo";
 import { DateRelative } from "@/components/DateRelative";
 import EtherscanLink from "@/components/EtherscanLink";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
+import { StickyRecipient } from "@/components/sticky/StickyRecipient";
 import { useJBTokenContext } from "@/lib/nana/project";
 import type { JBChainId } from "@/lib/nana/types";
+import { stickyRecipientLabel } from "@/lib/sticky";
 import { formatTokenSymbol } from "@/lib/utils";
-import { JB_CHAINS } from "@bananapus/nana-sdk-core";
+import { JB_CHAINS, SPLITS_TOTAL_PERCENT } from "@bananapus/nana-sdk-core";
 import { Address } from "viem";
+import { formatShopAmount, useShopInventory, useTierMedia } from "../v6/shop/shopLib";
 
 type ActivityEventType =
   | "in"
@@ -28,7 +32,40 @@ type ActivityEventType =
   | "buybackPool"
   | "payout"
   | "reserved"
-  | "reservedSplit";
+  | "reservedSplit"
+  | "bridgeSend"
+  | "bridgeClaim"
+  | "borrowLoan"
+  | "repayLoan"
+  | "liquidateLoan"
+  | "mintNft";
+
+const ACTIVITY_LABELS: Record<ActivityEventType, string> = {
+  in: "Payment",
+  out: "Cash out",
+  addToBalance: "Deposit",
+  mint: "Minted",
+  autoIssue: "Auto issuance",
+  deployErc20: "Token deployed",
+  projectCreate: "Created",
+  projectTransfer: "Ownership",
+  operatorPermissionsSet: "Permissions",
+  rulesetQueued: "Rules queued",
+  swapBuy: "Swap",
+  swapSell: "Swap",
+  issuance: "Issuance",
+  swap: "Swap",
+  buybackPool: "Buyback pool",
+  payout: "Payout",
+  reserved: "Splits",
+  reservedSplit: "Splits",
+  bridgeSend: "Bridged out",
+  bridgeClaim: "Bridged in",
+  borrowLoan: "Loan",
+  repayLoan: "Loan repaid",
+  liquidateLoan: "Loan liquidated",
+  mintNft: "Item minted",
+};
 
 export interface ActivityEvent {
   id: string;
@@ -37,11 +74,15 @@ export interface ActivityEvent {
   timestamp: number;
   beneficiary: Address;
   chainId: JBChainId;
+  /** Matching setup on other chains, each with its own original transaction. */
+  chains?: { chainId: JBChainId; txHash: string }[];
   baseAmount?: string;
   /** The unabbreviated amount (and raw accounting amount when the headline is USD). */
   exactAmount?: string;
   baseTokenSymbol?: string;
   tokenCount?: string;
+  /** Exact whole-token amount retained when the displayed count is abbreviated. */
+  exactTokenCount?: string;
   /** The unformatted token count, for ordering same-tx reserved-split receipts. */
   rawTokenCount?: string;
   memo?: string;
@@ -51,6 +92,10 @@ export interface ActivityEvent {
   also?: ActivityEvent[];
   /** Set on a pay that shares its tx with other pays: who this one was for. */
   payee?: Address;
+  /** A 721 mint: which item, what was paid for it, and for which project. */
+  item?: { projectId: number; tierId: number; amountPaid: string };
+  /** A reserved-split receipt paid to Sticky holders: the group and the Sticky token. */
+  sticky?: { projectId: bigint; beneficiary: Address };
 }
 
 /** A tx with several pays reads "<total> from <payer>" and names who got what. */
@@ -107,6 +152,8 @@ type DescriptionParts = {
   post?: string;
   /** An address the sentence ends on, rendered as a profile link. */
   recipient?: Address;
+  /** Sticky holders the sentence ends on, named by group and token. */
+  sticky?: { projectId: bigint; beneficiary: Address };
 };
 
 function descriptionParts(
@@ -169,12 +216,25 @@ function descriptionParts(
       return { pre: "set the buyback pool" };
     case "payout":
       return { pre: "sent payouts" };
+    case "bridgeSend":
+      return { pre: "sending ", strong: count, post: ` to ${event.detail}` };
+    case "bridgeClaim":
+      return { pre: "claimed ", strong: count, post: ` from ${event.detail}` };
+    case "borrowLoan":
+      return { pre: "borrowed against ", strong: count };
+    case "repayLoan":
+      return { pre: "repaid a loan" };
+    case "liquidateLoan":
+      return { pre: "liquidated a loan" };
     case "reserved":
       return { pre: "distributed reserved ", strong: count };
+    case "mintNft":
+      return { pre: `minted item #${event.item?.tierId ?? ""}` };
     case "reservedSplit":
       // Under its distribution a receipt names who got what; on its own it
       // is what the account received.
       if (!distributed) return { pre: "received ", strong: count, post: " from a reserved split" };
+      if (event.sticky) return { pre: "", strong: count, post: " to ", sticky: event.sticky };
       return event.detail
         ? { pre: "", strong: count, post: ` to ${event.detail}` }
         : { pre: "", strong: count, post: " to ", recipient: event.beneficiary };
@@ -190,7 +250,63 @@ function eventDescription(
   const parts = descriptionParts(event, projectTokenSymbol, distributed, fanOut);
   const shortAddress = (address?: Address) =>
     address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
-  return `${shortAddress(parts.lead)}${parts.pre}${parts.strong ?? ""}${parts.post ?? ""}${shortAddress(parts.recipient)}`;
+  return `${shortAddress(parts.lead)}${parts.pre}${parts.strong ?? ""}${parts.post ?? ""}${shortAddress(parts.recipient)}${parts.sticky ? stickyRecipientLabel(parts.sticky) : ""}`;
+}
+
+/** Hand-rolled markers: the dot sits flush left while wrapped lines keep hanging-indent alignment with the first line's text. */
+const BULLET_CLASS =
+  "relative break-words pl-3.5 before:absolute before:left-0 before:top-[5px] before:h-1.5 before:w-1.5 before:rounded-full before:bg-zinc-300 before:content-['']";
+
+/**
+ * "minted item #2" grows into the item's name and, when the tier splits its
+ * sales, a second bullet for the share of this payment that went to the split
+ * recipients — the part of the price the buyer's token count does not account for.
+ */
+function ItemMintBullets({
+  chainId,
+  item,
+}: {
+  chainId: JBChainId;
+  item: NonNullable<ActivityEvent["item"]>;
+}) {
+  const shop = useShopInventory(chainId, BigInt(item.projectId));
+  const tier = shop.data?.tiers.find((entry) => entry.id === item.tierId);
+  const media = useTierMedia(
+    chainId,
+    tier && shop.data
+      ? {
+          hook: shop.data.hook,
+          store: shop.data.store,
+          tiers: [tier],
+          hasResolver: shop.data.tiers.some((entry) => entry.resolvedUri),
+        }
+      : null,
+  );
+  const name = media.data[item.tierId]?.name;
+  const split =
+    tier && shop.data && tier.splitPercent > 0
+      ? {
+          amount: `${formatShopAmount(
+            (BigInt(item.amountPaid) * BigInt(tier.splitPercent)) / BigInt(SPLITS_TOTAL_PERCENT),
+            shop.data.pricing.decimals,
+          )} ${shop.data.pricing.symbol}`,
+          percent: `${tier.splitPercent / 1e7}%`,
+        }
+      : null;
+  return (
+    <>
+      <li className={BULLET_CLASS}>
+        minted item #{item.tierId}
+        {name ? ` (${name})` : ""}
+      </li>
+      {split ? (
+        <li className={BULLET_CLASS}>
+          <span className="font-medium">{split.amount}</span>
+          {` (${split.percent}) sent to item recipients`}
+        </li>
+      ) : null}
+    </>
+  );
 }
 
 /** Project-page wrapper: reads the project token context for the symbol. */
@@ -225,23 +341,42 @@ export function ActivityItemRow({
     event.type === "swapBuy" ||
     event.type === "issuance";
   const isOutflow = event.type === "out" || event.type === "swapSell";
+  // These rows identify the recipient, which need not be the caller.
+  const isRecipient =
+    event.type === "mint" ||
+    event.type === "autoIssue" ||
+    event.type === "reservedSplit" ||
+    event.type === "mintNft";
   // A reserved distribution leads with the count the way value flows lead
   // with the amount: "3.6M ART" tagged "reserved distro".
   const isReserved = event.type === "reserved";
-  const hasTitle = !!event.baseAmount || isInflow || isOutflow || isReserved;
+  const hasFlowTitle = !!event.baseAmount || isInflow || isOutflow || isReserved;
   const distributed = distributesReserved(event);
   const fanOut = fansOut([event, ...(event.also ?? [])]);
   // One fragment per same-tx event: a lone one reads inline, several read as bullets.
-  const fragments = describableEntries(event).map((entry) => {
+  const fragments = describableEntries(event).map((entry, index) => {
+    if (entry.type === "mintNft" && entry.item) {
+      return <ItemMintBullets key={index} chainId={entry.chainId} item={entry.item} />;
+    }
     const parts = descriptionParts(entry, projectTokenSymbol, distributed, fanOut);
     return (
-      <>
+      <li key={index} className={BULLET_CLASS}>
         {parts.lead ? <ProfileAvatar address={parts.lead} short chain={chain} /> : null}
         {parts.pre}
-        {parts.strong ? <span className="font-medium">{parts.strong}</span> : null}
+        {parts.strong ? (
+          <span
+            className="font-medium"
+            title={
+              entry.exactTokenCount ? `${entry.exactTokenCount} ${projectTokenSymbol}` : undefined
+            }
+          >
+            {parts.strong}
+          </span>
+        ) : null}
         {parts.post}
         {parts.recipient ? <ProfileAvatar address={parts.recipient} short chain={chain} /> : null}
-      </>
+        {parts.sticky ? <StickyRecipient split={parts.sticky} chainId={entry.chainId} /> : null}
+      </li>
     );
   });
   const description = combinedDescription(event, projectTokenSymbol);
@@ -272,7 +407,7 @@ export function ActivityItemRow({
   return (
     <div className="py-3 border-b border-zinc-200 last:border-b-0 flex gap-2">
       <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between gap-2 text-xs text-zinc-500">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
           {/* One shape for every row: the flow cluster left with "time on
               <chain>" right, the prefixed actor below, then the memo headline
               and the actions as fine-print bullets. The exact value is one
@@ -306,31 +441,49 @@ export function ActivityItemRow({
                 reserved distro
               </span>
             )}
-            {/* No amount and no flow tag = nothing for the title slot; the
-                actor takes its place (bare, no "to/from/by") instead of
-                leaving a blank line. */}
-            {!hasTitle && (
-              <span className="min-w-0 truncate text-xs">
-                <ProfileAvatar address={event.beneficiary} short chain={chain} />
+            {!hasFlowTitle && (
+              <span className="inline-flex h-5 items-center border border-zinc-300 px-1.5 text-[10px] font-medium leading-none text-zinc-600">
+                {ACTIVITY_LABELS[event.type]}
               </span>
             )}
           </span>
           <span className="flex shrink-0 items-center gap-1.5">
             <EtherscanLink type="tx" value={event.txHash} chain={chain}>
-              <DateRelative timestamp={event.timestamp} />
+              <DateRelative timestamp={event.timestamp} insideLink />
             </EtherscanLink>
-            <span>on</span>
-            <ChainLogo chainId={event.chainId} width={14} height={14} />
+            {event.chains ? (
+              <span className="isolate inline-flex items-center">
+                {event.chains.map((entry, index, chains) => (
+                  <span
+                    key={entry.chainId}
+                    className="relative -ml-1.5 inline-flex first:ml-0"
+                    style={{ zIndex: chains.length - index }}
+                  >
+                    <EtherscanLink
+                      type="tx"
+                      value={entry.txHash}
+                      chain={JB_CHAINS[entry.chainId].chain}
+                      className="inline-flex items-center justify-center rounded-full hover:opacity-70"
+                    >
+                      <span className="sr-only">
+                        View transaction on {chainDisplayName(entry.chainId)}
+                      </span>
+                      <ChainLogo chainId={entry.chainId} width={18} height={18} />
+                    </EtherscanLink>
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <ChainLogo chainId={event.chainId} width={18} height={18} standalone />
+            )}
           </span>
         </div>
-        {hasTitle && (
-          <p className="mt-1 flex min-w-0 items-center gap-1 text-xs text-zinc-500">
-            {isOutflow ? "to" : isInflow ? "from" : "by"}{" "}
-            <span className="min-w-0 truncate">
-              <ProfileAvatar address={event.beneficiary} short chain={chain} />
-            </span>
-          </p>
-        )}
+        <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-zinc-500">
+          {isOutflow || isRecipient ? "to" : isInflow ? "from" : "by"}{" "}
+          <span className="min-w-0 truncate">
+            <ProfileAvatar address={event.beneficiary} short chain={chain} />
+          </span>
+        </div>
         {event.memo && (
           <p className="text-sm text-zinc-700 break-all mt-3">
             <button
@@ -345,16 +498,7 @@ export function ActivityItemRow({
           </p>
         )}
         <ul className={`${event.memo ? "mt-1" : "mt-3"} space-y-0.5 text-xs text-zinc-500`}>
-          {/* Hand-rolled markers: the dot sits flush left while wrapped
-              lines keep hanging-indent alignment with the first line's text. */}
-          {fragments.map((fragment, index) => (
-            <li
-              key={index}
-              className="relative break-words pl-3.5 before:absolute before:left-0 before:top-[5px] before:h-1.5 before:w-1.5 before:rounded-full before:bg-zinc-300 before:content-['']"
-            >
-              {fragment}
-            </li>
-          ))}
+          {fragments}
         </ul>
       </div>
     </div>

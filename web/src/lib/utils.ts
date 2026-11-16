@@ -2,6 +2,7 @@ import { chainSortIndex } from "@/app/constants";
 import { mainnet } from "@/lib/chains";
 import type { JBChainId, JBTokenContextData } from "@/lib/nana/types";
 import { CashOutTaxRate, JB_CHAINS, ReservedPercent } from "@bananapus/nana-sdk-core";
+import { transactionMessage as formatTransactionMessage } from "@bananapus/nana-sdk-core/review";
 import { twMerge } from "tailwind-merge";
 import { Address, Chain, formatEther } from "viem";
 
@@ -109,9 +110,15 @@ export function formatEthAddress(
 /**
  * Return percentage of numerator / denominator (e.g. 69 for 69%)
  */
-export function formatPortion(numerator: bigint, denominator: bigint) {
+function formatPortion(numerator: bigint, denominator: bigint) {
   if (numerator === 0n || denominator === 0n) return 0;
   return parseFloat(((numerator * 100000n) / denominator).toString()) / 1000;
+}
+
+/** A holder's share for display: a real share below the 0.001% resolution never reads as nothing. */
+export function formatShare(numerator: bigint, denominator: bigint): string {
+  const portion = formatPortion(numerator, denominator);
+  return portion === 0 && numerator > 0n && denominator > 0n ? "<0.001%" : `${portion}%`;
 }
 
 /** Return a token ticker without a legacy leading dollar sign. */
@@ -201,14 +208,16 @@ export function decodeRulesetMetadata(packed: bigint): RulesetMetadata {
   };
 }
 
+export { formatTransactionMessage };
+
 export function formatWalletError(error: unknown, defaultMessage = "Please try again") {
-  if (typeof error === "string") return error;
-  if (!error || typeof error !== "object") return defaultMessage;
+  if (typeof error === "string") return formatTransactionMessage(error);
+  if (!error || typeof error !== "object") return formatTransactionMessage(defaultMessage);
 
   const { shortMessage, message } = error as Record<string, unknown>;
   if (typeof shortMessage === "string" && shortMessage) {
-    return shortMessage.replace("User rejected", "You rejected");
+    return formatTransactionMessage(shortMessage.replace("User rejected", "You rejected"));
   }
-  if (typeof message === "string" && message) return message;
-  return defaultMessage;
+  if (typeof message === "string" && message) return formatTransactionMessage(message);
+  return formatTransactionMessage(defaultMessage);
 }

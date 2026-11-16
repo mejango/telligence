@@ -5,7 +5,7 @@ import { MarkdownFieldGroup } from "./MarkdownFieldGroup";
 import { useCreateForm } from "./useCreateForm";
 
 export function ProjectDetails({ disabled = false }: { disabled?: boolean }) {
-  const { setFieldValue } = useCreateForm();
+  const { values, setFieldValue } = useCreateForm();
 
   return (
     <>
@@ -24,7 +24,7 @@ export function ProjectDetails({ disabled = false }: { disabled?: boolean }) {
           <FieldGroup
             id="tokenSymbol"
             name="tokenSymbol"
-            label="Ticker"
+            label="Token symbol"
             groupClassName="min-w-0 md:col-span-6"
             maxLength={10}
             prefix="$"
@@ -39,6 +39,7 @@ export function ProjectDetails({ disabled = false }: { disabled?: boolean }) {
             </label>
             <IpfsImageUploader
               className="mb-0"
+              currentUri={values.logoUri}
               onUploadSuccess={(cid) => {
                 setFieldValue("logoUri", ipfsUri(cid));
               }}
@@ -52,7 +53,7 @@ export function ProjectDetails({ disabled = false }: { disabled?: boolean }) {
           label="About"
           groupClassName="mt-6"
           rows={3}
-          placeholder="What is the gist?"
+          placeholder="What is this revnet for?"
           description="Markdown supported. Drop or paste images to embed them."
           disabled={disabled}
         />

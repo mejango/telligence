@@ -1,16 +1,28 @@
 "use client";
 
+import { chainDisplayName } from "@/app/constants";
 import { ChainLogo } from "@/components/ChainLogo";
+import { EthereumAddress } from "@/components/EthereumAddress";
+import { StickyRecipient } from "@/components/sticky/StickyRecipient";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { SkeletonLines } from "@/components/ui/skeleton";
-import { jb721TiersHookStoreAbi, JB_CHAINS, JBChainId } from "@bananapus/nana-sdk-core";
+import { isStickyHook } from "@/lib/sticky";
+import {
+  getJBContractAddress,
+  jb721TiersHookStoreAbi,
+  JB_CHAINS,
+  JBChainId,
+  JBCoreContracts,
+  jbSplitsAbi,
+} from "@bananapus/nana-sdk-core";
 import { effectiveTierPrice, getProject721Shop } from "@bananapus/nana-sdk-core/v6";
 import { useQuery } from "@tanstack/react-query";
-import { PublicClient } from "viem";
-import { useConfig } from "wagmi";
+import { Address, PublicClient, zeroAddress } from "viem";
+import { useConfig, useReadContract } from "wagmi";
 import { getPublicClient } from "wagmi/actions";
 import { ProjectItem } from "../shared";
 import {
+  customVotingUnits,
   describeTransferSchedule,
   discountLabel,
   formatShopAmount,
@@ -19,15 +31,17 @@ import {
   TIER_UNLIMITED_SUPPLY,
   tierDisplayName,
   TierMedia,
+  tierSaleShares,
   useTierCart,
 } from "./shopLib";
+import type { ItemChange } from "./shopMediaEdit";
 import { TierMediaPreview } from "./TierMediaPreview";
 
 const FLAG_DESCRIPTIONS: [keyof NonNullable<ShopTier["flags"]>, string, string][] = [
   [
     "allowOwnerMint",
-    "Revnet operator can mint",
-    "The revnet operator can mint this item for free, without a payment.",
+    "Operator can give items",
+    "The operator can create and give this item without a payment.",
   ],
   ["cantBeRemoved", "Cannot be removed", "This item can never be removed from the shop."],
   [
@@ -37,8 +51,8 @@ const FLAG_DESCRIPTIONS: [keyof NonNullable<ShopTier["flags"]>, string, string][
   ],
   [
     "cantBuyWithCredits",
-    "No credit buys",
-    "Buyers can't use shop credits to mint this item — only a fresh payment.",
+    "Payment required",
+    "This item requires a payment. Shop credits cannot be used.",
   ],
 ];
 
@@ -54,7 +68,7 @@ export function TierDetailModal({
   tier,
   media,
   onMint,
-  onEditMedia,
+  onChangeItem,
   onClose,
 }: {
   shop: ShopInventory;
@@ -63,7 +77,8 @@ export function TierDetailModal({
   tier: ShopTier;
   media: TierMedia | undefined;
   onMint?: () => void;
-  onEditMedia?: () => void;
+  /** Present for a wallet that can manage the item; each dialog refuses a missing permission. */
+  onChangeItem?: (change: ItemChange) => void;
   onClose: () => void;
 }) {
   const config = useConfig();
@@ -200,19 +215,29 @@ export function TierDetailModal({
                   ? "Sold out"
                   : tier.unlimited
                     ? "Unlimited inventory"
-                    : `${tier.remaining.toLocaleString("en-US")} left on ${JB_CHAINS[chainId]?.name ?? "this chain"}`}
+                    : `${tier.remaining.toLocaleString("en-US")} left on ${chainDisplayName(chainId)}`}
               </span>
             </div>
 
-            {onEditMedia ? (
-              <button
-                type="button"
-                onClick={onEditMedia}
-                className="mt-3 block text-sm font-medium text-teal-700 underline underline-offset-4 hover:text-teal-900"
-              >
-                Replace media across chains →
-              </button>
-            ) : null}
+            {onChangeItem
+              ? (
+                  [
+                    ["media", "Replace media across chains →"],
+                    ["details", "Edit details →"],
+                    ["discount", "Set discount →"],
+                    ...(tier.flags?.cantBeRemoved ? [] : [["remove", "Remove item →"]]),
+                  ] as [ItemChange, string][]
+                ).map(([change, label]) => (
+                  <button
+                    key={change}
+                    type="button"
+                    onClick={() => onChangeItem(change)}
+                    className="mt-3 block text-sm font-medium text-teal-700 underline underline-offset-4 hover:text-teal-900"
+                  >
+                    {label}
+                  </button>
+                ))
+              : null}
 
             {onMint ? (
               <button
@@ -220,7 +245,7 @@ export function TierDetailModal({
                 onClick={onMint}
                 className="mt-3 text-sm font-medium text-teal-700 underline underline-offset-4 hover:text-teal-900"
               >
-                Mint to a beneficiary without payment →
+                Give to a recipient without payment →
               </button>
             ) : null}
 
@@ -239,7 +264,7 @@ export function TierDetailModal({
                     >
                       <span className="inline-flex items-center gap-1.5 text-zinc-600">
                         <ChainLogo chainId={row.chainId} width={15} height={15} />
-                        {JB_CHAINS[row.chainId]?.name ?? `Chain ${row.chainId}`}
+                        {chainDisplayName(row.chainId)}
                       </span>
                       <span className="tabular-nums text-zinc-900">
                         {row.state === "missing"
@@ -270,19 +295,28 @@ export function TierDetailModal({
                 <Fact label="Current discount" value={discountLabel(tier.discountPercent)} />
               ) : null}
               {tier.reserveFrequency > 0 ? (
-                <Fact label="Reserve mint" value={`1 per ${tier.reserveFrequency} sold`} />
+                <Fact label="Items set aside" value={`1 per ${tier.reserveFrequency} sold`} />
               ) : null}
-              {tier.votingUnits > 0n ? (
+              {customVotingUnits(tier) !== null ? (
                 <Fact label="Voting units" value={tier.votingUnits.toLocaleString("en-US")} />
-              ) : null}
-              {tier.splitPercent > 0 ? (
-                <Fact label="Split" value={`${tier.splitPercent / 1e7}% of sales`} />
               ) : null}
             </dl>
 
+            {tier.splitPercent > 0 ? (
+              <TierSaleRouting
+                chainId={chainId}
+                projectId={projects.find((p) => p.chainId === chainId)?.projectId}
+                hook={shop.hook}
+                tier={tier}
+                issueTokensForSplits={shop.configFlags?.issueTokensForSplits ?? false}
+              />
+            ) : null}
+
             {setFlags.length > 0 ? (
               <div className="mt-4 border-t border-zinc-200 pt-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Flags</p>
+                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Item rules
+                </p>
                 <div className="mt-2 space-y-2">
                   {setFlags.map(([flag, label, description]) => (
                     <div key={flag}>
@@ -298,6 +332,93 @@ export function TierDetailModal({
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * Where each sale of this tier goes. The tier's split share is paid out to
+ * its split group (`groupId = hook | tierId << 160`, ruleset 0); whatever the
+ * group leaves unclaimed, and everything outside the share, lands in the
+ * project's balance.
+ */
+function TierSaleRouting({
+  chainId,
+  projectId,
+  hook,
+  tier,
+  issueTokensForSplits,
+}: {
+  chainId: JBChainId;
+  projectId: number | undefined;
+  hook: Address;
+  tier: ShopTier;
+  issueTokensForSplits: boolean;
+}) {
+  const splits = useReadContract({
+    chainId,
+    address: getJBContractAddress(JBCoreContracts.JBSplits, 6, chainId),
+    abi: jbSplitsAbi,
+    functionName: "splitsOf",
+    args: [BigInt(projectId ?? 0), 0n, BigInt(hook) | (BigInt(tier.id) << 160n)],
+    query: { enabled: projectId !== undefined, staleTime: 60_000 },
+  });
+
+  const { rows, treasuryBps } = tierSaleShares(tier.splitPercent, splits.data ?? []);
+
+  return (
+    <div className="mt-4 border-t border-zinc-200 pt-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+        Where each sale goes
+      </p>
+      {splits.isPending && projectId !== undefined ? (
+        <SkeletonLines className="mt-2" lines={2} />
+      ) : splits.isError || projectId === undefined ? (
+        <p className="mt-2 text-xs text-zinc-500">
+          {formatBps(BigInt(tier.splitPercent) / 100_000n)} of each sale is split with recipients we
+          could not read; the rest goes to the project.
+        </p>
+      ) : (
+        <dl className="mt-2 space-y-1.5 text-xs">
+          {rows.map(({ split, bps }, index) => {
+            const toProject = split.projectId > 0n;
+            const toHook = split.hook.toLowerCase() !== zeroAddress;
+            return (
+              <div key={index} className="flex items-start justify-between gap-4">
+                <dt className="min-w-0 text-zinc-900">
+                  {isStickyHook(split.hook, chainId) ? (
+                    <StickyRecipient split={split} chainId={chainId} />
+                  ) : toProject ? (
+                    `Project #${split.projectId.toString()}`
+                  ) : (
+                    <EthereumAddress
+                      address={toHook ? split.hook : split.beneficiary}
+                      chain={JB_CHAINS[chainId].chain}
+                      short
+                      withEnsName
+                    />
+                  )}
+                </dt>
+                <dd className="tabular-nums text-zinc-900">{formatBps(bps)}</dd>
+              </div>
+            );
+          })}
+          <div className="flex items-start justify-between gap-4">
+            <dt className="text-zinc-500">This project</dt>
+            <dd className="tabular-nums text-zinc-900">{formatBps(treasuryBps)}</dd>
+          </div>
+        </dl>
+      )}
+      {!issueTokensForSplits ? (
+        <p className="mt-2 text-xs text-zinc-500">
+          Tokens are issued on the {formatBps(10_000n - BigInt(tier.splitPercent) / 100_000n)} the
+          project keeps, not the full price.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function formatBps(bps: bigint) {
+  return `${(Number(bps) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}%`;
 }
 
 function Fact({ label, value }: { label: string; value: string }) {

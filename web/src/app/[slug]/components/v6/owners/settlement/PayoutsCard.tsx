@@ -4,8 +4,11 @@ import { ButtonWithWallet } from "@/components/ButtonWithWallet";
 import { ChainLogo } from "@/components/ChainLogo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { TxError } from "@/components/ui/TxError";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { useMultichainBatch } from "@/hooks/useMultichainBatch";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
+import { reviewClosed } from "@/lib/review-refusal";
 import { formatWalletError } from "@/lib/utils";
 import { getViemPublicClient } from "@/lib/wagmiTransports";
 import { useQuery } from "@tanstack/react-query";
@@ -28,6 +31,24 @@ type ReviewedPayout = {
   account: Address;
   destinations: { option: PayoutOption; call: ReturnType<typeof buildPayoutCall> }[];
 };
+
+/** Each payout's amount, floor, ruleset, terminal, token and recipients, as its review shows them. */
+function payoutContext(review: ReviewedPayout) {
+  return review.destinations.map(({ option, call }) => ({
+    label: `Project #${option.projectId} on ${chainName(option.chainId)}`,
+    value: `${formatUnits(call.args[2], option.decimals)} ${payoutCurrencyLabel(option)}`,
+    lines: [
+      `Minimum ${formatUnits(call.args[4], option.decimals)} ${option.symbol} before fees`,
+      `Ruleset ${option.rulesetId}, cycle ${option.cycleNumber}`,
+      `Terminal ${option.terminal}`,
+      `Token ${option.token}`,
+      ...payoutRecipients(option, review.account),
+    ],
+  }));
+}
+
+const optionLabel = (option: PayoutOption) =>
+  `${option.symbol}, limit in ${payoutCurrencyLabel(option)}`;
 
 function defaultMinimum(option: PayoutOption, amount: string): string {
   try {
@@ -53,6 +74,11 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The chains come from the server sucker-group list: pay out only on registry-listed pairs.
+  const selectedChains = chains.filter((chain) => selected.has(chain.chainId));
+  // A saved batch resumed from storage is checked against the whole group: its calls
+  // carry no generic project id, so any unlisted pair holds the resume.
+  const gate = useGroupWriteGate(pending ? chains : selectedChains);
   const {
     data = [],
     isLoading,
@@ -79,6 +105,7 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
     try {
       const selectedRows = data.filter((row) => selected.has(row.chainId));
       if (!selectedRows.length) throw new Error("Select at least one chain.");
+      gate.assertVerified(selectedChains);
       const destinations = await Promise.all(
         selectedRows.map(async (row) => {
           const selectedOption = optionFor(row);
@@ -108,7 +135,7 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
   };
 
   const submit = async (resume = false) => {
-    if (!address || busy || (!review && !resume)) return;
+    if (!address || busy || (!review && !resume) || (resume && gate.blocked)) return;
     if (!resume && review?.account.toLowerCase() !== address.toLowerCase()) {
       setReview(null);
       setError("Your connected account changed. Review the payouts again.");
@@ -117,8 +144,10 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
     setBusy(true);
     setError(null);
     try {
+      if (!resume) gate.assertVerified(review!.destinations.map(({ option }) => option));
       const outcome = await runBatch({
         label: "Send project payouts",
+        context: resume ? undefined : payoutContext(review!),
         scope,
         calls: resume ? [] : review!.destinations.map(({ call }) => call),
         onProgress: setStatus,
@@ -131,7 +160,8 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
       setReview(null);
       if (outcome.status === "success") await refetch();
     } catch (failure) {
-      setError(formatWalletError(failure) || "Could not send payouts.");
+      if (reviewClosed(failure)) setReview(null);
+      else setError(formatWalletError(failure) || "Could not send payouts.");
     } finally {
       setBusy(false);
     }
@@ -141,17 +171,17 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
     <section className="border border-zinc-200 bg-melon-50 p-4">
       <h3 className="font-medium text-zinc-900">Payouts</h3>
       <p className="mt-1 text-sm text-zinc-500">
-        Distribute the available payout allowance to each chain&apos;s configured recipients. Any
-        unallocated share goes to that chain&apos;s project owner. Protocol fees apply.
+        Send each chain&apos;s allowed payout to its listed recipients. Any share without a
+        recipient goes to that chain&apos;s project owner.
       </p>
       {pending ? (
-        <div className="mt-3 border border-amber-300 bg-amber-50 p-3 text-sm">
+        <div className="mt-3 border border-amber-300 p-3 text-sm">
           <p>
             Saved payout progress: {pending.completed}/{pending.total} complete.
           </p>
           <ButtonWithWallet
-            disabled={busy}
-            loading={busy}
+            disabled={busy || gate.blocked}
+            loading={busy || gate.pending}
             className="mt-2"
             onClick={() => void submit(true)}
           >
@@ -159,7 +189,7 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
           </ButtonWithWallet>
         </div>
       ) : null}
-      <div className="mt-3 flex gap-3">
+      <div className="mt-3 flex flex-wrap gap-3">
         <Button
           size="sm"
           variant="outline"
@@ -206,7 +236,7 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
                   }}
                 />
                 <ChainLogo chainId={row.chainId} width={16} height={16} />
-                {chainName(row.chainId)} · Project #{String(row.projectId)}
+                {chainName(row.chainId)}
               </label>
               {row.error ? (
                 <p className="mt-1 text-sm text-red-600">Could not verify payouts: {row.error}</p>
@@ -217,7 +247,7 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
                   {row.options.length > 1 ? (
                     <select
                       aria-label={`Payout asset on ${chainName(row.chainId)}`}
-                      className="mt-2 w-full border border-zinc-200 p-2 text-sm"
+                      className="mt-2 block h-9 max-w-full border-2 border-melon-300 bg-melon-25 px-2 py-0 pr-8 text-md hover:border-melon-400 focus:border-melon-600 focus:outline-none focus:ring-0"
                       value={option.key}
                       disabled={busy || Boolean(pending)}
                       onChange={(event) =>
@@ -226,15 +256,20 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
                     >
                       {row.options.map((candidate) => (
                         <option key={candidate.key} value={candidate.key}>
-                          {candidate.symbol}, limit in {payoutCurrencyLabel(candidate)} ·{" "}
-                          {candidate.terminal}
+                          {optionLabel(candidate)}
+                          {row.options.some(
+                            (other) =>
+                              other !== candidate && optionLabel(other) === optionLabel(candidate),
+                          )
+                            ? `, ${candidate.terminal.slice(0, 6)}…${candidate.terminal.slice(-4)}`
+                            : ""}
                         </option>
                       ))}
                     </select>
                   ) : null}
                   <p className="mt-1 text-xs text-zinc-500">
                     Available {formatUnits(option.availableAmount, option.decimals)}{" "}
-                    {payoutCurrencyLabel(option)} · Terminal balance{" "}
+                    {payoutCurrencyLabel(option)}, balance{" "}
                     {formatUnits(option.balance, option.decimals)} {option.symbol}
                   </p>
                   {selected.has(row.chainId) ? (
@@ -254,21 +289,41 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
                           }
                         />
                       </label>
-                      <label className="text-xs text-zinc-600">
-                        Minimum terminal tokens ({option.symbol}, before fees)
-                        <Input
-                          aria-label={`Minimum payout on ${chainName(row.chainId)}`}
-                          inputMode="decimal"
-                          disabled={busy || Boolean(pending)}
-                          value={minimumFor(option)}
-                          onChange={(event) =>
-                            setMinimums((current) => ({
-                              ...current,
-                              [option.key]: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
+                      <div>
+                        <label className="flex items-center gap-2 text-sm font-medium text-zinc-800">
+                          <input
+                            type="checkbox"
+                            aria-label={`Set minimum received on ${chainName(row.chainId)}`}
+                            className="h-4 w-4"
+                            disabled={busy || Boolean(pending)}
+                            checked={minimums[option.key] !== undefined}
+                            onChange={(event) => {
+                              const next = { ...minimums };
+                              if (event.target.checked) next[option.key] = minimumFor(option);
+                              else delete next[option.key];
+                              setMinimums(next);
+                            }}
+                          />
+                          Set minimum received
+                        </label>
+                        {minimums[option.key] !== undefined ? (
+                          <label className="mt-1 block text-xs text-zinc-600">
+                            Minimum received ({option.symbol}, before fees)
+                            <Input
+                              aria-label={`Minimum payout on ${chainName(row.chainId)}`}
+                              inputMode="decimal"
+                              disabled={busy || Boolean(pending)}
+                              value={minimumFor(option)}
+                              onChange={(event) =>
+                                setMinimums((current) => ({
+                                  ...current,
+                                  [option.key]: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                        ) : null}
+                      </div>
                     </div>
                   ) : null}
                 </>
@@ -277,10 +332,11 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
           );
         })
       )}
+      {gate.line ? <p className="mt-3 text-xs text-zinc-600">{gate.line}</p> : null}
       <div className="mt-4 flex justify-end">
         <ButtonWithWallet
-          disabled={busy || Boolean(pending) || !selected.size}
-          loading={busy}
+          disabled={busy || Boolean(pending) || !selected.size || gate.blocked}
+          loading={busy || gate.pending}
           onClick={() => void buildReview()}
         >
           Review selected payouts
@@ -291,53 +347,25 @@ export function PayoutsCard({ chains }: { chains: ChainProject[] }) {
           {status}
         </p>
       ) : null}
-      {error && !review ? (
-        <p role="alert" className="mt-2 text-sm text-red-600">
-          {error}
-        </p>
-      ) : null}
+      <TxError error={review ? null : error} />
       {review ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(open) => {
-            if (!open && !busy) setReview(null);
+          onClose={() => {
+            if (!busy) setReview(null);
           }}
           title="Review project payouts"
-          action="Send payouts"
-          chainId={review.destinations[0]!.option.chainId}
           steps={review.destinations.map(({ option }) => ({
             key: option.key,
             title: `Send payouts on ${chainName(option.chainId)}`,
           }))}
           activeIndex={busy ? 0 : -1}
-          onConfirm={() => void submit()}
+          start={() => void submit()}
           busy={busy}
           status={status}
           error={error}
-        >
-          {review.destinations.map(({ option, call }) => (
-            <SummaryRow
-              key={option.key}
-              label={`${chainName(option.chainId)} · Project #${option.projectId}`}
-            >
-              <span>
-                {formatUnits(call.args[2], option.decimals)} {payoutCurrencyLabel(option)}
-              </span>
-              <span className="block text-xs text-zinc-500">
-                Minimum {formatUnits(call.args[4], option.decimals)} {option.symbol} before fees ·
-                Ruleset {option.rulesetId}, cycle {option.cycleNumber}
-              </span>
-              <span className="block break-all text-xs text-zinc-500">
-                Terminal {option.terminal} · Token {option.token}
-              </span>
-              {payoutRecipients(option, review.account).map((recipient, index) => (
-                <span key={index} className="block break-all text-xs">
-                  {recipient}
-                </span>
-              ))}
-            </SummaryRow>
-          ))}
-        </TxConfirmDialog>
+          rows={payoutContext(review)}
+        />
       ) : null}
     </section>
   );

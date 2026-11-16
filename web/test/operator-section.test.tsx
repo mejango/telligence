@@ -31,11 +31,17 @@ function operatorForm(): RevnetFormData {
 }
 
 /** Selecting chains happens in an earlier section; this stands in for it. */
-function PickChains({ chainIds }: { chainIds: RevnetFormData["chainIds"] }) {
+function PickChains({
+  chainIds,
+  label = "pick-chains",
+}: {
+  chainIds: RevnetFormData["chainIds"];
+  label?: string;
+}) {
   const { setFieldValue } = useFormContext<RevnetFormData>();
   return (
     <button type="button" onClick={() => setFieldValue("chainIds", chainIds)}>
-      pick-chains
+      {label}
     </button>
   );
 }
@@ -43,9 +49,11 @@ function PickChains({ chainIds }: { chainIds: RevnetFormData["chainIds"] }) {
 function Harness({
   initialValues,
   picks,
+  picksAgain,
 }: {
   initialValues: RevnetFormData;
   picks?: RevnetFormData["chainIds"];
+  picksAgain?: RevnetFormData["chainIds"];
 }) {
   return (
     <FormProvider
@@ -58,6 +66,7 @@ function Harness({
         <>
           <OperatorSection />
           {picks ? <PickChains chainIds={picks} /> : null}
+          {picksAgain ? <PickChains chainIds={picksAgain} label="pick-chains-again" /> : null}
           <output data-testid="operator-state">{JSON.stringify(values.operator)}</output>
         </>
       )}
@@ -154,10 +163,37 @@ describe("OperatorSection", () => {
     ]);
   });
 
+  it("gives a reselected chain the shown operator, not one remembered from before", () => {
+    const other = "0x3333333333333333333333333333333333333333";
+    render(
+      <Harness
+        initialValues={operatorForm()}
+        picks={[sepolia.id]}
+        picksAgain={[baseSepolia.id, sepolia.id]}
+      />,
+    );
+    fireEvent.click(toggle());
+    fireEvent.change(screen.getByLabelText("Revnet operator address"), {
+      target: { value: TEST_ACCOUNT },
+    });
+    fireEvent.click(toggle());
+    fireEvent.click(toggle());
+    fireEvent.click(screen.getByText("pick-chains"));
+    fireEvent.change(screen.getByLabelText("Revnet operator address"), {
+      target: { value: other },
+    });
+    fireEvent.click(screen.getByText("pick-chains-again"));
+
+    expect(operatorState()).toEqual([
+      { chainId: String(sepolia.id), address: other },
+      { chainId: String(baseSepolia.id), address: other },
+    ]);
+  });
+
   it("binds each typed address to the chain it is rendered beside, not the selection index", () => {
     render(<Harness initialValues={operatorForm()} />);
     fireEvent.click(toggle());
-    fireEvent.click(screen.getByLabelText(/set operator per chain/i));
+    fireEvent.click(screen.getByLabelText(/Use a different operator on each chain/i));
 
     fireEvent.change(screen.getByLabelText("Sepolia operator address"), {
       target: { value: TEST_ACCOUNT },

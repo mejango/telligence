@@ -141,3 +141,96 @@ test("an open dialog inerts the page, stacks, and restores it on close", async (
     document.getElementById("stacked-probe")?.remove();
   });
 });
+
+test("layout utilities on a dialog surface win over the shell's defaults", async ({ page }) => {
+  await installBrowserBoundary(page);
+  const response = await page.goto("/create", { waitUntil: "domcontentloaded" });
+  expectSecurityHeaders(response);
+  await expect(page.getByRole("heading", { name: "Create a revnet" })).toBeVisible();
+
+  // The transaction review, shared with Juicebox Money, lays out its dialog
+  // surface with utilities (ModalDialog's className), on ModalDialog's own
+  // scrolling surface. Every other dialog keeps the shell's centered, unpadded
+  // defaults, and its panel scrolls inside itself.
+  const layout = await page.evaluate(() => {
+    const read = (className: string) => {
+      const dialog = document.createElement("dialog");
+      dialog.className = className;
+      dialog.appendChild(document.createElement("div"));
+      document.body.appendChild(dialog);
+      dialog.showModal();
+      const style = getComputedStyle(dialog);
+      const result = {
+        display: style.display,
+        alignItems: style.alignItems,
+        justifyContent: style.justifyContent,
+        paddingLeft: style.paddingLeft,
+        paddingTop: style.paddingTop,
+        overflowY: style.overflowY,
+        backdrop: getComputedStyle(dialog, "::backdrop").backgroundColor,
+      };
+      dialog.close();
+      dialog.remove();
+      return result;
+    };
+    return {
+      wide: window.matchMedia("(min-width: 40rem)").matches,
+      shell: read("ui-dialog"),
+      review: read(
+        "ui-dialog overflow-y-auto items-start justify-center px-3 py-5 sm:px-6 sm:py-10",
+      ),
+    };
+  });
+
+  expect(layout.shell).toEqual({
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingLeft: "0px",
+    paddingTop: "0px",
+    overflowY: "hidden",
+    backdrop: "rgba(0, 0, 0, 0.8)",
+  });
+  expect(layout.review).toEqual({
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "center",
+    paddingLeft: layout.wide ? "24px" : "12px",
+    paddingTop: layout.wide ? "40px" : "20px",
+    overflowY: "auto",
+    backdrop: "rgba(0, 0, 0, 0.8)",
+  });
+});
+
+test("a standalone confirm taller than a phone screen scrolls to its Try again", async ({
+  page,
+}) => {
+  await installBrowserBoundary(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  // A deterministic-build route that opens a real confirm with forty rows.
+  const response = await page.goto("/confirm-proof", { waitUntil: "domcontentloaded" });
+  expectSecurityHeaders(response);
+  const confirm = page.getByRole("dialog", { name: "Confirm a long plan" });
+  await expect(confirm).toBeVisible();
+
+  // ModalDialog's surface scrolls, and this confirm overflows it.
+  expect(
+    await confirm.evaluate((dialog) => ({
+      overflowY: getComputedStyle(dialog).overflowY,
+      overflows: dialog.scrollHeight > dialog.clientHeight,
+    })),
+  ).toEqual({ overflowY: "auto", overflows: true });
+  await expect(confirm.getByRole("heading", { name: "Confirm a long plan" })).toBeInViewport();
+  const send = confirm.getByRole("button", { name: "Try again" });
+  await expect(send).not.toBeInViewport();
+
+  // A person's scroll, not a script's, brings the footer into reach.
+  await page.mouse.move(195, 420);
+  await page.mouse.wheel(0, 5000);
+  await expect(send).toBeInViewport();
+  await send.click();
+  await expect(page.locator("[data-confirm-proof-pressed]")).toHaveAttribute(
+    "data-confirm-proof-pressed",
+    "send",
+  );
+});

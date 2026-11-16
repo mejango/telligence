@@ -71,16 +71,17 @@ const CALL = {
   functionName: "transfer",
   args: [TARGET, 7n] as const,
 };
-const EXPECTED_ERROR = "You're viewing the site as another account — exit View as to transact.";
+const EXPECTED_ERROR = "You're viewing the site as another account. Exit View as to transact.";
 
 async function freshHarness() {
   vi.resetModules();
-  const [viewAsLib, writeHooks, relayrHooks] = await Promise.all([
+  const [viewAsLib, writeHooks, relayrHooks, { failedLine, reviewedCall }] = await Promise.all([
     import("@/lib/view-as"),
-    import("@/hooks/useReviewedWriteContract"),
+    import("@/hooks/useReviewedAction"),
     import("@/hooks/useReviewedRelayr"),
+    import("@/lib/reviewed-call"),
   ]);
-  return { viewAsLib, writeHooks, relayrHooks };
+  return { viewAsLib, writeHooks, relayrHooks, failedLine, reviewedCall };
 }
 
 beforeEach(() => {
@@ -94,13 +95,12 @@ beforeEach(() => {
 
 describe("view-as write refusal", () => {
   it("refuses reviewed contract writes while view-as is active, before any review or wallet call", async () => {
-    const { viewAsLib, writeHooks } = await freshHarness();
+    const { viewAsLib, writeHooks, failedLine, reviewedCall } = await freshHarness();
     act(() => viewAsLib.setViewAs(VIEWED));
 
-    const { result } = renderHook(() => writeHooks.useWriteContract());
-    await expect(result.current.writeContractAsync(CALL as never)).rejects.toThrowError(
-      EXPECTED_ERROR,
-    );
+    const { result } = renderHook(() => writeHooks.useReviewedAction());
+    const ran = await act(() => result.current.run({ calls: [reviewedCall(CALL)] }));
+    expect(failedLine(ran as never)).toBe(EXPECTED_ERROR);
 
     expect(mocks.simulateContract).not.toHaveBeenCalled();
     expect(mocks.submit).not.toHaveBeenCalled();
@@ -136,16 +136,14 @@ describe("view-as write refusal", () => {
   });
 
   it("allows reviewed writes again after exiting view-as", async () => {
-    const { viewAsLib, writeHooks } = await freshHarness();
+    const { viewAsLib, writeHooks, failedLine, reviewedCall } = await freshHarness();
     act(() => viewAsLib.setViewAs(VIEWED));
     act(() => viewAsLib.clearViewAs());
 
-    const { result } = renderHook(() => writeHooks.useWriteContract());
-    // With view-as cleared, the call proceeds past the guard into the normal
-    // review pipeline, which fails differently (no review handler registered).
-    await expect(result.current.writeContractAsync(CALL as never)).rejects.toThrowError(
-      "Transaction review is unavailable. Reload the page before continuing.",
-    );
+    const { result } = renderHook(() => writeHooks.useReviewedAction());
+    // Past the guard the run reaches review, which no handler answers here.
+    const ran = await act(() => result.current.run({ calls: [reviewedCall(CALL)] }));
+    expect(failedLine(ran as never)).not.toBe(EXPECTED_ERROR);
     expect(mocks.submit).not.toHaveBeenCalled();
   });
 });

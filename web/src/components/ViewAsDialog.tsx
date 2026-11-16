@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useEnsAddress } from "@/hooks/ens/useEnsAddress";
 import { useViewAs } from "@/lib/view-as";
 import { useState } from "react";
@@ -55,17 +56,20 @@ export function ViewAsDialog({
           </DialogDescription>
         </DialogHeader>
         <form
-          className="flex items-center gap-2"
+          className="space-y-2"
           onSubmit={(event) => {
             event.preventDefault();
             activate();
           }}
         >
+          <Label htmlFor="view-as-dialog-account" className="block">
+            Address or ENS name
+          </Label>
           <Input
+            id="view-as-dialog-account"
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            placeholder="Address or ENS name"
-            aria-label="Account to view the site as"
+            placeholder="0x… or name.eth"
             autoFocus
           />
           <Button

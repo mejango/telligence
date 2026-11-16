@@ -1,3 +1,5 @@
+import { CashOutTaxRate } from "@bananapus/nana-sdk-core";
+
 type CashOutObservation = {
   balance: bigint;
   tokenSupply: bigint;
@@ -42,7 +44,7 @@ export function explainCashOutChange(
   }
   if (current.cashOutTax !== previous.cashOutTax) {
     causes.push(
-      `the cash-out tax changed from ${formatTax(previous.cashOutTax)} to ${formatTax(current.cashOutTax)}`,
+      `the cash-out tax changed from ${new CashOutTaxRate(previous.cashOutTax).format()} to ${new CashOutTaxRate(current.cashOutTax).format()}`,
     );
   }
 
@@ -62,10 +64,6 @@ function compareBackingPerToken(previous: CashOutObservation, current: CashOutOb
   const left = current.balance * previous.tokenSupply;
   const right = previous.balance * current.tokenSupply;
   return left > right ? 1 : left < right ? -1 : 0;
-}
-
-function formatTax(value: number): string {
-  return `${(value / 100).toFixed(2).replace(/\.?0+$/u, "")}%`;
 }
 
 function joinCauses(causes: string[]): string {

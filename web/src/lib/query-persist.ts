@@ -11,7 +11,7 @@ import {
 /**
  * Cross-session query persistence, opt-in per query.
  *
- * Two tiers, both restored from disk before the first paint:
+ * Two tiers, both restored from disk when the app provider installs persistence:
  *
  * - `immutable` — the answer provably cannot change (a ruleset row, a revnet's
  *   stage schedule, a settled swap). Restored and trusted: never refetched.
@@ -72,8 +72,8 @@ export function deserializeState(raw: string): DehydratedState {
 
 /**
  * Restore the persisted cache, then keep writing it back as queries settle.
- * Returns a teardown function. Safe to call before render — hydration is
- * synchronous so the first paint already sees the restored data.
+ * Returns a teardown function. Cache restoration is synchronous; SSR consumers
+ * must retain their server snapshot during hydration before showing restored data.
  */
 export function installQueryPersistence(
   client: QueryClient,

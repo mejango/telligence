@@ -1,3 +1,4 @@
+import { pinMediaFile } from "@/app/create/helpers/pinProjectMetaData";
 import { ItemDraftFields } from "@/components/shop/ItemDraftFields";
 import { MAX_MEDIA_BYTES, newDraftItem, type DraftItem } from "@/components/shop/itemDraft";
 import { Input } from "@/components/ui/input";
@@ -24,7 +25,7 @@ import { useCreateForm } from "./useCreateForm";
  */
 export function StoreSection({ disabled = false }: { disabled?: boolean }) {
   const { values, setFieldValue } = useFormContext<RevnetFormData>();
-  const { revnetTokenSymbol, reserveAssetSymbol } = useCreateForm();
+  const { revnetTokenSymbol, issuanceBaseCurrencySymbol } = useCreateForm();
   const store = values.store;
   const chains = sortChains(values.chainIds);
   const [configOpen, setConfigOpen] = useState(false);
@@ -40,12 +41,7 @@ export function StoreSection({ disabled = false }: { disabled?: boolean }) {
     [],
   );
 
-  const priceSymbol =
-    store.pricing === "USD"
-      ? "USD"
-      : values.issuanceBaseCurrency === "USD" && values.reserveAsset !== "CUSTOM"
-        ? "USD"
-        : reserveAssetSymbol;
+  const priceSymbol = store.pricing === "USD" ? "USD" : issuanceBaseCurrencySymbol;
 
   // Two writes in one handler — naming a category, then putting the item in it — would each
   // spread the same render's `store` and the second would drop the first. The ref carries the
@@ -74,7 +70,17 @@ export function StoreSection({ disabled = false }: { disabled?: boolean }) {
     }
     const mediaPreview = file?.type.startsWith("image/") ? URL.createObjectURL(file) : null;
     if (mediaPreview) previews.current.add(mediaPreview);
-    setItem(index, { mediaFile: file, mediaPreview });
+    setItem(index, { mediaFile: file, mediaPreview, mediaUri: "", mediaType: "" });
+    if (!file) return;
+    // Pinned as it is chosen, so a saved or exported draft carries the media and not a
+    // file that stays behind. A pin that fails here is tried again at launch.
+    pinMediaFile(file)
+      .then((cid) => {
+        const at = storeRef.current.items.findIndex((item) => item.mediaFile === file);
+        if (at < 0) return;
+        setItem(at, { mediaUri: `ipfs://${cid}`, mediaType: file.type, mediaFile: null });
+      })
+      .catch(() => {});
   };
   const removeItem = (index: number) => {
     const preview = store.items[index]?.mediaPreview;
@@ -101,7 +107,9 @@ export function StoreSection({ disabled = false }: { disabled?: boolean }) {
           Sell things right from your revnet. Each sale pays the revnet, and the buyer gets the item
           plus {revnetTokenSymbol}.
         </p>
-        <p className="mt-2 text-lg text-zinc-600">The Operator can add items later.</p>
+        <p className="mt-2 text-lg text-zinc-600">
+          An operator can add items later if you allow it below.
+        </p>
       </div>
       <div className="mt-6 md:col-span-2 md:mt-0">
         <div>
@@ -121,11 +129,7 @@ export function StoreSection({ disabled = false }: { disabled?: boolean }) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="reserve">
-                {values.issuanceBaseCurrency === "USD" && values.reserveAsset !== "CUSTOM"
-                  ? "USD"
-                  : reserveAssetSymbol}
-              </SelectItem>
+              <SelectItem value="reserve">{issuanceBaseCurrencySymbol}</SelectItem>
               <SelectItem value="USD">USD</SelectItem>
             </SelectContent>
           </Select>
@@ -134,7 +138,10 @@ export function StoreSection({ disabled = false }: { disabled?: boolean }) {
         {store.items.length > 0 ? (
           <div className="mt-5 flex flex-col gap-5">
             {store.items.map((item, index) => (
-              <div key={index} className="bg-melon-50 p-4 sm:p-5">
+              <div
+                key={index}
+                className="border border-melon-300 p-4 max-sm:-mx-4 max-sm:border-x-0 sm:p-5"
+              >
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-zinc-800">Item {index + 1}</span>
                   <button
@@ -188,14 +195,14 @@ export function StoreSection({ disabled = false }: { disabled?: boolean }) {
             aria-expanded={configOpen}
             className="text-sm font-medium text-teal-700 hover:text-teal-900"
           >
-            Store config {configOpen ? "▾" : "▸"}
+            Store settings {configOpen ? "▾" : "▸"}
           </button>
           {configOpen ? (
             <div className="mt-4 space-y-5 border border-zinc-200 p-4">
               <p className="text-xs text-zinc-500">
-                The collection&apos;s name and symbol can be changed later, by the revnet operator
-                as long as it keeps &ldquo;Update item metadata&rdquo;. Everything else here is
-                fixed when the revnet deploys.
+                The operator can change the collection&apos;s name and symbol later if it keeps the
+                &ldquo;Update item details&rdquo; permission. The other store settings are fixed at
+                launch.
               </p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
@@ -236,12 +243,12 @@ export function StoreSection({ disabled = false }: { disabled?: boolean }) {
                     [
                       "noNewTiersWithVotes",
                       "Lock voting items after launch",
-                      "Items added later can never carry custom voting power.",
+                      "Items added later must be free because their price determines voting power.",
                     ],
                     [
                       "noNewTiersWithOwnerMinting",
-                      "Lock free minting after launch",
-                      "Items added later can never be minted for free.",
+                      "Lock free item creation after launch",
+                      "Items added later can never be created for free.",
                     ],
                   ] as const
                 ).map(([key, title, blurb]) => (
@@ -260,8 +267,8 @@ export function StoreSection({ disabled = false }: { disabled?: boolean }) {
                   </label>
                 ))}
                 <p className="bg-zinc-50 px-3 py-2 text-xs leading-relaxed text-zinc-600">
-                  Items can&apos;t cash out for surplus: a revnet&apos;s tokens already can, and the
-                  two can&apos;t both redeem.
+                  Store items cannot be exchanged for the revnet&apos;s reserves. Only its tokens
+                  can cash out.
                 </p>
               </div>
 
@@ -272,8 +279,8 @@ export function StoreSection({ disabled = false }: { disabled?: boolean }) {
                 {(
                   [
                     ["operatorCanAdjustTiers", "Add & remove items"],
-                    ["operatorCanUpdateMetadata", "Update item metadata"],
-                    ["operatorCanMint", "Mint items for free"],
+                    ["operatorCanUpdateMetadata", "Update item details"],
+                    ["operatorCanMint", "Create items for free"],
                     ["operatorCanIncreaseDiscount", "Increase discounts"],
                   ] as const
                 ).map(([key, title]) => (

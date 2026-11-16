@@ -56,7 +56,7 @@ describe("creation stage dialog readiness", () => {
         expect(onOpen).toHaveBeenCalledTimes(1);
         expect(screen.getAllByRole("dialog")).toHaveLength(1);
         const dialog = within(screen.getByRole("dialog"));
-        fireEvent.change(dialog.getByRole("combobox", { name: "Issuance currency" }), {
+        fireEvent.change(dialog.getByRole("combobox", { name: "New token pricing currency" }), {
           target: { value: "USD" },
         });
         fireEvent.click(dialog.getByRole("button", { name: "Save stage" }));

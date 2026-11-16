@@ -1,6 +1,8 @@
 "use client";
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useProjectNavigation } from "@/app/[slug]/ProjectRouteContext";
+import { projectViewHref } from "@/lib/projectSubtabNavigation";
+import { useSearchParams } from "next/navigation";
 
 export type RangeOption<T extends string> = {
   value: T;
@@ -18,8 +20,7 @@ interface Props<T extends string> {
  * The range stays URL state (?range=) so links and reloads keep it.
  */
 export function RangeSelector<T extends string>({ ranges, defaultValue }: Props<T>) {
-  const router = useRouter();
-  const pathname = usePathname();
+  const navigate = useProjectNavigation();
   const searchParams = useSearchParams();
   const rangeParam = searchParams.get("range");
 
@@ -30,9 +31,12 @@ export function RangeSelector<T extends string>({ ranges, defaultValue }: Props<
     <div className="relative inline-flex shrink-0 items-center text-teal-700">
       <select
         value={currentValue}
-        onChange={(event) =>
-          router.push(`${pathname}?range=${event.target.value}`, { scroll: false })
-        }
+        data-project-navigation="local"
+        onChange={(event) => {
+          const value = event.target.value;
+          const href = projectViewHref(window.location.href, "range", value);
+          navigate(() => window.history.pushState(null, "", href), href);
+        }}
         aria-label="Time range"
         className="cursor-pointer appearance-none border-0 bg-none bg-transparent p-0 pr-4 text-xs font-medium text-current [field-sizing:content] hover:underline focus:border-0 focus:ring-0 focus-visible:!outline-none focus-visible:underline"
       >

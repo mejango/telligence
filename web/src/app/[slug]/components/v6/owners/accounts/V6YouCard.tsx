@@ -1,5 +1,6 @@
 "use client";
 
+import { chainDisplayName } from "@/app/constants";
 import { ChainLogo } from "@/components/ChainLogo";
 import { EthereumAddress } from "@/components/EthereumAddress";
 import { TableSkeleton } from "@/components/loading/LoadingSkeletons";
@@ -25,15 +26,18 @@ import { netLoanProceeds } from "@/lib/feeHelpers";
 import { useJBChainId, useJBContractContext, useJBTokenContext } from "@/lib/nana/project";
 import { useSuckersUserTokenBalance } from "@/lib/nana/suckers";
 import type { JBChainId } from "@/lib/nana/types";
-import { getTokenConfigForChain, getTokenSymbolFromAddress, TokenConfig } from "@/lib/tokenUtils";
+import {
+  getTokenConfigForChain,
+  getTokenSymbolFromAddress,
+  pickAccountingContext,
+  TokenConfig,
+} from "@/lib/tokenUtils";
 import { formatTokenSymbol } from "@/lib/utils";
 import {
   formatUnits,
   getRevnetLoanContract,
-  JB_CHAINS,
   JBCoreContracts,
   jbMultiTerminalAbi,
-  jbTokensAbi,
   RevnetCoreContracts,
   revOwnerAbi,
 } from "@bananapus/nana-sdk-core";
@@ -42,7 +46,13 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
 import { ProjectItem } from "../../shared";
-import { AddLiquidityForm, LiquidityManager } from "../market/AmmCard";
+import {
+  AddLiquidityForm,
+  CellKey,
+  LiquidityManager,
+  STACKED_CELL,
+  STACKED_ROW,
+} from "../market/AmmCard";
 import {
   fetchAmmPresence,
   fetchAmmReferences,
@@ -51,7 +61,6 @@ import {
 } from "../market/lib";
 import { chainName, chainProjectsKey, toChainProjects } from "../settlement/lib";
 import { BurnRow, V6BurnTokensDialog } from "./V6BurnTokensDialog";
-import { CreditRow, V6ClaimCreditsDialog } from "./V6ClaimCreditsDialog";
 
 const BorrowDialog = dynamic(() =>
   import("../../../Value/BorrowDialog").then((module) => module.BorrowDialog),
@@ -67,9 +76,9 @@ type ChainQuote = { cashout: bigint | undefined; maxLoan: bigint | undefined };
 
 /**
  * "You" card (website/ parity: renderYouCard + fetchYouPosition): the connected
- * wallet's per-chain position — Chain | Your balance (credits labeled) | Cash
+ * wallet's per-chain position — Chain | Your balance | Cash
  * out value | Max loan — plus the action buttons (Cash out, Get a loan, Move
- * between chains, Claim credits). While the revnet's cash out delay is active,
+ * between chains). While the revnet's cash out delay is active,
  * cash out values still compute (pure bonding-curve math) and are shown marked
  * "locked"; loans read 0 from the contract, so the would-be loan is estimated
  * by the cash out value, also marked locked.
@@ -121,7 +130,13 @@ export function V6YouCard({ projects }: { projects: ProjectItem[] }) {
     queryFn: () => fetchAmmReferences(pooledAmmStates),
   });
 
-  const { data: balances, isLoading: isLoadingBalances } = useSuckersUserTokenBalance();
+  const {
+    data: balances,
+    isLoading: isLoadingBalances,
+    isError: isBalanceError,
+    isComplete: balancesComplete,
+  } = useSuckersUserTokenBalance();
+  const balancesIncomplete = !balancesComplete;
 
   // Full per-chain project rows (currency/decimals/token) for quotes.
   const { data: projectData } = useBendystrawQuery(
@@ -135,34 +150,6 @@ export function V6YouCard({ projects }: { projects: ProjectItem[] }) {
     { id: suckerGroupId ?? "" },
     { enabled: !!suckerGroupId, chainId: Number(chainId) },
   );
-  // Unclaimed credits per chain — drives the "Credits"/"Credits & ERC-20s"
-  // balance subtext and the Claim credits flow.
-  const creditContracts = useMemo(
-    () =>
-      address && balances
-        ? balances.map((b) => ({
-            chainId: b.chainId,
-            abi: jbTokensAbi,
-            address: contractAddress(JBCoreContracts.JBTokens, b.chainId),
-            functionName: "creditBalanceOf" as const,
-            args: [address, b.projectId] as const,
-          }))
-        : [],
-    [address, balances, contractAddress],
-  );
-  const { data: creditsData } = useReadContracts({
-    contracts: creditContracts,
-    query: { enabled: creditContracts.length > 0 },
-  });
-  const creditByChain = useMemo(() => {
-    const map = new Map<number, bigint>();
-    balances?.forEach((b, i) => {
-      const result = creditsData?.[i]?.result;
-      if (typeof result === "bigint") map.set(b.chainId, result);
-    });
-    return map;
-  }, [balances, creditsData]);
-
   // Per-chain accounting contexts read on-chain from the canonical
   // JBMultiTerminal — the authoritative (token, currency, decimals) for cash
   // out and loan quotes (e.g. Artizen's USDC context: currency
@@ -189,23 +176,14 @@ export function V6YouCard({ projects }: { projects: ProjectItem[] }) {
   const accountingContextByChain = useMemo(() => {
     const map = new Map<number, TokenConfig>();
     balances?.forEach((b, i) => {
-      const contexts = contextsData?.[i]?.result as
-        readonly { token: `0x${string}`; decimals: number; currency: number }[] | undefined;
-      if (!contexts?.length) return;
-      // Projects can hold several contexts; prefer the one for the indexed
-      // accounting token, else the first. The indexed config can be null while
-      // the sucker-group data loads — the on-chain contexts stay authoritative.
-      const indexed = getTokenConfigForChain(suckerGroupData, b.chainId);
-      const context =
-        (indexed
-          ? contexts.find((c) => c.token.toLowerCase() === indexed.token.toLowerCase())
-          : undefined) ?? contexts[0];
-      map.set(b.chainId, {
-        token: context.token,
-        currency: Number(context.currency),
-        decimals: Number(context.decimals),
-        symbol: indexed?.symbol,
-      });
+      const picked = pickAccountingContext(
+        contextsData?.[i]?.result as
+          readonly { token: `0x${string}`; decimals: number; currency: number }[] | undefined,
+        // The indexed config can be null while the sucker-group data loads; the onchain
+        // contexts stay authoritative.
+        getTokenConfigForChain(suckerGroupData, b.chainId),
+      );
+      if (picked) map.set(b.chainId, picked);
     });
     return map;
   }, [balances, contextsData, suckerGroupData]);
@@ -238,16 +216,6 @@ export function V6YouCard({ projects }: { projects: ProjectItem[] }) {
   const held = useMemo(() => (balances ?? []).filter((b) => b.balance.value > 0n), [balances]);
   const totalBalance = held.reduce((acc, b) => acc + b.balance.value, 0n);
 
-  const creditRows: CreditRow[] = useMemo(
-    () =>
-      held.flatMap((b) => {
-        const credit = creditByChain.get(b.chainId);
-        return credit && credit > 0n
-          ? [{ chainId: b.chainId as JBChainId, projectId: b.projectId, credit }]
-          : [];
-      }),
-    [held, creditByChain],
-  );
   const burnRows: BurnRow[] = held.map((b) => ({
     chainId: b.chainId as JBChainId,
     projectId: b.projectId,
@@ -292,19 +260,20 @@ export function V6YouCard({ projects }: { projects: ProjectItem[] }) {
   const loanComplete = homogeneous && held.every((b) => quotes[b.chainId]?.maxLoan !== undefined);
   const totalCashout = held.reduce((acc, b) => acc + (quotes[b.chainId]?.cashout ?? 0n), 0n);
   const totalMaxLoan = held.reduce((acc, b) => acc + (quotes[b.chainId]?.maxLoan ?? 0n), 0n);
-  const anyCredit = held.some((b) => (creditByChain.get(b.chainId) ?? 0n) > 0n);
-  const anyErc20 = held.some((b) => {
-    const credit = creditByChain.get(b.chainId);
-    return credit != null && b.balance.value > credit;
-  });
-
   const fmtBase = (value: bigint) =>
     `${formatUnits(value, baseDecimals, { fractionDigits: 5 })} ${baseSymbol}`;
 
   return (
     <div>
+      {balancesIncomplete && !isLoadingBalances && held.length > 0 && (
+        <p className="text-sm text-zinc-500 mb-2">
+          Some balances are unavailable. Only available balances are shown.
+        </p>
+      )}
       {held.length === 0 ? (
-        isLoadingBalances ? (
+        isBalanceError || (!isLoadingBalances && balancesIncomplete) ? (
+          <p className="text-md text-black font-light italic">Balances unavailable.</p>
+        ) : isLoadingBalances ? (
           <TableSkeleton rows={Math.max(projects.length, 2)} columns={4} />
         ) : (
           <p className="text-md text-black font-light italic">
@@ -313,29 +282,28 @@ export function V6YouCard({ projects }: { projects: ProjectItem[] }) {
         )
       ) : (
         <div className="overflow-auto">
-          <Table>
-            <TableHeader>
+          <Table className="max-sm:block">
+            <TableHeader className="max-sm:hidden">
               <TableRow>
                 <TableHead>Chain</TableHead>
                 <TableHead className="text-right">Your balance</TableHead>
                 <TableHead className="text-right">Cash out value</TableHead>
                 <TableHead
                   className="text-right"
-                  title="Estimated proceeds after the protocol, REV, and minimum source fees"
+                  title="Estimated amount after the costs shown in the loan review"
                 >
                   Max loan
                 </TableHead>
                 <TableHead className="text-right">LP</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="max-sm:block">
               {held.map((b) => (
                 <YouChainRow
                   key={b.chainId}
                   chainId={b.chainId as JBChainId}
                   chainProjectId={b.projectId}
                   balanceValue={b.balance.value}
-                  credit={creditByChain.get(b.chainId)}
                   locked={locked}
                   tokenSymbol={tokenSymbol}
                   projectTokenDecimals={projectTokenDecimals}
@@ -349,18 +317,21 @@ export function V6YouCard({ projects }: { projects: ProjectItem[] }) {
               ))}
             </TableBody>
             {held.length > 1 && (
-              <TableFooter>
-                <TableRow>
-                  <TableCell>Total</TableCell>
-                  <TableCell className="text-right tabular-nums">
+              <TableFooter className="max-sm:block">
+                <TableRow className={STACKED_ROW}>
+                  <TableCell className={STACKED_CELL}>
+                    {balancesIncomplete ? "Partial total" : "Total"}
+                  </TableCell>
+                  <TableCell className={`text-right tabular-nums ${STACKED_CELL}`}>
+                    <CellKey>Your balance</CellKey>
                     <CellWithSub
                       main={`${formatUnits(totalBalance, projectTokenDecimals, {
                         fractionDigits: 2,
                       })} ${tokenSymbol}`}
-                      sub={subFor(anyCredit, anyErc20)}
                     />
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className={`text-right tabular-nums ${STACKED_CELL}`}>
+                    <CellKey>Cash out value</CellKey>
                     {cashComplete ? (
                       <CellWithSub
                         main={fmtBase(totalCashout)}
@@ -370,10 +341,11 @@ export function V6YouCard({ projects }: { projects: ProjectItem[] }) {
                       "—"
                     )}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className={`text-right tabular-nums ${STACKED_CELL}`}>
+                    <CellKey>Max loan</CellKey>
                     {locked ? "Locked" : loanComplete ? fmtBase(totalMaxLoan) : "—"}
                   </TableCell>
-                  <TableCell />
+                  <TableCell className="max-sm:hidden" />
                 </TableRow>
               </TableFooter>
             )}
@@ -420,24 +392,6 @@ export function V6YouCard({ projects }: { projects: ProjectItem[] }) {
               Move between chains
             </Button>
           </BridgeDialog>
-        )}
-
-        {hasErc20 && (
-          <V6ClaimCreditsDialog
-            creditRows={creditRows}
-            tokenSymbol={tokenSymbol}
-            batchScope={projects
-              .map((project) => `${project.chainId}:${project.projectId}`)
-              .sort()
-              .join("|")}
-          >
-            <Button
-              variant="outline"
-              className="border-teal-500 bg-teal-500 text-melon-950 hover:bg-teal-600 hover:text-melon-950"
-            >
-              Claim credits
-            </Button>
-          </V6ClaimCreditsDialog>
         )}
 
         {ammChains.length > 0 ? (
@@ -518,16 +472,9 @@ export function V6YouCard({ projects }: { projects: ProjectItem[] }) {
   );
 }
 
-/** "Credits" (all unclaimed), "Credits & ERC-20s" (both), or none (all claimed). */
-function subFor(hasCredit: boolean, hasErc20: boolean) {
-  if (hasCredit && hasErc20) return "Credits & ERC-20s";
-  if (hasCredit) return "Credits";
-  return undefined;
-}
-
 function CellWithSub({ main, sub }: { main: string; sub?: string }) {
   return (
-    <span className="inline-flex flex-col items-end">
+    <span className="inline-flex flex-col items-end max-sm:items-start">
       <span>{main}</span>
       {sub && <span className="text-xs text-zinc-400">{sub}</span>}
     </span>
@@ -565,8 +512,8 @@ function LiquidityChainPill({
       type="button"
       className={
         selected
-          ? "flex items-center gap-1.5 bg-zinc-900 px-2.5 py-1.5 text-xs text-white"
-          : "flex items-center gap-1.5 border border-zinc-300 px-2.5 py-1.5 text-xs hover:bg-zinc-50"
+          ? "flex h-7 items-center gap-1.5 border border-teal-500 bg-teal-500 px-2 text-sm text-melon-950"
+          : "flex h-7 items-center gap-1.5 border border-zinc-300 bg-white px-2 text-sm text-zinc-700 hover:bg-zinc-100"
       }
       onClick={onSelect}
     >
@@ -574,7 +521,7 @@ function LiquidityChainPill({
       {chainName(state.chainId)}
       {hasLiquidity ? (
         <span
-          className="h-1.5 w-1.5 rounded-full bg-teal-400"
+          className="h-1.5 w-1.5 bg-teal-400"
           title="You have liquidity on this network"
           aria-label="You have liquidity on this network"
         />
@@ -636,7 +583,6 @@ function YouChainRow({
   chainId,
   chainProjectId,
   balanceValue,
-  credit,
   locked,
   tokenSymbol,
   projectTokenDecimals,
@@ -650,7 +596,6 @@ function YouChainRow({
   chainId: JBChainId;
   chainProjectId: bigint;
   balanceValue: bigint;
-  credit: bigint | undefined;
   locked: boolean;
   tokenSymbol: string;
   projectTokenDecimals: number;
@@ -711,30 +656,36 @@ function YouChainRow({
   };
 
   return (
-    <TableRow>
-      <TableCell className="whitespace-nowrap">
+    <TableRow className={STACKED_ROW}>
+      <TableCell className={`whitespace-nowrap ${STACKED_CELL}`}>
+        <CellKey>Chain</CellKey>
         <div className="flex items-center gap-2">
           <ChainLogo chainId={chainId} width={15} height={15} />
-          <span>{JB_CHAINS[chainId]?.name ?? chainId}</span>
+          <span>{chainDisplayName(chainId)}</span>
         </div>
       </TableCell>
-      <TableCell className="text-right tabular-nums whitespace-nowrap">
+      <TableCell className={`text-right tabular-nums whitespace-nowrap ${STACKED_CELL}`}>
+        <CellKey>Your balance</CellKey>
         <CellWithSub
           main={`${formatUnits(balanceValue, projectTokenDecimals, {
             fractionDigits: 2,
           })} ${tokenSymbol}`}
-          sub={credit != null ? subFor(credit > 0n, balanceValue > credit) : undefined}
         />
       </TableCell>
-      <TableCell className="text-right tabular-nums whitespace-nowrap">
+      <TableCell className={`text-right tabular-nums whitespace-nowrap ${STACKED_CELL}`}>
+        <CellKey>Cash out value</CellKey>
         {cashout != null ? (
           <CellWithSub main={fmtBase(cashout)} sub={locked ? "locked" : undefined} />
         ) : (
           "—"
         )}
       </TableCell>
-      <TableCell className="text-right tabular-nums whitespace-nowrap">{loanCell()}</TableCell>
-      <TableCell className="text-right whitespace-nowrap">
+      <TableCell className={`text-right tabular-nums whitespace-nowrap ${STACKED_CELL}`}>
+        <CellKey>Max loan</CellKey>
+        {loanCell()}
+      </TableCell>
+      <TableCell className={`text-right whitespace-nowrap ${STACKED_CELL}`}>
+        <CellKey>LP</CellKey>
         <YourLpCell ammState={ammState} onManage={onManage} />
       </TableCell>
     </TableRow>

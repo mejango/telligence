@@ -4,6 +4,8 @@ import { chainDisplayName, RESERVED_TOKEN_SPLIT_GROUP_ID } from "@/app/constants
 import { ChainLogo } from "@/components/ChainLogo";
 import { EthereumAddress } from "@/components/EthereumAddress";
 import { TableSkeleton } from "@/components/loading/LoadingSkeletons";
+import { StickyRecipient } from "@/components/sticky/StickyRecipient";
+import { TokenAmount } from "@/components/TokenAmount";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -16,9 +18,11 @@ import {
 } from "@/components/ui/table";
 import { useAllRulesetsByChain } from "@/hooks/useAllRulesetsByChain";
 import { useCompleteProjectPermissions } from "@/hooks/useCompleteBendystrawLists";
+import { useHydrated } from "@/hooks/useHydrated";
 import { useJBChainId, useJBContractContext, useJBTokenContext } from "@/lib/nana/project";
 import type { JBChainId } from "@/lib/nana/types";
 import { pickRevnetOperator } from "@/lib/revnetOperator";
+import { isStickyHook } from "@/lib/sticky";
 import { formatTokenSymbol } from "@/lib/utils";
 import {
   formatUnits,
@@ -44,6 +48,8 @@ type Split = {
   beneficiary: `0x${string}`;
   hook: `0x${string}`;
   percent: number;
+  /** A Sticky split's holder group; otherwise the project the split pays. */
+  projectId: bigint;
 };
 
 /**
@@ -54,6 +60,8 @@ type Split = {
  * burn sentinel.
  */
 export function V6SplitsSubtab({ projects }: { projects: ProjectItem[] }) {
+  // Persisted rulesets may restore before this streamed subtab hydrates.
+  const hydrated = useHydrated();
   const { projectId, contractAddress } = useJBContractContext();
   const chainId = useJBChainId();
   const { token } = useJBTokenContext();
@@ -168,12 +176,17 @@ export function V6SplitsSubtab({ projects }: { projects: ProjectItem[] }) {
     }),
   );
 
+  // The balance reads can only start once the controller reads have landed.
+  const pendingLoading = controllerReads.isLoading || pendingReads.isLoading;
+
+  if (!hydrated) return <TableSkeleton rows={4} columns={3} />;
+
   return (
     <div>
       {rulesetReads.isLoading ? <TableSkeleton rows={4} columns={3} /> : null}
       <p className="text-md text-black font-light italic mb-2">
-        Splits can be adjusted by the revnet operator at any time, within the permanent split limit
-        of a stage.
+        Splits send a share of new tokens to the recipients listed below. The revnet operator can
+        change the recipients, but cannot raise a stage&apos;s fixed share.
       </p>
 
       <div className="text-sm font-medium text-zinc-500 mt-2 border-l border-zinc-300 pl-2 py-1">
@@ -196,11 +209,18 @@ export function V6SplitsSubtab({ projects }: { projects: ProjectItem[] }) {
             variant={selectedStageIdx === idx ? "tab-selected" : "bottomline"}
             className={twJoin("text-md text-zinc-400", selectedStageIdx === idx && "text-inherit")}
             key={String(ruleset.id)}
+            aria-pressed={selectedStageIdx === idx}
             onClick={() => setSelectedStageIdx(idx)}
           >
             Stage {idx + 1}
             {idx === currentStageIdx && (
-              <span className="rounded-full h-2 w-2 bg-orange-400 border-[2px] border-orange-200 ml-1" />
+              <>
+                <span
+                  aria-hidden
+                  className="rounded-full h-2 w-2 bg-orange-400 border-[2px] border-orange-200 ml-1"
+                />
+                <span className="sr-only">, current stage</span>
+              </>
             )}
           </Button>
         ))}
@@ -218,6 +238,7 @@ export function V6SplitsSubtab({ projects }: { projects: ProjectItem[] }) {
           projectId: BigInt(project.projectId),
           pending: pendingByProject.get(`${project.chainId}:${project.projectId}`),
         }))}
+        pendingLoading={pendingLoading}
         tokenSymbol={tokenSymbol}
         onSuccess={() => {
           void pendingReads.refetch();
@@ -239,17 +260,17 @@ export function V6SplitsSubtab({ projects }: { projects: ProjectItem[] }) {
                 <ChainLogo chainId={c.chainId} />
                 {chainDisplayName(c.chainId)}
               </div>
-              <div className="overflow-auto">
+              <div>
                 <div>
-                  <Table>
-                    <TableHeader>
+                  <Table className="max-sm:block">
+                    <TableHeader className="max-sm:hidden">
                       <TableRow>
                         <TableHead className="w-auto md:w-1/2">Account</TableHead>
                         <TableHead>Percentage</TableHead>
                         <TableHead>Pending splits</TableHead>
                       </TableRow>
                     </TableHeader>
-                    <TableBody>
+                    <TableBody className="max-sm:block">
                       {!hasStage ? (
                         <TableRow>
                           <TableCell colSpan={3} className="text-center text-zinc-400">
@@ -288,23 +309,35 @@ export function V6SplitsSubtab({ projects }: { projects: ProjectItem[] }) {
                           const isBurn = split.beneficiary.toLowerCase() === BURN_SENTINEL;
                           const shown = routesToHook ? split.hook : split.beneficiary;
                           return (
-                            <TableRow key={`${shown}-${i}`}>
-                              <TableCell>
-                                <span className="inline-flex items-center gap-2 text-sm">
-                                  <EthereumAddress
-                                    address={shown}
-                                    chain={JB_CHAINS[c.chainId].chain}
-                                    short
-                                    withEnsAvatar
-                                    withEnsName
-                                  />
-                                  {routesToHook && <span className="text-zinc-400">(hook)</span>}
-                                  {isBurn && !routesToHook && (
-                                    <span className="text-zinc-400">(burn)</span>
-                                  )}
-                                </span>
+                            <TableRow
+                              key={`${shown}-${i}`}
+                              className="max-sm:grid max-sm:grid-cols-2 max-sm:gap-x-4 max-sm:py-2"
+                            >
+                              <TableCell className="max-sm:block max-sm:min-w-0 max-sm:px-0 max-sm:py-1 max-sm:col-span-2">
+                                {isStickyHook(split.hook, c.chainId) ? (
+                                  <span className="text-sm">
+                                    <StickyRecipient split={split} chainId={c.chainId} />
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-2 text-sm">
+                                    <EthereumAddress
+                                      address={shown}
+                                      chain={JB_CHAINS[c.chainId].chain}
+                                      short
+                                      withEnsAvatar
+                                      withEnsName
+                                    />
+                                    {routesToHook && <span className="text-zinc-400">(hook)</span>}
+                                    {isBurn && !routesToHook && (
+                                      <span className="text-zinc-400">(burn)</span>
+                                    )}
+                                  </span>
+                                )}
                               </TableCell>
-                              <TableCell>
+                              <TableCell className="max-sm:block max-sm:min-w-0 max-sm:px-0 max-sm:py-1">
+                                <span className="block text-xs text-zinc-500 sm:hidden">
+                                  Percentage
+                                </span>
                                 {splitLimitBps !== undefined ? (
                                   <>
                                     {effectiveSplitPercent(BigInt(split.percent), splitLimitBps)}%
@@ -316,21 +349,25 @@ export function V6SplitsSubtab({ projects }: { projects: ProjectItem[] }) {
                                   `${formatUnits(BigInt(split.percent), 7)}% of limit`
                                 )}
                               </TableCell>
-                              <TableCell>
-                                {pending !== undefined
-                                  ? // THIS split's share of the chain's pending reserved
-                                    // balance — the column previously repeated the chain
-                                    // total on every row, so each looked like the whole.
-                                    `${Number(
-                                      formatUnits(
-                                        (pending * BigInt(split.percent)) /
-                                          BigInt(SPLITS_TOTAL_PERCENT),
-                                        18,
-                                      ),
-                                    ).toLocaleString("en-US", {
-                                      maximumFractionDigits: 2,
-                                    })} ${tokenSymbol}`
-                                  : "—"}
+                              <TableCell className="max-sm:block max-sm:min-w-0 max-sm:px-0 max-sm:py-1">
+                                <span className="block text-xs text-zinc-500 sm:hidden">
+                                  Pending splits
+                                </span>
+                                {pending !== undefined ? (
+                                  // THIS split's share of the chain's pending reserved balance.
+                                  <TokenAmount
+                                    value={
+                                      (pending * BigInt(split.percent)) /
+                                      BigInt(SPLITS_TOTAL_PERCENT)
+                                    }
+                                    decimals={18}
+                                    symbol={tokenSymbol}
+                                  />
+                                ) : pendingLoading ? (
+                                  <Skeleton className="h-3 w-20" />
+                                ) : (
+                                  "—"
+                                )}
                               </TableCell>
                             </TableRow>
                           );

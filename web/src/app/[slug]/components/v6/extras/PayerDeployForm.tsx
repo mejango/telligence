@@ -1,8 +1,9 @@
 "use client";
 
+import { chainDisplayName } from "@/app/constants";
 import { ButtonWithWallet } from "@/components/ButtonWithWallet";
 import { ChainLogo } from "@/components/ChainLogo";
-import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/CopyButton";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -11,12 +12,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { TxError } from "@/components/ui/TxError";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { useToast } from "@/components/ui/use-toast";
 import { useMultichainBatch } from "@/hooks/useMultichainBatch";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
+import { reviewClosed } from "@/lib/review-refusal";
 import { etherscanLink, formatWalletError } from "@/lib/utils";
+import { MEMO_MAX_LENGTH } from "@/lib/v6/pay";
 import { wagmiConfig } from "@/lib/wagmiConfig";
-import { JB_CHAINS, JBChainId } from "@bananapus/nana-sdk-core";
+import { JBChainId } from "@bananapus/nana-sdk-core";
 import { buildDeployProjectPayerTx, projectPayerFromDeployLogs } from "@bananapus/nana-sdk-core/v6";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -30,6 +35,7 @@ import {
 } from "viem";
 import { useAccount } from "wagmi";
 import { getPublicClient } from "wagmi/actions";
+import { MemoCount } from "../pay/MemoCount";
 import { ChainProjectRow, PayerRow } from "./projectPayers";
 
 type DeployedPayer = { chainId: JBChainId; payer: Address | null; txHash: `0x${string}` };
@@ -89,10 +95,12 @@ export function PayerDeployForm({
   const [beneficiary, setBeneficiary] = useState("");
   const [beneficiaryByChain, setBeneficiaryByChain] = useState<Record<number, string>>({});
   const [memo, setMemo] = useState("");
+  const [memoOn, setMemoOn] = useState(false);
   const [editable, setEditable] = useState(false);
   const [admin, setAdmin] = useState("");
   const [adminByChain, setAdminByChain] = useState<Record<number, string>>({});
   const [metadata, setMetadata] = useState("0x");
+  const [metadataOn, setMetadataOn] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(
     () => new Set(deployableRows.map((row) => row.chainId)),
   );
@@ -118,6 +126,22 @@ export function PayerDeployForm({
   };
 
   const selectedRows = deployableRows.filter((row) => selected.has(row.chainId));
+  // Rows come from the indexer, and a payer forwards to its project id forever, so
+  // each destination must be a pair the on-chain sucker registry lists. A saved
+  // batch is checked too: while any of its calls not yet confirmed sent targets an
+  // unlisted pair, it does not resume, since resuming can authorize new work.
+  const gate = useGroupWriteGate(selectedRows);
+  const { unverifiedOf, lineFor: unverifiedLine } = gate;
+  const pairPending = gate.pending;
+  const unverifiedRows = unverifiedOf(selectedRows);
+  const unverifiedResume = unverifiedOf(
+    (pendingBatch?.calls ?? [])
+      .filter((call) => call.state === "ready" && call.expectedDeployment)
+      .map((call) => ({
+        chainId: call.chainId,
+        projectId: BigInt(call.expectedDeployment!.projectId),
+      })),
+  );
 
   // Surface identical already-deployed payers so nobody redeploys one they
   // could just reuse — matching behavior + beneficiary on a selected chain.
@@ -142,10 +166,14 @@ export function PayerDeployForm({
       setError("Select at least one chain.");
       return;
     }
+    if (unverifiedRows.length) {
+      setError(unverifiedLine(unverifiedRows));
+      return;
+    }
     const trimmedMetadata = metadata.trim() || "0x";
     const calls: Omit<ReviewedDeploy["calls"][number], "directory">[] = [];
     for (const row of selectedRows) {
-      const chainName = JB_CHAINS[row.chainId]?.name ?? row.chainId;
+      const chainName = chainDisplayName(row.chainId);
       let beneficiaryAddress: Address = zeroAddress;
       if (!originalPayer) {
         const raw = beneficiaryByChain[row.chainId]?.trim() || beneficiary;
@@ -161,7 +189,7 @@ export function PayerDeployForm({
         const raw = adminByChain[row.chainId]?.trim() || admin.trim() || address;
         const resolved = resolveAddressInput(raw);
         if (!resolved || resolved === zeroAddress) {
-          setError(`Editable payer addresses need a nonzero address admin on ${chainName}.`);
+          setError(`Editable payer addresses need a nonzero admin address on ${chainName}.`);
           return;
         }
         owner = resolved;
@@ -197,7 +225,7 @@ export function PayerDeployForm({
           });
           if (!isAddress(directory) || directory === zeroAddress) {
             throw new Error(
-              `Could not verify the payer factory on ${JB_CHAINS[call.chainId]?.name ?? call.chainId}.`,
+              `Could not verify the payer factory on ${chainDisplayName(call.chainId)}.`,
             );
           }
           return { ...call, directory };
@@ -211,11 +239,47 @@ export function PayerDeployForm({
     }
   };
 
+  const context = review
+    ? [
+        {
+          label: "Every ETH transfer",
+          value: review.addToBalance
+            ? "Adds to the project balance without minting tokens"
+            : "Pays the project and mints its tokens",
+        },
+        ...review.calls.map((call) => ({
+          label: String(chainDisplayName(call.chainId)),
+          value: `Project #${call.projectId}`,
+          lines: [
+            ...(review.addToBalance
+              ? []
+              : [
+                  `Tokens to ${call.request.args[1] === zeroAddress ? "the sender" : call.request.args[1]}`,
+                ]),
+            `Admin ${call.request.args[5] === zeroAddress ? "none (immutable)" : call.request.args[5]}`,
+          ],
+        })),
+        ...(review.memo ? [{ label: "Memo", value: review.memo }] : []),
+      ]
+    : [];
+
   const submitDeploys = async (resume = false) => {
     if ((!review && !resume) || busy || !address) return;
     if (!resume && review && address.toLowerCase() !== review.account.toLowerCase()) {
       setReview(null);
-      setError("Your connected account changed — review the deploy again.");
+      setError("Your connected account changed. Review the deploy again.");
+      return;
+    }
+    const unverified = resume
+      ? unverifiedResume
+      : unverifiedOf(
+          (review?.calls ?? []).map((call) => ({
+            chainId: call.chainId,
+            projectId: BigInt(call.projectId),
+          })),
+        );
+    if (unverified.length) {
+      setError(unverifiedLine(unverified));
       return;
     }
     setBusy(true);
@@ -225,6 +289,7 @@ export function PayerDeployForm({
     try {
       const outcome = await runBatch({
         label: "Deploy payer addresses",
+        context: resume ? undefined : context,
         scope,
         calls: resume
           ? []
@@ -297,6 +362,10 @@ export function PayerDeployForm({
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
       refreshTimer.current = setTimeout(onDeployed, 5000);
     } catch (e) {
+      if (reviewClosed(e) && !results.length) {
+        setReview(null);
+        return;
+      }
       const message = formatWalletError(e) || "Could not deploy the payer address.";
       setStatus(
         results.length
@@ -313,8 +382,7 @@ export function PayerDeployForm({
   if (!deployableRows.length) {
     return (
       <div className="text-sm text-zinc-500">
-        Payer addresses aren&apos;t available on this project&apos;s chains — the deployer contract
-        isn&apos;t there.
+        Payer addresses aren&apos;t available on this project&apos;s chains.
       </div>
     );
   }
@@ -322,19 +390,22 @@ export function PayerDeployForm({
   return (
     <div className="w-full">
       {pendingBatch ? (
-        <div className="border border-amber-300 bg-amber-50 p-3 text-sm">
+        <div className="border border-amber-300 p-3 text-sm">
           <p>
             A payer deployment has saved progress ({pendingBatch.completed}/{pendingBatch.total}{" "}
             complete).
           </p>
           <ButtonWithWallet
             className="mt-2"
-            disabled={busy}
-            loading={busy}
+            disabled={busy || unverifiedResume.length > 0}
+            loading={busy || (unverifiedResume.length > 0 && gate.checking)}
             onClick={() => void submitDeploys(true)}
           >
             Resume saved deployment
           </ButtonWithWallet>
+          {unverifiedLine(unverifiedResume) ? (
+            <p className="mt-2 text-sm text-zinc-600">{unverifiedLine(unverifiedResume)}</p>
+          ) : null}
         </div>
       ) : null}
       <section className="pb-6">
@@ -349,7 +420,7 @@ export function PayerDeployForm({
               }}
               disabled={busy}
             >
-              <SelectTrigger className="w-full border-melon-300 bg-melon-25 sm:w-64">
+              <SelectTrigger className="w-44 border-melon-300 bg-melon-25">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -378,12 +449,17 @@ export function PayerDeployForm({
                     setOriginalPayer(e.target.checked);
                     invalidate();
                   }}
+                  className="h-4 w-4"
                 />
                 Original payer
               </label>
               {!originalPayer ? (
                 <div className="mt-2">
+                  <label htmlFor="payer-beneficiary" className="mb-1 block text-xs text-zinc-500">
+                    Beneficiary address
+                  </label>
                   <Input
+                    id="payer-beneficiary"
                     className="border-melon-300 bg-melon-25"
                     value={beneficiary}
                     onChange={(e) => {
@@ -391,8 +467,7 @@ export function PayerDeployForm({
                       invalidate();
                     }}
                     disabled={busy}
-                    placeholder="0x… fixed beneficiary"
-                    aria-label="Default beneficiary"
+                    placeholder="0x…"
                   />
                   <PerChainOverrides
                     label="beneficiary"
@@ -415,18 +490,36 @@ export function PayerDeployForm({
           ) : null}
 
           <div className="mt-4">
-            <label className="block text-sm font-medium mb-1">Default memo</label>
-            <Input
-              className="border-melon-300 bg-melon-25"
-              value={memo}
-              onChange={(e) => {
-                setMemo(e.target.value.slice(0, 256));
-                invalidate();
-              }}
-              disabled={busy}
-              placeholder="optional memo attached to payments"
-              aria-label="Default memo"
-            />
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={memoOn}
+                disabled={busy}
+                onChange={(e) => {
+                  setMemoOn(e.target.checked);
+                  setMemo("");
+                  invalidate();
+                }}
+                className="h-4 w-4"
+              />
+              Add a memo to payments
+            </label>
+            {memoOn ? (
+              <>
+                <Input
+                  className="mt-2 border-melon-300 bg-melon-25"
+                  value={memo}
+                  onChange={(e) => {
+                    setMemo(e.target.value.slice(0, MEMO_MAX_LENGTH));
+                    invalidate();
+                  }}
+                  disabled={busy}
+                  aria-label="Default memo"
+                  maxLength={MEMO_MAX_LENGTH}
+                />
+                <MemoCount length={memo.length} className="mt-1 block text-right" />
+              </>
+            ) : null}
           </div>
         </div>
       </section>
@@ -444,12 +537,17 @@ export function PayerDeployForm({
                   if (e.target.checked && !admin && address) setAdmin(address);
                   invalidate();
                 }}
+                className="h-4 w-4"
               />
               Editable
             </label>
             {editable ? (
               <div className="mt-2">
+                <label htmlFor="payer-admin" className="mb-1 block text-xs text-zinc-500">
+                  Admin address
+                </label>
                 <Input
+                  id="payer-admin"
                   className="border-melon-300 bg-melon-25"
                   value={admin}
                   onChange={(e) => {
@@ -457,11 +555,10 @@ export function PayerDeployForm({
                     invalidate();
                   }}
                   disabled={busy}
-                  placeholder="0x… address admin"
-                  aria-label="Address admin"
+                  placeholder="0x…"
                 />
                 <PerChainOverrides
-                  label="address admin"
+                  label="admin"
                   rows={selectedRows}
                   values={adminByChain}
                   fallback={admin}
@@ -472,25 +569,36 @@ export function PayerDeployForm({
                   }}
                 />
                 <p className="text-xs text-zinc-500 mt-1">
-                  The address admin can later change this payer address&apos;s destination project,
-                  Pay/Add to balance behavior, beneficiary, memo, and metadata, or transfer or
-                  renounce the admin role. The role does not receive payments or control either
+                  The admin can later change which project this address pays and every setting here,
+                  or hand off or give up the role. It does not receive payments or control the
                   project.
                 </p>
               </div>
             ) : (
               <p className="text-xs text-zinc-500 mt-1">
-                Off by default: no address admin. The settings above are permanent once deployed.
+                Without an admin, the settings above are permanent once deployed.
               </p>
             )}
           </div>
 
-          <details className="mt-4">
-            <summary className="text-sm text-zinc-500 cursor-pointer">Extra options</summary>
-            <div className="mt-2">
-              <label className="block text-sm font-medium mb-1">Default metadata</label>
+          <div className="mt-4">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={metadataOn}
+                disabled={busy}
+                onChange={(e) => {
+                  setMetadataOn(e.target.checked);
+                  setMetadata("0x");
+                  invalidate();
+                }}
+                className="h-4 w-4"
+              />
+              Custom metadata
+            </label>
+            {metadataOn ? (
               <Input
-                className="border-melon-300 bg-melon-25"
+                className="mt-2 border-melon-300 bg-melon-25 font-mono"
                 value={metadata}
                 onChange={(e) => {
                   setMetadata(e.target.value);
@@ -501,12 +609,8 @@ export function PayerDeployForm({
                 spellCheck={false}
                 aria-label="Default metadata"
               />
-              <p className="text-xs text-zinc-500 mt-1">
-                Hex bytes forwarded to pay/addToBalance. Leave 0x unless you need custom terminal
-                metadata.
-              </p>
-            </div>
-          </details>
+            ) : null}
+          </div>
         </div>
       </section>
 
@@ -530,33 +634,43 @@ export function PayerDeployForm({
                       });
                       invalidate();
                     }}
+                    className="h-4 w-4"
                   />
                   <ChainLogo chainId={row.chainId} width={16} height={16} />
-                  {JB_CHAINS[row.chainId]?.name ?? row.chainId}
+                  {chainDisplayName(row.chainId)}
                 </label>
               ))}
             </div>
           </div>
 
           {duplicates.length > 0 ? (
-            <div className="mt-4 border border-amber-300 bg-amber-50 text-amber-800 text-xs p-3 rounded">
+            <div className="mt-4 border border-amber-300 p-3 text-xs text-amber-800">
               This project already has a payer address with these settings:{" "}
               {duplicates
                 .map(
                   (row) =>
-                    `${JB_CHAINS[row.chainId as JBChainId]?.name ?? row.chainId} ${row.address.slice(0, 6)}…${row.address.slice(-4)}`,
+                    `${chainDisplayName(row.chainId)} ${row.address.slice(0, 6)}…${row.address.slice(-4)}`,
                 )
                 .join(", ")}
-              . Anyone can pay it directly — deploying again creates another address that behaves
-              the same.
+              . Anyone can pay it directly. Deploying again makes another address that works the
+              same.
             </div>
+          ) : null}
+
+          {unverifiedLine(unverifiedRows) ? (
+            <p className="mt-4 text-sm text-zinc-600">{unverifiedLine(unverifiedRows)}</p>
           ) : null}
 
           <div className="mt-4 flex justify-end">
             <ButtonWithWallet
               connectWalletText="Connect wallet to deploy"
-              loading={busy}
-              disabled={busy || Boolean(pendingBatch) || selectedRows.length === 0}
+              loading={busy || (unverifiedRows.length > 0 && pairPending)}
+              disabled={
+                busy ||
+                Boolean(pendingBatch) ||
+                selectedRows.length === 0 ||
+                unverifiedRows.length > 0
+              }
               onClick={buildReview}
               className="bg-teal-500 text-melon-950 hover:bg-teal-600"
             >
@@ -565,16 +679,13 @@ export function PayerDeployForm({
           </div>
 
           {review ? (
-            <TxConfirmDialog
+            <TxProgress
               open
-              onOpenChange={(open) => {
-                if (!open) setReview(null);
-              }}
+              onClose={() => setReview(null)}
               title="Confirm payer address"
-              chainId={review.calls[0]!.chainId}
               steps={review.calls.map((call) => ({
                 key: String(call.chainId),
-                title: `Deploy on ${JB_CHAINS[call.chainId]?.name ?? call.chainId}`,
+                title: `Deploy on ${chainDisplayName(call.chainId)}`,
               }))}
               activeIndex={busy ? deployed.length : -1}
               stepsIntro={
@@ -582,50 +693,21 @@ export function PayerDeployForm({
                   ? "Review the destinations together, then choose a funding chain. Safe and testnet wallets continue in stages with saved progress."
                   : undefined
               }
-              action={`Deploy payer address${review.calls.length > 1 ? "es" : ""}`}
-              onConfirm={() => void submitDeploys()}
+              start={() => void submitDeploys()}
               busy={busy}
               status={status}
               error={error}
-            >
-              <SummaryRow label="Every ETH transfer">
-                {review.addToBalance
-                  ? "Adds to the project balance without minting tokens"
-                  : "Pays the project and mints its tokens"}
-              </SummaryRow>
-              {review.calls.map((call) => (
-                <SummaryRow
-                  key={call.chainId}
-                  label={String(JB_CHAINS[call.chainId]?.name ?? call.chainId)}
-                >
-                  Project #{call.projectId}
-                  {!review.addToBalance ? (
-                    <span className="block text-xs text-zinc-500 break-all">
-                      Tokens to{" "}
-                      {call.request.args[1] === zeroAddress ? "the sender" : call.request.args[1]}
-                    </span>
-                  ) : null}
-                  <span className="block text-xs text-zinc-500 break-all">
-                    Admin{" "}
-                    {call.request.args[5] === zeroAddress
-                      ? "none (immutable)"
-                      : call.request.args[5]}
-                  </span>
-                </SummaryRow>
-              ))}
-              {review.memo ? <SummaryRow label="Memo">{review.memo}</SummaryRow> : null}
-            </TxConfirmDialog>
+              rows={context}
+            />
           ) : null}
 
           {status && !review ? (
             <p className="mt-2 wrap-anywhere text-xs text-zinc-500">{status}</p>
           ) : null}
-          {error && !review ? (
-            <p className="mt-2 wrap-anywhere text-xs text-red-600">{error}</p>
-          ) : null}
+          <TxError error={review ? null : error} />
 
           {deployed.length > 0 ? (
-            <div className="mt-4 border border-zinc-200 p-3 rounded">
+            <div className="mt-4 border border-zinc-200 p-3">
               <p className="text-sm font-medium">
                 Send ETH to {deployed.length === 1 ? "this address" : "these addresses"} to pay the
                 project:
@@ -675,47 +757,43 @@ function PerChainOverrides({
   disabled: boolean;
   onChange: (next: Record<number, string>) => void;
 }) {
+  const [open, setOpen] = useState(() => Object.values(values).some((value) => value?.trim()));
   if (rows.length <= 1) return null;
   return (
-    <details className="mt-2">
-      <summary className="text-xs text-zinc-500 cursor-pointer">Set the {label} per chain</summary>
-      <div className="mt-2 space-y-2">
-        {rows.map((row) => (
-          <div key={row.chainId} className="flex items-center gap-2">
-            <span className="flex items-center gap-1.5 text-xs w-36 shrink-0">
-              <ChainLogo chainId={row.chainId} width={14} height={14} />
-              {JB_CHAINS[row.chainId]?.name ?? row.chainId}
-            </span>
-            <Input
-              className="h-8 border-melon-300 bg-melon-25 text-xs"
-              aria-label={`${label} on ${JB_CHAINS[row.chainId]?.name ?? row.chainId}`}
-              value={values[row.chainId] ?? ""}
-              onChange={(e) => onChange({ ...values, [row.chainId]: e.target.value })}
-              disabled={disabled}
-              placeholder={fallback || "0x…"}
-            />
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="h-6 px-2 text-[11px]"
-      onClick={() => {
-        void navigator.clipboard.writeText(value);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1400);
-      }}
-    >
-      {copied ? "Copied" : "Copy"}
-    </Button>
+    <div className="mt-2">
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={open}
+          disabled={disabled}
+          onChange={() => {
+            if (open) onChange({});
+            setOpen(!open);
+          }}
+          className="h-4 w-4"
+        />
+        Set the {label} per chain
+      </label>
+      {open ? (
+        <div className="mt-2 space-y-3">
+          {rows.map((row) => (
+            <label key={row.chainId} className="block">
+              <span className="mb-1 flex items-center gap-1.5 text-xs text-zinc-500">
+                <ChainLogo chainId={row.chainId} width={14} height={14} />
+                {chainDisplayName(row.chainId)}
+              </span>
+              <Input
+                className="border-melon-300 bg-melon-25"
+                aria-label={`${label} on ${chainDisplayName(row.chainId)}`}
+                value={values[row.chainId] ?? ""}
+                onChange={(e) => onChange({ ...values, [row.chainId]: e.target.value })}
+                disabled={disabled}
+                placeholder={fallback || "0x…"}
+              />
+            </label>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }

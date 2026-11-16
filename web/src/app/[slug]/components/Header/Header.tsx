@@ -1,12 +1,15 @@
 "use client";
 
 import { ChainLogo } from "@/components/ChainLogo";
+import { EthereumAddress } from "@/components/EthereumAddress";
 import EtherscanLink from "@/components/EtherscanLink";
 import { ImageWithFallback, IpfsImage } from "@/components/IpfsImage";
 import { ProjectLink } from "@/components/ProjectLink";
+import { SafeBadge } from "@/components/SafeBadge";
 import { FastForward as ForwardIcon } from "@/components/ui/icons";
 import { Revalidating } from "@/components/ui/Revalidating";
 import { useCompleteParticipants } from "@/hooks/useCompleteBendystrawLists";
+import { useHydrated } from "@/hooks/useHydrated";
 import type { Project } from "@/lib/bendystraw/types";
 import { formatShortDate } from "@/lib/date";
 import {
@@ -23,8 +26,12 @@ import { formatTokenSymbol } from "@/lib/utils";
 import { JB_CHAINS } from "@bananapus/nana-sdk-core";
 import Link from "next/link";
 import { Suspense, use, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { Address } from "viem";
 import { participantCountSummary } from "../v6/owners/accounts/participantsAggregate";
 import { TvlDatum } from "./TvlDatum";
+
+const OPERATOR_LINK_CLASS =
+  "ml-1 inline-flex min-h-11 min-w-0 items-center break-all font-medium text-zinc-900 sm:min-h-0";
 
 interface Props {
   isRevnet: boolean;
@@ -42,32 +49,40 @@ interface Props {
 export function Header(props: Props) {
   const { isRevnet, operatorPromise, projects, createdAt } = props;
   const operator = use(operatorPromise);
+  const hydrated = useHydrated();
   const chainId = useJBChainId();
   const project = useJBProject();
   const { metadata } = useJBProjectMetadataContext();
   const { token: tokenContext } = useJBTokenContext();
 
+  const hasParticipantGroup = Boolean(projects[0]?.suckerGroupId);
   const participantsQuery = useCompleteParticipants(
     {
-      suckerGroupId: projects[0].suckerGroupId,
+      suckerGroupId: projects[0]?.suckerGroupId ?? "",
       balance_gt: "0",
     },
     Number(chainId),
-    Boolean(projects[0].suckerGroupId),
+    hasParticipantGroup,
   );
 
+  // Persisted queries can restore before this streamed header hydrates. Keep its
+  // first client render identical to the server, then expose the cached count.
+  const participants = hydrated ? participantsQuery.data : undefined;
   const holderSummary = useMemo(
-    () => participantCountSummary(participantsQuery.data, participantsQuery.data?.length),
-    [participantsQuery.data],
+    () => participantCountSummary(participants, participants?.length),
+    [participants],
   );
-  const holderValue = participantsQuery.isError
+  const holderUnavailable =
+    !hasParticipantGroup ||
+    (hydrated && (participantsQuery.isError || (!participantsQuery.isLoading && !participants)));
+  const holderValue = holderUnavailable
     ? "—"
-    : participantsQuery.isLoading
+    : !hydrated || participantsQuery.isLoading
       ? "…"
       : `${holderSummary.count}${holderSummary.exact ? "" : "+"}`;
   // Restored from the last session: show the count now, mark it unconfirmed
   // until the 15s poll answers.
-  const holdersPending = participantsQuery.isFetching && !participantsQuery.isLoading;
+  const holdersPending = hydrated && participantsQuery.isFetching && !participantsQuery.isLoading;
   const { data: suckers } = useSuckers();
   const { name: projectName, logoUri } = metadata?.data ?? {};
   const tokenSymbol = tokenContext?.data ? formatTokenSymbol(tokenContext) : undefined;
@@ -218,7 +233,7 @@ export function Header(props: Props) {
                   <span
                     className="font-medium text-black-500"
                     title={
-                      participantsQuery.isError
+                      holderUnavailable
                         ? "Owner data is unavailable."
                         : holderSummary.exact
                           ? undefined
@@ -247,7 +262,7 @@ export function Header(props: Props) {
             </div> */}
               </div>
               <Suspense>
-                {(hasOperator || website || hasCreated || suckers?.length) && (
+                {(hasOperator || website || hasCreated || Boolean(suckers?.length)) && (
                   <div
                     ref={(node) => {
                       metadataRef.current = node;
@@ -262,12 +277,28 @@ export function Header(props: Props) {
                       >
                         <span className="text-zinc-500">Operator:</span>
                         {operator ? (
-                          <EtherscanLink
-                            value={operator.address}
-                            className="ml-1 inline-block min-h-11 min-w-0 break-all font-medium text-zinc-900 sm:min-h-0"
-                          >
-                            {operator.displayName}
-                          </EtherscanLink>
+                          <>
+                            {operator.displayName || !operator.address ? (
+                              <EtherscanLink
+                                value={operator.address}
+                                chain={chainId ? JB_CHAINS[chainId]?.chain : undefined}
+                                className={OPERATOR_LINK_CLASS}
+                              >
+                                {operator.displayName}
+                              </EtherscanLink>
+                            ) : (
+                              <EthereumAddress
+                                address={operator.address as Address}
+                                short
+                                withEnsName
+                                chain={chainId ? JB_CHAINS[chainId]?.chain : undefined}
+                                className={OPERATOR_LINK_CLASS}
+                              />
+                            )}
+                            {operator.address && chainId ? (
+                              <SafeBadge address={operator.address} chainId={Number(chainId)} />
+                            ) : null}
+                          </>
                         ) : (
                           <span
                             className="ml-1 font-medium text-zinc-500"
@@ -333,7 +364,7 @@ export function Header(props: Props) {
                                   name: projectName ?? tokenSymbol ?? `Project ${pair.projectId}`,
                                   logoUri: logoUri ?? null,
                                 }}
-                                className="relative inline-flex translate-y-[2px] px-1 transition-opacity before:absolute before:-inset-x-1 before:-inset-y-3 before:content-[''] hover:opacity-70"
+                                className="relative inline-flex translate-y-[2px] items-center px-1 transition-opacity before:absolute before:-inset-x-1 before:-inset-y-3 before:content-[''] hover:opacity-70"
                               >
                                 <ChainLogo
                                   chainId={pair.peerChainId as JBChainId}

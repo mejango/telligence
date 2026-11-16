@@ -3,7 +3,6 @@ import {
   defaultsToDollars,
   payButtonAction,
   payPanelLayoutClasses,
-  paySettlementLabel,
 } from "@/app/[slug]/components/v6/pay/payCardLayout";
 import { describe, expect, it } from "vitest";
 
@@ -22,16 +21,6 @@ describe("v6 pay card shop-strip spacing", () => {
 
   it("does not reserve shop-preview spacing in add-balance mode", () => {
     expect(payPanelLayoutClasses({ mode: "addbalance", shopTierCount: 3 })).toBe("py-0");
-  });
-});
-
-describe("v6 pay card settlement label", () => {
-  it("calls every router/AMM settlement a swap", () => {
-    expect(paySettlementLabel("swap")).toBe("Swap");
-  });
-
-  it("calls direct terminal settlement issuance", () => {
-    expect(paySettlementLabel("multi")).toBe("Issuance");
   });
 });
 
@@ -81,4 +70,9 @@ describe("what a payer should buy to pay this project", () => {
   it("falls back to ETH rather than naming nothing", () => {
     expect(buyableAsset({ accepted: ["DAI"] })).toBe("ETH");
   });
+});
+
+it("keeps an unread or failed accepted-token balance unknown beside confirmed zeros", () => {
+  expect(defaultsToDollars({ isConnected: true, balances: [undefined] })).toBe(false);
+  expect(defaultsToDollars({ isConnected: true, balances: [0n, undefined] })).toBe(false);
 });

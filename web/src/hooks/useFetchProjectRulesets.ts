@@ -1,10 +1,10 @@
 import { useJBContractContext } from "@/lib/nana/project";
-import { readAllProjectRulesets } from "@/lib/nana/rulesets";
+import type { RawRuleset } from "@/lib/nana/rulesets";
 import { decodeRulesetMetadata, RulesetMetadata } from "@/lib/utils";
-import { wagmiConfig } from "@/lib/wagmiConfig";
 import { JBCoreContracts, SuckerPair } from "@bananapus/nana-sdk-core";
-import { useCallback, useEffect, useState } from "react";
-import { getPublicClient } from "wagmi/actions";
+import { useQueries, type UseQueryResult } from "@tanstack/react-query";
+import { useCallback } from "react";
+import { projectRulesetsQueryOptions } from "./useRulesets";
 
 type RuleSet = {
   cycleNumber: number;
@@ -23,59 +23,37 @@ type SuckerPairWithRulesets = SuckerPair & {
 };
 
 export function useFetchProjectRulesets(suckers: SuckerPair[] | undefined | null) {
-  const [suckerPairsWithRulesets, setSuckerPairsWithRulesets] = useState<
-    SuckerPairWithRulesets[] | undefined
-  >(undefined);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<any | null>(null);
   const { contractAddress } = useJBContractContext();
+  const combine = useCallback(
+    (queries: UseQueryResult<RawRuleset[], Error>[]) => {
+      const error = queries.find((query) => query.error)?.error ?? null;
+      const complete = queries.length > 0 && queries.every((query) => query.data !== undefined);
+      return {
+        suckerPairsWithRulesets:
+          !error && complete
+            ? suckers?.map((sucker, index): SuckerPairWithRulesets => ({
+                ...sucker,
+                rulesets: queries[index].data!.map((ruleset) => ({
+                  ...ruleset,
+                  metadata: decodeRulesetMetadata(ruleset.metadata),
+                })),
+              }))
+            : undefined,
+        isLoading: !suckers || queries.some((query) => query.isLoading),
+        error,
+      };
+    },
+    [suckers],
+  );
 
-  const fetchRuleSets = useCallback(async () => {
-    if (!suckers) return undefined;
-    setIsLoading(true);
-    try {
-      const allRuleSets = await Promise.all(
-        suckers.map((sucker) => {
-          const client = getPublicClient(wagmiConfig, {
-            chainId: sucker.peerChainId,
-          });
-          if (!client) throw new Error(`No public client for chain ${sucker.peerChainId}.`);
-          return readAllProjectRulesets(
-            client,
-            contractAddress(JBCoreContracts.JBRulesets, sucker.peerChainId),
-            sucker.projectId,
-          );
-        }),
-      );
-      if (allRuleSets.length === 0) return undefined;
-      const pairsWithRulesets = suckers.map((sucker, index) => ({
-        ...sucker,
-        rulesets: allRuleSets[index]
-          .slice()
-          .reverse()
-          .map((ruleset) => ({
-            ...ruleset,
-            metadata: decodeRulesetMetadata(ruleset.metadata),
-          })),
-      }));
-      setSuckerPairsWithRulesets(pairsWithRulesets);
-    } catch (error) {
-      console.error(error);
-      setError(error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [suckers, contractAddress]);
-
-  useEffect(() => {
-    if (!suckers) return undefined;
-    fetchRuleSets();
-    // console.log("ERROR", error)
-  }, [suckers, fetchRuleSets]);
-
-  return {
-    suckerPairsWithRulesets: error ? undefined : suckerPairsWithRulesets,
-    isLoading,
-    error,
-  };
+  return useQueries({
+    queries: (suckers ?? []).map((sucker) =>
+      projectRulesetsQueryOptions(
+        sucker.peerChainId,
+        sucker.projectId,
+        contractAddress(JBCoreContracts.JBRulesets, sucker.peerChainId),
+      ),
+    ),
+    combine,
+  });
 }

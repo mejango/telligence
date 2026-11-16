@@ -1,7 +1,8 @@
 "use client";
 
+import { chainDisplayName } from "@/app/constants";
 import { wagmiConfig } from "@/lib/wagmiConfig";
-import { JB_CHAINS, JBChainId } from "@bananapus/nana-sdk-core";
+import { JBChainId } from "@bananapus/nana-sdk-core";
 import { useEffect, useState } from "react";
 import { getPublicClient } from "wagmi/actions";
 import { customReserveCoversChains, verifyCustomReserveAsset } from "../helpers/customReserveAsset";
@@ -38,7 +39,7 @@ export function ReserveAssetFields({ disabled = false }: { disabled?: boolean })
     }
     const address = customReserveAsset.address.trim();
     if (!address) {
-      setLookup({ kind: "idle", message: "Enter an ERC-20 address, then choose the chains." });
+      setLookup({ kind: "idle", message: "Enter the token address, then choose the chains." });
       return;
     }
     if (chainIds.length === 0) {
@@ -61,7 +62,7 @@ export function ReserveAssetFields({ disabled = false }: { disabled?: boolean })
         setLookup({
           kind: "success",
           message: `${verified.symbol} | ${verified.decimals} decimals | verified on ${chainIds
-            .map((chainId) => JB_CHAINS[chainId]?.name ?? chainId)
+            .map((chainId) => chainDisplayName(chainId))
             .join(", ")}`,
         });
       } catch (error) {
@@ -115,7 +116,7 @@ export function ReserveAssetFields({ disabled = false }: { disabled?: boolean })
 
   return (
     <div className="mt-8">
-      <span className="mr-4 text-md font-semibold">Choose your reserve asset</span>
+      <span className="mr-4 text-md font-semibold">Choose which tokens to accept</span>
       <div className="mt-2 flex flex-wrap gap-x-8 gap-y-3">
         {(["ETH", "USDC"] as const).map((asset) => (
           <label className="flex items-center gap-2" key={asset}>
@@ -146,15 +147,14 @@ export function ReserveAssetFields({ disabled = false }: { disabled?: boolean })
       {!customSelected ? (
         <>
           <p className="mt-3 max-w-xl text-sm text-zinc-600">
-            Accounting contexts cannot be added or removed later.
+            You cannot add or remove accepted tokens later.
           </p>
           {reserveAsset === "ETH_USDC" ? (
             <div className="mt-3 max-w-xl border border-pink-200 bg-pink-50 p-3 text-sm text-zinc-700">
-              {revnetTokenSymbol}&nbsp;will be backed by both ETH and USDC paid in by users. Holders
-              can cash out for either reserve, and the backing mix is set by the proportion
-              received—you cannot rebalance between them later. Issuance and shop prices can use ETH
-              or USD; the canonical ETH and USDC accounting contexts use the protocol&apos;s default
-              ETH/USD feed to convert between them.
+              The reserve will hold the ETH and USDC people pay in. Holders can cash out for either,
+              subject to the available balance. You cannot trade one reserve token for the other to
+              change the mix. New token and store prices can use ETH or USD. A shared ETH/USD price
+              feed supplies the exchange rate.
             </div>
           ) : null}
         </>
@@ -163,7 +163,7 @@ export function ReserveAssetFields({ disabled = false }: { disabled?: boolean })
       {customSelected ? (
         <div className="mt-5 max-w-xl border-l border-zinc-300 pl-4">
           <label className="block text-sm font-semibold" htmlFor="customReserveAsset.address">
-            ERC-20 token address
+            Token contract address
           </label>
           <input
             id="customReserveAsset.address"
@@ -198,15 +198,15 @@ export function ReserveAssetFields({ disabled = false }: { disabled?: boolean })
             </p>
           ) : null}
           <p className="mt-3 text-sm text-zinc-600">
-            A custom reserve is exclusive. {verified ? customReserveAsset.symbol : "The token"}{" "}
-            becomes the denomination for issuance and shop prices, so no ETH or USD price feed is
-            needed. It must exist at the same address with the same symbol and decimals on every
-            selected chain.
+            Choosing a custom token makes it the only accepted token. New token and store prices use{" "}
+            {verified ? customReserveAsset.symbol : "that token"}, with no ETH or USD conversion. It
+            must follow the standard token interface, ERC-20, and have the same address, symbol, and
+            number of decimal places on every selected chain.
           </p>
           {chainIds.length > 1 ? (
             <p className="mt-2 text-sm text-zinc-600">
-              Linked chains bridge the revnet token. Custom reserve balances remain local because
-              the protocol has no canonical cross-chain mapping for arbitrary ERC-20s.
+              Holders can move {revnetTokenSymbol} between linked chains. The custom tokens held in
+              reserve stay on the chain that received them.
             </p>
           ) : null}
         </div>

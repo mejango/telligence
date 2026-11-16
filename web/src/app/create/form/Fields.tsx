@@ -71,14 +71,16 @@ export function FieldGroup(
   const { submitCount } = useFormContext();
 
   const showError = meta.error && (meta.touched || submitCount > 0);
+  // The group's own layout props stay off the input element.
+  const { groupClassName, label, description, ...fieldProps } = props;
 
   return (
-    <div className={props.groupClassName}>
+    <div className={groupClassName}>
       <label htmlFor={props.name} className="block text-md font-semibold leading-6 mb-1">
-        {props.label}
+        {label}
       </label>
-      {props.description ? <p className="text-md text-zinc-600 mb-3">{props.description}</p> : null}
-      <Field {...props} />
+      {description ? <p className="text-md text-zinc-600 mb-3">{description}</p> : null}
+      <Field {...fieldProps} />
       {showError && <p className="text-red-500 mt-1 mb-1.5 text-sm">{meta.error}</p>}
     </div>
   );

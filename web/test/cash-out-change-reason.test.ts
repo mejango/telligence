@@ -47,6 +47,6 @@ describe("cash-out price change explanations", () => {
       price: 0.63,
     });
     expect(explanation).toContain("payout reduced project backing");
-    expect(explanation).toContain("cash-out tax changed from 20% to 30%");
+    expect(explanation).toContain("cash-out tax changed from 0.2 to 0.3");
   });
 });

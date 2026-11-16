@@ -1,5 +1,6 @@
 "use client";
 
+import { useHydrated } from "@/hooks/useHydrated";
 import { PERSIST } from "@/lib/query-persist";
 import { useQuery } from "@tanstack/react-query";
 import { ProjectItem } from "../../shared";
@@ -17,14 +18,17 @@ import { QueuedMovementsCard } from "./QueuedMovementsCard";
  */
 export function V6SettlementSubtab({ projects }: { projects: ProjectItem[] }) {
   const chains = toChainProjects(projects);
+  const hydrated = useHydrated();
 
-  const { data: tokenSymbol = "tokens" } = useQuery({
+  const { data } = useQuery({
     queryKey: ["v6ProjectTokenSymbol", chainProjectsKey(chains)],
     meta: PERSIST,
     enabled: projects.length > 0,
     staleTime: Infinity,
     queryFn: () => projectTokenSymbol(projects),
   });
+
+  const tokenSymbol = hydrated ? (data ?? "tokens") : "tokens";
 
   if (chains.length === 0) {
     return <div className="text-zinc-500">No project chains found.</div>;
@@ -44,9 +48,8 @@ export function V6SettlementSubtab({ projects }: { projects: ProjectItem[] }) {
         // Single-chain projects have nothing to bridge, gossip, or claim — say so
         // instead of silently hiding the sections.
         <div className="text-zinc-500">
-          This project settles on one chain, so there are no bridges, cross-chain accounting
-          records, or queued token movements. If the revnet operator deploys the project to more
-          chains, they&apos;ll show up here.
+          This revnet uses one chain. If the operator adds more chains, their balances and transfers
+          will appear here.
         </div>
       )}
     </div>

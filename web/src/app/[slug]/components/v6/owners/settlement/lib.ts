@@ -9,17 +9,18 @@ import {
   optimismSepolia,
   sepolia,
 } from "@/lib/chains";
+import { formatPriceValue } from "@/lib/number";
 import { etherscanLink } from "@/lib/utils";
 import { getViemPublicClient } from "@/lib/wagmiTransports";
 import {
   JBChainId,
-  jbContractAddress,
   jbControllerAbi,
   JBCoreContracts,
   jbDirectoryAbi,
   JBSuckerContracts,
   jbSuckerRegistryAbi,
   jbTerminalStoreAbi,
+  jbV6ContractAddress,
   NATIVE_TOKEN,
 } from "@bananapus/nana-sdk-core";
 import {
@@ -99,7 +100,7 @@ export function fmtUnits(value: bigint, decimals: number): string {
   if (!isFinite(n)) return formatUnits(value, decimals);
   let out: string;
   if (n === 0) out = "0";
-  else if (n < 0.0001) out = n.toExponential(2);
+  else if (n < 0.0001) out = formatPriceValue(n);
   else if (n >= 1_000_000)
     out = Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 2 }).format(n);
   else out = Intl.NumberFormat("en", { maximumFractionDigits: n >= 1 ? 4 : 6 }).format(n);
@@ -182,7 +183,7 @@ export async function projectTokenSymbol(projects: ProjectItem[]): Promise<strin
 // ── Shared reads ──────────────────────────────────────────────────────────────
 
 function directoryOf(chainId: JBChainId): Address {
-  return jbContractAddress[6][JBCoreContracts.JBDirectory][chainId] as Address;
+  return jbV6ContractAddress[JBCoreContracts.JBDirectory][chainId] as Address;
 }
 
 /** The project's controller, resolved from the directory (never hardcoded). */
@@ -258,7 +259,7 @@ export async function fetchAcrossChains(chains: ChainProject[]): Promise<AcrossC
                 functionName: "primaryTerminalOf",
                 args: [projectId, ctx.token],
               });
-              const store = jbContractAddress[6][JBCoreContracts.JBTerminalStore][
+              const store = jbV6ContractAddress[JBCoreContracts.JBTerminalStore][
                 chainId
               ] as Address;
               const balance = await client.readContract({
@@ -289,7 +290,7 @@ export async function fetchAcrossChains(chains: ChainProject[]): Promise<AcrossC
           const supplyNow = supply ?? 0n;
           const probe = supplyNow > 0n ? (supplyNow < 10n ** 24n ? supplyNow : 10n ** 24n) : 0n;
           if (probe > 0n) {
-            const store = jbContractAddress[6][JBCoreContracts.JBTerminalStore][chainId] as Address;
+            const store = jbV6ContractAddress[JBCoreContracts.JBTerminalStore][chainId] as Address;
             const reclaim = await client.readContract({
               address: store,
               abi: jbTerminalStoreAbi,
@@ -442,7 +443,7 @@ export async function fetchGossip(chains: ChainProject[]): Promise<GossipChainVi
       let buckets: Map<string, bigint> | null = null;
       try {
         const contexts = await getAccountingContexts(client, { chainId, projectId });
-        const store = jbContractAddress[6][JBCoreContracts.JBTerminalStore][chainId] as Address;
+        const store = jbV6ContractAddress[JBCoreContracts.JBTerminalStore][chainId] as Address;
         buckets = new Map();
         for (const ctx of contexts) {
           const terminal = await client.readContract({
@@ -475,7 +476,7 @@ export async function fetchGossip(chains: ChainProject[]): Promise<GossipChainVi
   return Promise.all(
     chains.map(async ({ chainId: A, projectId }): Promise<GossipChainView> => {
       const client = getViemPublicClient(A) as PublicClient;
-      const registry = jbContractAddress[6][JBSuckerContracts.JBSuckerRegistry][A] as Address;
+      const registry = jbV6ContractAddress[JBSuckerContracts.JBSuckerRegistry][A] as Address;
       const records = new Map<
         number,
         {

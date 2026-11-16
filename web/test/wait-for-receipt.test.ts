@@ -1,5 +1,5 @@
 import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
-import type { Hex, PublicClient } from "viem";
+import { TransactionReceiptNotFoundError, type Hex, type PublicClient } from "viem";
 import { describe, expect, it, vi } from "vitest";
 
 const HASH = `0x${"ab".repeat(32)}` as Hex;
@@ -29,6 +29,22 @@ describe("receipt tracking fallback", () => {
       name: "TransactionReceiptUnavailableError",
       hash: HASH,
       chainId: 8453,
+      // A node that can't answer says nothing about the receipt.
+      noReceipt: false,
     });
+  });
+
+  it("says when the node's last read answered that it holds no receipt", async () => {
+    const client = {
+      chain: { id: 8453 },
+      waitForTransactionReceipt: vi.fn().mockRejectedValue(new Error("RPC unavailable")),
+      getTransactionReceipt: vi
+        .fn()
+        .mockRejectedValue(new TransactionReceiptNotFoundError({ hash: HASH })),
+    } as unknown as PublicClient;
+
+    await expect(
+      waitForReceiptWithRetry(client, HASH, { attempts: 2, intervalMs: 0 }),
+    ).rejects.toMatchObject({ name: "TransactionReceiptUnavailableError", noReceipt: true });
   });
 });

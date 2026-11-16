@@ -1,6 +1,7 @@
 import type { ProjectQuery } from "@/lib/bendystraw/types";
-import { ipfsMediaGatewayUrls } from "@/lib/ipfs";
-import { readBoundedBody } from "@/lib/server/readBoundedBody";
+import { revertedNonexistentToken } from "@/lib/contract-revert";
+import type { IndexedReadStatus } from "@/lib/projectIndexStatus";
+import { fetchIpfsMetadata } from "@/lib/projectMetadataFill.server";
 import { getViemPublicClient } from "@/lib/wagmiTransports";
 import {
   getJBContractAddress,
@@ -14,49 +15,10 @@ import {
   RevnetCoreContracts,
 } from "@bananapus/nana-sdk-core";
 import { cache } from "react";
-import {
-  BaseError,
-  ContractFunctionRevertedError,
-  erc20Abi,
-  zeroAddress,
-  type Address,
-} from "viem";
-import { getProject } from "./getProject";
+import { erc20Abi, zeroAddress, type Address } from "viem";
+import { getIndexedProject } from "./getProject";
 
 type ProjectRow = NonNullable<ProjectQuery["project"]>;
-
-const MAX_METADATA_BYTES = 512 * 1024;
-const FETCH_TIMEOUT_MS = 8_000;
-
-async function fetchIpfsMetadata(
-  uri: string | null,
-): Promise<{ name?: unknown; logoUri?: unknown } | null> {
-  for (const url of ipfsMediaGatewayUrls(uri)) {
-    try {
-      const response = await fetch(url, {
-        cache: "no-store",
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        await response.body?.cancel();
-        continue;
-      }
-      const body = await readBoundedBody(response.body, MAX_METADATA_BYTES);
-      if (!body) continue;
-      const value = JSON.parse(new TextDecoder().decode(body)) as unknown;
-      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-        return value as { name?: unknown; logoUri?: unknown };
-      }
-    } catch {
-      // Try the next gateway.
-    }
-  }
-  return null;
-}
-
-const isRevertError = (err: unknown) =>
-  err instanceof BaseError &&
-  Boolean(err.walk((cause) => cause instanceof ContractFunctionRevertedError));
 
 /**
  * Build a minimal project row straight from the chain for projects that
@@ -81,8 +43,9 @@ const getOnchainProjectFallback = cache(
         args: [id],
       });
     } catch (err) {
-      // ownerOf reverts for a token that was never minted.
-      if (isRevertError(err)) return null;
+      // ownerOf reverts with ERC721NonexistentToken for a project that was
+      // never minted. Any other failure, a node's -32603 included, rethrows.
+      if (revertedNonexistentToken(err)) return null;
       throw err;
     }
 
@@ -175,26 +138,30 @@ const getOnchainProjectFallback = cache(
  * and falling back to on-chain data when the row is missing or incomplete.
  *
  * `degraded: true` signals that indexed data was unavailable so the page
- * should render with reduced stats and a "still indexing" note.
+ * should render with reduced stats and the observed availability reason.
  */
 export const getProjectWithFallback = cache(
   async (
     projectId: number | bigint,
     chainId: JBChainId,
-  ): Promise<{ project: ProjectRow; degraded: boolean } | null> => {
-    const indexed = await getProject(Number(projectId), chainId);
-    if (indexed?.token) return { project: indexed, degraded: false };
+  ): Promise<{ project: ProjectRow; degraded: boolean; indexStatus: IndexedReadStatus } | null> => {
+    const { data: indexed, status: indexStatus } = await getIndexedProject(
+      Number(projectId),
+      chainId,
+    );
+    if (indexed && indexStatus === "available")
+      return { project: indexed, degraded: false, indexStatus };
 
     const fallback = await getOnchainProjectFallback(Number(projectId), chainId);
     if (!fallback) return null;
 
-    if (!indexed) return { project: fallback, degraded: true };
+    if (!indexed) return { project: fallback, degraded: true, indexStatus };
 
     // Keep every indexed field that is populated; fill the gaps on-chain.
     const merged = { ...fallback } as Record<string, unknown>;
     for (const [key, value] of Object.entries(indexed)) {
       if (value !== null && value !== undefined) merged[key] = value;
     }
-    return { project: merged as ProjectRow, degraded: true };
+    return { project: merged as ProjectRow, degraded: true, indexStatus };
   },
 );

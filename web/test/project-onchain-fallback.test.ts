@@ -21,6 +21,7 @@ vi.mock("@/lib/wagmiTransports", () => ({
 }));
 
 import { getProjectWithFallback } from "@/app/[slug]/getProjectFallback";
+import { invalidateProjectDisplay } from "@/lib/server/projectDisplayCache";
 
 const CHAIN_ID = sepolia.id;
 const PROJECT_ID = 123;
@@ -82,15 +83,18 @@ function mockOnchainProject({
   );
 }
 
+// What JBProjects' ownerOf reverts with for a project that was never minted.
 const nonexistentTokenError = () =>
   new ContractFunctionRevertedError({
     abi: [],
     functionName: "ownerOf",
+    data: `0x7e273289${PROJECT_ID.toString(16).padStart(64, "0")}`,
     message: "execution reverted",
   });
 
 describe("getProjectWithFallback", () => {
   beforeEach(() => {
+    invalidateProjectDisplay([{ chainId: CHAIN_ID, projectId: PROJECT_ID }]);
     mocks.queryBendystraw.mockReset();
     mocks.readContract.mockReset();
     vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -101,7 +105,7 @@ describe("getProjectWithFallback", () => {
 
     const result = await getProjectWithFallback(PROJECT_ID, CHAIN_ID);
 
-    expect(result).toEqual({ project: indexedRow(), degraded: false });
+    expect(result).toEqual({ project: indexedRow(), degraded: false, indexStatus: "available" });
     expect(mocks.readContract).not.toHaveBeenCalled();
   });
 
@@ -112,6 +116,7 @@ describe("getProjectWithFallback", () => {
     const result = await getProjectWithFallback(PROJECT_ID, CHAIN_ID);
 
     expect(result?.degraded).toBe(true);
+    expect(result?.indexStatus).toBe("unavailable");
     expect(result?.project).toMatchObject({
       projectId: PROJECT_ID,
       version: 6,
@@ -129,6 +134,7 @@ describe("getProjectWithFallback", () => {
 
     const result = await getProjectWithFallback(PROJECT_ID, CHAIN_ID);
 
+    expect(result?.indexStatus).toBe("missing");
     expect(result?.project.tokenSymbol).toBe("ETH");
     const symbolReads = mocks.readContract.mock.calls.filter(
       (call) => (call[0] as { functionName: string }).functionName === "symbol",
@@ -201,6 +207,27 @@ describe("getProjectWithFallback", () => {
     await expect(getProjectWithFallback(PROJECT_ID, CHAIN_ID)).resolves.toBeNull();
   });
 
+  it("surfaces a revert that does not say the project is missing instead of a 404", async () => {
+    mocks.queryBendystraw.mockResolvedValue({ project: null });
+    // A node's -32603 reads as a data-less revert; another custom error is not a missing project either.
+    for (const error of [
+      new ContractFunctionRevertedError({
+        abi: [],
+        functionName: "ownerOf",
+        message: "internal error",
+      }),
+      new ContractFunctionRevertedError({
+        abi: [],
+        functionName: "ownerOf",
+        data: "0x12345678",
+        message: "execution reverted",
+      }),
+    ]) {
+      mocks.readContract.mockRejectedValue(error);
+      await expect(getProjectWithFallback(PROJECT_ID, CHAIN_ID)).rejects.toBe(error);
+    }
+  });
+
   it("surfaces an RPC outage instead of turning it into a 404", async () => {
     mocks.queryBendystraw.mockRejectedValue(new Error("bendystraw down"));
     mocks.readContract.mockRejectedValue(
@@ -219,6 +246,7 @@ describe("getProjectWithFallback", () => {
     const result = await getProjectWithFallback(PROJECT_ID, CHAIN_ID);
 
     expect(result?.degraded).toBe(true);
+    expect(result?.indexStatus).toBe("incomplete");
     // Indexed fields win where present; on-chain fills the gaps.
     expect(result?.project.name).toBe("Indexed Revnet");
     expect(result?.project.suckerGroupId).toBe("group-1");

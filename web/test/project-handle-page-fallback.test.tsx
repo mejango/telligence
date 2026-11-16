@@ -1,3 +1,4 @@
+import { ProjectPageBoundary } from "@/app/[slug]/ProjectRouteContext";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -87,12 +88,20 @@ describe("verified handle pages without an indexed sucker group", () => {
     ] as const;
 
     for (const [Page, expectedType] of directPages) {
-      const element = (await Page(props)) as ReactElement<{ projects: unknown }>;
+      const wrapper = (await Page(props)) as ReactElement<{
+        children: ReactElement<{ projects: unknown }>;
+      }>;
+      expect(wrapper.type).toBe(ProjectPageBoundary);
+      const element = wrapper.props.children;
       expect(element.type).toBe(expectedType);
       expect(element.props.projects).toEqual(fallbackProjects);
     }
 
-    const overview = (await OverviewPage(props)) as ReactElement<{ children: ReactNode }>;
+    const wrapper = (await OverviewPage(props)) as ReactElement<{
+      children: ReactElement<{ children: ReactNode }>;
+    }>;
+    expect(wrapper.type).toBe(ProjectPageBoundary);
+    const overview = wrapper.props.children;
     const overviewTab = Children.toArray(overview.props.children).find(
       (child) => isValidElement(child) && child.type === mocks.overviewTab,
     ) as ReactElement<{ projects: unknown }> | undefined;

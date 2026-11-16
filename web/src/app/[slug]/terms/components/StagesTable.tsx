@@ -133,13 +133,13 @@ export function StagesTable({ rulesets }: Props) {
       autoIssuance: commaNumber(
         autoIssuanceNum.toLocaleString("en-US", { maximumFractionDigits: 0 }),
       ),
-      cashOutTaxRate: cashOutTaxRate?.format() ?? "0",
+      cashOutTaxRate: cashOutTaxRate?.format() ?? "—",
       isCurrent: idx === currentIdx,
     };
   });
 
   return (
-    <div className="mt-8 rounded-md border border-zinc-200 [&>div]:rounded-md [&_table]:min-w-[800px]">
+    <div className="mt-8 rounded-md border border-zinc-200 [&>div]:rounded-md">
       <Table>
         <TableHeader>
           <TableRow className="bg-zinc-50 hover:bg-zinc-50">
@@ -150,8 +150,8 @@ export function StagesTable({ rulesets }: Props) {
                 label="Issuance"
                 tooltip={
                   <p>
-                    {PROTOCOL_CONCEPTS.issuance} Here: {formatTokenSymbol(token)} created per{" "}
-                    {tokenA.symbol} received.
+                    {PROTOCOL_CONCEPTS.issuance} The unit after the slash is the stage&apos;s chosen
+                    pricing currency.
                   </p>
                 }
               />
@@ -201,7 +201,7 @@ export function StagesTable({ rulesets }: Props) {
                   ) : null}
                 </div>
               </TableCell>
-              <TableCell className="text-zinc-600 whitespace-nowrap px-2 py-3">
+              <TableCell className="text-zinc-600 min-w-28 px-2 py-3">
                 <div className="flex flex-col">
                   <span>
                     {formatShortDate(stage.startDate)}

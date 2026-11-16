@@ -4,22 +4,26 @@ import { ButtonWithWallet } from "@/components/ButtonWithWallet";
 import { ChainLogo } from "@/components/ChainLogo";
 import { EthereumAddress } from "@/components/EthereumAddress";
 import { TableSkeleton } from "@/components/loading/LoadingSkeletons";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { toast } from "@/components/ui/use-toast";
-import { submittedViaSafe, useWriteContract } from "@/hooks/useReviewedWriteContract";
+import { useHydrated } from "@/hooks/useHydrated";
+import { failedLine, reviewedCall, useReviewedAction } from "@/hooks/useReviewedAction";
+import { legacyIntents } from "@/lib/legacy-intents";
+import { type GroupWriteTarget, useGroupWriteGate } from "@/lib/nana/groupWriteGate";
 import { PERSIST } from "@/lib/query-persist";
 import { formatWalletError } from "@/lib/utils";
 import {
   buildV6ClaimTxFromRow,
   fetchV6BridgeRows,
-  findToRemoteValue,
+  prepareQueuedExecute,
   V6BridgeRow,
 } from "@/lib/v6/suckerProofs";
-import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
+import { bridgeIntent } from "@bananapus/nana-sdk-core/review";
 import { jbSuckerV6Abi } from "@bananapus/nana-sdk-core/v6";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { useAccount, usePublicClient } from "wagmi";
+import type { Address } from "viem";
+import { useAccount } from "wagmi";
 import {
   bridgeEtaHint,
   bridgeTrackUrl,
@@ -55,19 +59,31 @@ function StatusBadge({ status }: { status: V6BridgeRow["status"] }) {
  */
 function ClaimButton({
   row,
+  targets,
   tokenSymbol,
   onDone,
 }: {
   row: V6BridgeRow & { tokenSymbol: string };
+  targets: GroupWriteTarget[];
   tokenSymbol: string;
   onDone: () => void;
 }) {
+  const gate = useGroupWriteGate(targets);
   const { address } = useAccount();
-  const publicClient = usePublicClient({ chainId: row.peerChainId });
-  const { writeContractAsync } = useWriteContract();
+  const { run } = useReviewedAction();
   const [busy, setBusy] = useState(false);
   const [review, setReview] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const context = [
+    {
+      label: "Claims",
+      value: `${fmtUnits(row.projectTokenCount, 18)} ${tokenSymbol}`,
+      note: `${fmtUnits(row.terminalTokenAmount, row.tokenDecimals)} ${row.tokenSymbol} backing`,
+      strong: true,
+    },
+    { label: "On", value: chainName(row.peerChainId) },
+    { label: "To", value: row.beneficiary, mono: true },
+  ];
 
   return (
     <>
@@ -76,7 +92,8 @@ function ClaimButton({
         size="sm"
         variant="outline"
         forceChildren
-        loading={busy}
+        loading={busy || gate.pending}
+        disabled={gate.blocked}
         onClick={() => {
           setError(null);
           setReview(true);
@@ -84,37 +101,41 @@ function ClaimButton({
       >
         Claim
       </ButtonWithWallet>
-      <TxConfirmDialog
+      {gate.line ? <p className="mt-1 text-xs text-zinc-600">{gate.line}</p> : null}
+      <TxProgress
         open={review}
-        onOpenChange={(open) => {
-          if (!open) setReview(false);
-        }}
+        onClose={() => setReview(false)}
         title="Confirm claim"
-        chainId={row.peerChainId}
         steps={[{ title: "Claim", detail: "Proves the bridged leaf on the destination sucker." }]}
         activeIndex={busy ? 0 : -1}
-        action="Claim"
         busy={busy}
         error={error}
-        onConfirm={async () => {
+        rows={context}
+        start={async () => {
           try {
+            gate.assertVerified(targets);
             setBusy(true);
             setError(null);
-            const tx = buildV6ClaimTxFromRow(row);
-            await publicClient?.simulateContract({ account: address, ...tx });
-            const hash = await writeContractAsync(tx);
-            if (submittedViaSafe(hash)) {
+            const result = await run({
+              account: address,
+              context,
+              calls: [reviewedCall(buildV6ClaimTxFromRow(row))],
+            });
+            if (!result) {
+              setReview(false);
+              return;
+            }
+            if (result.status === "failed") {
+              setError(failedLine(result));
+              return;
+            }
+            if (result.status === "proposed") {
               setReview(false);
               toast({
                 title: "Safe proposal submitted",
                 description: `The claim is awaiting Safe approvals and execution on ${chainName(row.peerChainId)}.`,
               });
               return;
-            }
-            if (!publicClient) throw new Error("Public client unavailable.");
-            const receipt = await waitForReceiptWithRetry(publicClient, hash);
-            if (receipt.status !== "success") {
-              throw new Error(`Claim ${hash} reverted onchain.`);
             }
             setReview(false);
             toast({
@@ -129,23 +150,7 @@ function ClaimButton({
             setBusy(false);
           }
         }}
-      >
-        <SummaryRow label="Claims">
-          {fmtUnits(row.projectTokenCount, 18)} {tokenSymbol}
-          <span className="block text-xs text-zinc-500">
-            {fmtUnits(row.terminalTokenAmount, row.tokenDecimals)} {row.tokenSymbol} backing
-          </span>
-        </SummaryRow>
-        <SummaryRow label="On">{chainName(row.peerChainId)}</SummaryRow>
-        <SummaryRow label="To">
-          <EthereumAddress
-            address={row.beneficiary}
-            short
-            withEnsName
-            chain={viemChainOf(row.peerChainId)}
-          />
-        </SummaryRow>
-      </TxConfirmDialog>
+      />
     </>
   );
 }
@@ -153,24 +158,46 @@ function ClaimButton({
 /**
  * Execute ships the source sucker's queued outbox to the destination in one
  * bridge message (permissionless; it delivers every queued move for that token,
- * not just this row). The exact msg.value comes from findToRemoteValue — when no
- * budget can be verified the button explains instead of prompting a reverting tx.
+ * not just this row). It goes to the source chain's sucker as the registry lists it, and the
+ * exact msg.value comes from findToRemoteValue — when no budget can be verified the button
+ * explains instead of prompting a reverting tx.
  */
-function ExecuteButton({ row, onDone }: { row: V6BridgeRow; onDone: () => void }) {
+function ExecuteButton({
+  row,
+  targets,
+  onDone,
+}: {
+  row: V6BridgeRow;
+  targets: GroupWriteTarget[];
+  onDone: () => void;
+}) {
+  const gate = useGroupWriteGate(targets);
   const { address } = useAccount();
-  const publicClient = usePublicClient({ chainId: row.chainId });
-  const { writeContractAsync } = useWriteContract();
+  const { run } = useReviewedAction();
   const [busy, setBusy] = useState(false);
-  const [review, setReview] = useState<{ value: bigint } | null>(null);
+  const [review, setReview] = useState<{ sucker: Address; value: bigint } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [feeUnavailable, setFeeUnavailable] = useState(false);
   const nativeSymbol = viemChainOf(row.chainId)?.nativeCurrency.symbol ?? "ETH";
+  const context = [
+    { label: "On", value: chainName(row.chainId) },
+    { label: "Delivers to", value: chainName(row.peerChainId) },
+    ...(review
+      ? [
+          {
+            label: "Bridge fee",
+            value: `${fmtUnits(review.value, 18)} ${nativeSymbol}`,
+            note: "Found by simulation",
+          },
+        ]
+      : []),
+  ];
 
   if (feeUnavailable) {
     return (
       <span
         className="text-xs text-zinc-400"
-        title="The bridge messaging fee could not be verified by simulation — executing now would revert. Try again shortly."
+        title="Couldn't find the bridge fee. Try again shortly."
       >
         Fee unavailable
       </span>
@@ -184,24 +211,19 @@ function ExecuteButton({ row, onDone }: { row: V6BridgeRow; onDone: () => void }
         size="sm"
         variant="outline"
         forceChildren
-        loading={busy}
+        loading={busy || gate.pending}
+        disabled={gate.blocked}
         onClick={async () => {
           try {
+            gate.assertVerified(targets);
             setBusy(true);
             setError(null);
-            const value = await findToRemoteValue(
-              row.chainId,
-              row.sourceSucker,
-              row.token,
-              address,
-            );
+            const { sucker, value } = await prepareQueuedExecute(row, address);
             if (value == null) {
               setFeeUnavailable(true);
-              throw new Error(
-                "Could not determine the bridge messaging fee — no budget simulated cleanly. Try again shortly.",
-              );
+              throw new Error("Couldn't find the bridge fee. Try again shortly.");
             }
-            setReview({ value });
+            setReview({ sucker, value });
           } catch (cause) {
             console.error(cause);
             toast({
@@ -216,14 +238,12 @@ function ExecuteButton({ row, onDone }: { row: V6BridgeRow; onDone: () => void }
       >
         Execute
       </ButtonWithWallet>
+      {gate.line ? <p className="mt-1 text-xs text-zinc-600">{gate.line}</p> : null}
       {review || busy ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(open) => {
-            if (!open) setReview(null);
-          }}
+          onClose={() => setReview(null)}
           title="Confirm execution"
-          chainId={row.chainId}
           preparing={!review}
           status={review ? null : "Simulating the bridge messaging fee…"}
           steps={[
@@ -233,32 +253,51 @@ function ExecuteButton({ row, onDone }: { row: V6BridgeRow; onDone: () => void }
             },
           ]}
           activeIndex={busy ? 0 : -1}
-          action="Execute"
           busy={busy}
           error={error}
-          onConfirm={async () => {
+          rows={context}
+          start={async () => {
             if (!review) return;
             try {
+              gate.assertVerified(targets);
               setBusy(true);
               setError(null);
-              const value = review.value;
-              await publicClient?.simulateContract({
+              const { sucker, value } = review;
+              // Held by the sucker, token and account: its fee is quoted again on a retry.
+              const result = await run({
                 account: address,
-                address: row.sourceSucker,
-                abi: jbSuckerV6Abi,
-                functionName: "toRemote",
-                args: [row.token],
-                value,
+                context,
+                calls: [
+                  reviewedCall(
+                    {
+                      chainId: row.chainId,
+                      address: sucker,
+                      abi: jbSuckerV6Abi,
+                      functionName: "toRemote",
+                      args: [row.token],
+                      value,
+                    },
+                    {
+                      intent: bridgeIntent({
+                        chainId: row.chainId,
+                        sucker,
+                        token: row.token,
+                        account: address!,
+                      }),
+                      legacyIntents: legacyIntents.toRemote(sucker, row.token),
+                    },
+                  ),
+                ],
               });
-              const hash = await writeContractAsync({
-                chainId: row.chainId,
-                address: row.sourceSucker,
-                abi: jbSuckerV6Abi,
-                functionName: "toRemote",
-                args: [row.token],
-                value,
-              });
-              if (submittedViaSafe(hash)) {
+              if (!result) {
+                setReview(null);
+                return;
+              }
+              if (result.status === "failed") {
+                setError(failedLine(result));
+                return;
+              }
+              if (result.status === "proposed") {
                 setReview(null);
                 toast({
                   title: "Safe proposal submitted",
@@ -266,15 +305,10 @@ function ExecuteButton({ row, onDone }: { row: V6BridgeRow; onDone: () => void }
                 });
                 return;
               }
-              if (!publicClient) throw new Error("Public client unavailable.");
-              const receipt = await waitForReceiptWithRetry(publicClient, hash);
-              if (receipt.status !== "success") {
-                throw new Error(`Bridge transaction ${hash} reverted onchain.`);
-              }
               setReview(null);
               toast({
                 title: "Bridge message confirmed",
-                description: `The queued outbox is on its way to ${chainName(row.peerChainId)} — rows flip to claimable once it lands.`,
+                description: `The queued outbox is on its way to ${chainName(row.peerChainId)}. Rows turn claimable once it lands.`,
               });
               onDone();
             } catch (cause) {
@@ -284,16 +318,7 @@ function ExecuteButton({ row, onDone }: { row: V6BridgeRow; onDone: () => void }
               setBusy(false);
             }
           }}
-        >
-          <SummaryRow label="On">{chainName(row.chainId)}</SummaryRow>
-          <SummaryRow label="Delivers to">{chainName(row.peerChainId)}</SummaryRow>
-          {review ? (
-            <SummaryRow label="Bridge fee">
-              {fmtUnits(review.value, 18)} {nativeSymbol}
-              <span className="block text-xs text-zinc-500">Found by simulation</span>
-            </SummaryRow>
-          ) : null}
-        </TxConfirmDialog>
+        />
       ) : null}
     </>
   );
@@ -340,7 +365,8 @@ export function QueuedMovementsCard({
 }) {
   const [filter, setFilter] = useState<Filter>("all");
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const hydrated = useHydrated();
+  const query = useQuery({
     queryKey: ["v6BridgeRows", chainProjectsKey(chains)],
     meta: PERSIST,
     enabled: chains.length > 1,
@@ -367,6 +393,14 @@ export function QueuedMovementsCard({
       }));
     },
   });
+
+  const data = hydrated ? query.data : undefined;
+  // Both ends of a movement come from the server sucker-group list: act only on registry-listed pairs.
+  const rowTargets = (row: V6BridgeRow) =>
+    chains.filter((chain) => chain.chainId === row.chainId || chain.chainId === row.peerChainId);
+  const isLoading = hydrated ? query.isLoading : chains.length > 1;
+  const isError = hydrated && query.isError;
+  const { refetch } = query;
 
   const rows = data ?? [];
   const visible = filter === "all" ? rows : rows.filter((r) => r.status === filter);
@@ -404,15 +438,17 @@ export function QueuedMovementsCard({
       <p className="text-sm text-zinc-500 mt-1">
         Anything moving between chains shows here until it clears.
       </p>
-      <div className={visible.length > 0 && !isLoading ? "-mx-4 mt-3 overflow-x-auto" : "mt-3"}>
+      <div
+        className={
+          visible.length > 0 && !isLoading ? "table-scroll -mx-4 mt-3 overflow-x-auto" : "mt-3"
+        }
+      >
         {isLoading ? (
           <TableSkeleton rows={4} columns={7} />
         ) : isError && rows.length === 0 ? (
           <div className="text-sm text-zinc-500 py-4">Could not load bridge transactions.</div>
         ) : visible.length === 0 ? (
-          <div className="text-sm text-zinc-400 py-4">
-            No queued movements — anything in flight shows here until it clears.
-          </div>
+          <div className="text-sm text-zinc-400 py-4">No queued movements.</div>
         ) : (
           <table className="w-full min-w-[1040px]">
             <thead className="bg-melon-100">
@@ -459,9 +495,14 @@ export function QueuedMovementsCard({
                   </td>
                   <td className={cell}>
                     {row.status === "claimable" ? (
-                      <ClaimButton row={row} tokenSymbol={tokenSymbol} onDone={() => refetch()} />
+                      <ClaimButton
+                        row={row}
+                        targets={rowTargets(row)}
+                        tokenSymbol={tokenSymbol}
+                        onDone={() => refetch()}
+                      />
                     ) : row.status === "pending" && row.canExecute ? (
-                      <ExecuteButton row={row} onDone={() => refetch()} />
+                      <ExecuteButton row={row} targets={rowTargets(row)} onDone={() => refetch()} />
                     ) : row.status === "pending" ? (
                       <BridgingLink row={row} />
                     ) : (

@@ -66,6 +66,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ net
       },
     );
   } catch (error) {
+    // The cause is logged, on one line, and never sent: the answer is one of three messages
+    // whatever failed. Control characters go too, so an indexer's text cannot start a terminal
+    // sequence or forge a log line.
+    console.error("Bendystraw relay failed:", String(error).replace(/[\p{Cc}\s]+/gu, " "));
     const status =
       error instanceof BendystrawError && error.status && error.status >= 400
         ? error.status

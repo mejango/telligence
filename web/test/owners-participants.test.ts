@@ -18,15 +18,14 @@ describe("owners All-card participants", () => {
 
   it("aggregates each account across chains", () => {
     const rows = [
-      { address: "0xa", chainId: 1, balance: "10", volume: "5" },
-      { address: "0xa", chainId: 10, balance: "7", volume: "1" },
-      { address: "0xb", chainId: 1, balance: "3", volume: "0" },
+      { address: "0xa", chainId: 1, balance: "10" },
+      { address: "0xa", chainId: 10, balance: "7" },
+      { address: "0xb", chainId: 1, balance: "3" },
     ];
     const aggregated = aggregateParticipants(rows);
     expect(aggregated).toHaveLength(2);
     const a = aggregated.find((p) => p.address === "0xa");
     expect(a?.balance).toBe(17n);
-    expect(a?.volume).toBe(6n);
     expect(a?.chains).toEqual([1, 10]);
     const b = aggregated.find((p) => p.address === "0xb");
     expect(b?.balance).toBe(3n);
@@ -34,8 +33,8 @@ describe("owners All-card participants", () => {
 
   it("deduplicates address casing and reports bounded counts as lower bounds", () => {
     const rows = [
-      { address: "0xAa", chainId: 1, balance: "10", volume: "5" },
-      { address: "0xaa", chainId: 10, balance: "7", volume: "1" },
+      { address: "0xAa", chainId: 1, balance: "10" },
+      { address: "0xaa", chainId: 10, balance: "7" },
     ];
     expect(aggregateParticipants(rows)).toHaveLength(1);
     expect(participantCountSummary(rows, 2000)).toEqual({
@@ -52,9 +51,32 @@ describe("owners All-card participants", () => {
     });
   });
 
+  it("ranks by the combined balance across chains, not the per-chain page order", () => {
+    const rows = [
+      { address: "0xbreadfruit", chainId: 1, balance: "140" },
+      { address: "0xteam", chainId: 1, balance: "100" },
+      { address: "0xteam", chainId: 10, balance: "57" },
+      { address: "0xsmall", chainId: 8453, balance: "2" },
+    ];
+    expect(aggregateParticipants(rows).map((row) => row.address)).toEqual([
+      "0xteam",
+      "0xbreadfruit",
+      "0xsmall",
+    ]);
+  });
+
+  it("lists an account's chains in the canonical order", () => {
+    const rows = [
+      { address: "0xa", chainId: 8453, balance: "1" },
+      { address: "0xa", chainId: 10, balance: "1" },
+      { address: "0xa", chainId: 1, balance: "1" },
+    ];
+    expect(aggregateParticipants(rows)[0].chains).toEqual([1, 8453, 10]);
+  });
+
   it("skips null rows", () => {
     expect(
-      aggregateParticipants([null, { address: "0xa", chainId: 1, balance: "1", volume: "0" }]),
+      aggregateParticipants([null, { address: "0xa", chainId: 1, balance: "1" }]),
     ).toHaveLength(1);
   });
 });

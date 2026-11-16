@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { SHORTER_TEST_FORM_DATA, TEST_FORM_DATA } from "../constants";
 import { RevnetFormData } from "../types";
 
-export function useTestData() {
+export function useTestData(onLoaded: () => void) {
   const { setValues } = useFormContext<RevnetFormData>();
   useEffect(() => {
     // Development convenience only — never expose form-overwriting console
@@ -12,6 +12,7 @@ export function useTestData() {
 
     const fillTestData = (data: RevnetFormData) => {
       setValues(data);
+      onLoaded();
       console.log("Test data loaded successfully! 🚀");
       console.log("Form fields populated with:");
       console.dir(data);
@@ -37,5 +38,5 @@ export function useTestData() {
       delete (window as any).testdata;
       delete (window as any).testdata2;
     };
-  }, [setValues]);
+  }, [onLoaded, setValues]);
 }

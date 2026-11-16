@@ -16,6 +16,7 @@ export function ProjectProviders(
     project: {
       name: string | null;
       logoUri: string | null;
+      description?: string | null;
     };
     projects: readonly {
       chainId: number;
@@ -27,6 +28,7 @@ export function ProjectProviders(
   const initialProject: InitialProjectData = {
     metadata: {
       name: props.project.name ?? "",
+      ...(props.project.description ? { description: props.project.description } : {}),
       ...(props.project.logoUri ? { logoUri: props.project.logoUri } : {}),
     },
   };

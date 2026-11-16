@@ -2,13 +2,15 @@
 
 import { ButtonWithWallet } from "@/components/ButtonWithWallet";
 import { ChainLogo } from "@/components/ChainLogo";
-import { CardSkeleton } from "@/components/loading/LoadingSkeletons";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { CardSkeleton } from "@/components/loading/CardSkeleton";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { toast } from "@/components/ui/use-toast";
-import { submittedViaSafe, useWriteContract } from "@/hooks/useReviewedWriteContract";
+import { useHydrated } from "@/hooks/useHydrated";
+import { failedLine, reviewedCall, useReviewedAction } from "@/hooks/useReviewedAction";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
 import { PERSIST } from "@/lib/query-persist";
 import { formatWalletError } from "@/lib/utils";
-import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
+import type { ReviewContextRow } from "@bananapus/nana-sdk-core/review";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useAccount, usePublicClient } from "wagmi";
@@ -21,7 +23,7 @@ import {
 } from "../settlement/lib";
 import {
   deployPoolArity,
-  deployPoolSingleArgAbi,
+  deployPoolTwoArgAbi,
   fetchSplitHookStates,
   lpSplitHookAbi,
   SplitHookChainState,
@@ -44,15 +46,18 @@ function HookActionButton({
   functionName: "deployPool" | "collectAndRouteLPFees";
   args: readonly [bigint, bigint] | readonly [bigint, `0x${string}`];
   title?: string;
-  rows: React.ReactNode;
+  rows: readonly ReviewContextRow[];
   onDone: () => void;
 }) {
+  const context = [{ label: "On", value: chainName(state.chainId) }, ...rows];
   const { address } = useAccount();
   const publicClient = usePublicClient({ chainId: state.chainId });
-  const { writeContractAsync } = useWriteContract();
+  const { run } = useReviewedAction();
   const [busy, setBusy] = useState(false);
   const [review, setReview] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The project comes from the server sucker-group list: act only on a registry-listed pair.
+  const gate = useGroupWriteGate([state]);
 
   return (
     <>
@@ -61,7 +66,8 @@ function HookActionButton({
         size="sm"
         variant="outline"
         forceChildren
-        loading={busy}
+        loading={busy || gate.pending}
+        disabled={gate.blocked}
         title={title}
         onClick={() => {
           setError(null);
@@ -70,55 +76,62 @@ function HookActionButton({
       >
         {label}
       </ButtonWithWallet>
-      <TxConfirmDialog
+      {gate.line ? <p className="mt-1 text-xs text-zinc-600">{gate.line}</p> : null}
+      <TxProgress
         open={review}
-        onOpenChange={(open) => {
-          if (!open) setReview(false);
-        }}
+        onClose={() => setReview(false)}
         title={confirmTitle}
-        chainId={state.chainId}
         steps={[{ title: label, detail: title }]}
         activeIndex={busy ? 0 : -1}
-        action={label}
         busy={busy}
         error={error}
-        onConfirm={async () => {
+        rows={context}
+        start={async () => {
           try {
+            gate.assertVerified([state]);
             setBusy(true);
             setError(null);
             if (!publicClient) throw new Error("Public client unavailable.");
-            // Two hook generations are live during the lp-split-hook rollout and their
-            // `deployPool` selectors differ. Ask the deployed bytecode which one it has rather
-            // than hard-coding one and reverting at simulate on the other.
+            // Live hooks and 1.5.0 differ in their `deployPool` selector. Ask the deployed
+            // bytecode which one it has rather than hard-coding one and reverting at simulate
+            // on the other.
             let callAbi: readonly unknown[] = lpSplitHookAbi;
             let callArgs = args;
             if (functionName === "deployPool") {
-              const arity = await deployPoolArity(publicClient, state.hook);
-              if (arity === 1) {
-                callAbi = deployPoolSingleArgAbi;
+              if ((await deployPoolArity(publicClient, state.hook)) === 2) {
+                callAbi = deployPoolTwoArgAbi;
+              } else {
                 callArgs = [args[0]] as unknown as typeof args;
               }
             }
-            const sim = await publicClient?.simulateContract({
+            const result = await run({
               account: address,
-              address: state.hook,
-              abi: callAbi as never,
-              functionName,
-              args: callArgs as never,
+              context,
+              calls: [
+                reviewedCall({
+                  chainId: state.chainId,
+                  address: state.hook,
+                  abi: callAbi,
+                  functionName,
+                  args: callArgs,
+                }),
+              ],
             });
-            if (!sim) throw new Error("Could not simulate the transaction.");
-            const hash = await writeContractAsync(sim.request);
-            if (submittedViaSafe(hash)) {
+            if (!result) {
+              setReview(false);
+              return;
+            }
+            if (result.status === "failed") {
+              setError(failedLine(result));
+              return;
+            }
+            if (result.status === "proposed") {
               toast({
                 title: "Safe proposal submitted",
                 description: `${label} is awaiting Safe approvals and execution on ${chainName(state.chainId)}.`,
               });
               setReview(false);
               return;
-            }
-            const receipt = await waitForReceiptWithRetry(publicClient, hash);
-            if (receipt.status !== "success") {
-              throw new Error(`${label} ${hash} reverted onchain.`);
             }
             toast({
               title: `${label} confirmed`,
@@ -133,10 +146,7 @@ function HookActionButton({
             setBusy(false);
           }
         }}
-      >
-        <SummaryRow label="On">{chainName(state.chainId)}</SummaryRow>
-        {rows}
-      </TxConfirmDialog>
+      />
     </>
   );
 }
@@ -210,24 +220,21 @@ function SplitHookChainBlock({
               functionName="deployPool"
               args={[state.projectId, 0n] as const}
               title="Seed the Uniswap V4 pool from accumulated tokens (accepts any cash out return)"
-              rows={
-                <>
-                  <SummaryRow label="Seeds with">
-                    {fmtUnits(state.accumulated, 18)} {tokenSymbol}
-                    <span className="block text-xs text-zinc-500">
-                      Part is cashed out for {state.pairSymbol} to mint a two-sided position
-                    </span>
-                  </SummaryRow>
-                  <SummaryRow label="Minimum cash out return">None</SummaryRow>
-                </>
-              }
+              rows={[
+                {
+                  label: "Seeds with",
+                  value: `${fmtUnits(state.accumulated, 18)} ${tokenSymbol}`,
+                  note: `Part is cashed out for ${state.pairSymbol}, so both tokens can be offered for trading`,
+                },
+                { label: "Minimum cash out return", value: "None" },
+              ]}
               onDone={onDone}
             />
             {state.deployGated && (
               <span className="text-xs text-zinc-400 max-w-md">
-                Deploying currently requires the revnet operator (SET_BUYBACK_POOL permission). It
-                becomes permissionless once the issuance rate decays to 10% of what it was when
-                tokens started accumulating.
+                Only an account with the operator&apos;s SET_BUYBACK_POOL permission can create the
+                pool now. Anyone can do so once the new-token rate falls to 10% of its rate when
+                these tokens began collecting.
               </span>
             )}
           </>
@@ -238,15 +245,14 @@ function SplitHookChainBlock({
             confirmTitle="Confirm fee collection"
             functionName="collectAndRouteLPFees"
             args={[state.projectId, state.terminalToken] as const}
-            title="Collect LP trading fees and route them into the project's terminal balance (anyone can call this)"
-            rows={
-              <>
-                <SummaryRow label="Collects">
-                  {fmtUnits(state.claimableFees, state.pairDecimals)} {state.pairSymbol}
-                </SummaryRow>
-                <SummaryRow label="Routes to">The project&apos;s terminal balance</SummaryRow>
-              </>
-            }
+            title="Collect trading fees into the project balance (anyone can do this)"
+            rows={[
+              {
+                label: "Collects",
+                value: `${fmtUnits(state.claimableFees, state.pairDecimals)} ${state.pairSymbol}`,
+              },
+              { label: "Routes to", value: "The project's terminal balance" },
+            ]}
             onDone={onDone}
           />
         )}
@@ -268,13 +274,18 @@ export function SplitHookCard({
   chains: ChainProject[];
   tokenSymbol: string;
 }) {
-  const { data, isLoading, refetch } = useQuery({
+  const hydrated = useHydrated();
+  const query = useQuery({
     queryKey: ["v6SplitHookStates", chainProjectsKey(chains)],
     meta: PERSIST,
     enabled: chains.length > 0,
     staleTime: 60_000,
     queryFn: () => fetchSplitHookStates(chains),
   });
+
+  const data = hydrated ? query.data : undefined;
+  const isLoading = hydrated ? query.isLoading : chains.length > 0;
+  const { refetch } = query;
 
   if (isLoading) return <CardSkeleton rows={5} />;
 

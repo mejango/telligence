@@ -9,6 +9,7 @@ import {
   WeightCutPercent,
 } from "@bananapus/nana-sdk-core";
 import { unstable_cache } from "next/cache";
+import { cache } from "react";
 import { getContract } from "viem";
 
 export type Ruleset = {
@@ -56,10 +57,12 @@ const cachedRulesets = unstable_cache(readRulesets, ["rulesets-with-base-currenc
   revalidate: 60,
 });
 
-export async function getRulesets(projectId: string, chainId: JBChainId): Promise<Ruleset[]> {
-  const cached = await cachedRulesets(projectId, chainId);
-  if (cached.length > 0) return cached;
-  // An empty read means the revnet is mid-deploy or the RPC failed — never let
-  // that become the permanent answer, so bypass the cache until it has stages.
-  return readRulesets(projectId, chainId);
-}
+export const getRulesets = cache(
+  async (projectId: string, chainId: JBChainId): Promise<Ruleset[]> => {
+    const cached = await cachedRulesets(projectId, chainId);
+    if (cached.length > 0) return cached;
+    // An empty read means the revnet is mid-deploy or the RPC failed — never let
+    // that become the permanent answer, so bypass the cache until it has stages.
+    return readRulesets(projectId, chainId);
+  },
+);

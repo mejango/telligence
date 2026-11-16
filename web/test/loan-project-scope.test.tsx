@@ -1,5 +1,21 @@
-import { act, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { ETH_CONTEXT, LOAN_REVNET_ID } = vi.hoisted(() => ({
+  ETH_CONTEXT: {
+    token: "0x000000000000000000000000000000000000EEEe",
+    decimals: 18,
+    currency: 61166,
+  },
+  LOAN_REVNET_ID: 9n,
+}));
+
+let queryClient = new QueryClient();
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+);
 
 /**
  * V6 project ids are a per-chain namespace: the same revnet is project #7 on the route
@@ -23,7 +39,17 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("wagmi", () => ({
   useAccount: () => ({ address: "0x000000000000000000000000000000000000dEaD" }),
-  usePublicClient: () => undefined,
+  // The loans contract's own reads of the loan source: ETH, 18 decimals, on its terminal.
+  usePublicClient: () => ({
+    readContract: async ({ functionName }: { functionName: string }) =>
+      ({
+        TERMINAL: "0x5555555555555555555555555555555555555555",
+        accountingContextsOf: [ETH_CONTEXT],
+        accountingContextForTokenOf: ETH_CONTEXT,
+        revnetIdOfLoanWith: LOAN_REVNET_ID,
+        loanOf: { amount: 1n, collateral: 1n, sourceToken: ETH_CONTEXT.token },
+      })[functionName],
+  }),
   useWalletClient: () => ({ data: undefined }),
   useReadContract: (config: {
     functionName?: string;
@@ -37,12 +63,13 @@ vi.mock("wagmi", () => ({
   },
 }));
 
-vi.mock("@/hooks/useReviewedWriteContract", () => ({
-  isSafeProposalPendingError: () => false,
-  requireOnchainExecution: () => undefined,
-  useWaitForTransactionReceipt: () => ({ isLoading: false, isSuccess: false }),
-  useWriteContract: () => ({ writeContractAsync: vi.fn(), isPending: false, data: undefined }),
-}));
+vi.mock("@/hooks/useReviewedAction", async (importOriginal) => {
+  const { reviewedActionState } = await import("./support/reviewed-action");
+  return {
+    ...(await importOriginal<typeof import("@/hooks/useReviewedAction")>()),
+    useReviewedAction: () => reviewedActionState(vi.fn()),
+  };
+});
 
 vi.mock("@/lib/bendystraw", () => ({
   LoansByAccountOperation: { id: "LoansByAccount" },
@@ -104,18 +131,22 @@ const LOAN = {
 };
 
 beforeEach(() => {
+  queryClient = new QueryClient();
   mocks.borrowableReads.length = 0;
 });
 
-describe("wallet-action:loans — per-loan quotes use the loan's own (chainId, projectId)", () => {
+describe("per-loan quotes use the loan's own (chainId, projectId)", () => {
   it("keys every reallocation quote for a chain-B loan on chain B's projectId, not the route's", async () => {
-    const { result } = renderHook(() =>
-      useBorrowDialog({ projectId: ROUTE_PROJECT_ID, selectedLoan: LOAN }),
+    const { result } = renderHook(
+      () => useBorrowDialog({ projectId: ROUTE_PROJECT_ID, selectedLoan: LOAN }),
+      { wrapper },
     );
 
     await act(async () => {
       result.current.setCollateralAmount("10");
     });
+    // The loan's terms come from the loans contract before any quote is keyed.
+    await waitFor(() => expect(result.current.loanSourcePending).toBe(false));
 
     const expectedHeadroom = BORROWABLE_CAPACITY - LOAN_BORROW_AMOUNT;
     const expectedTransfer = (expectedHeadroom * LOAN_COLLATERAL) / BORROWABLE_CAPACITY;

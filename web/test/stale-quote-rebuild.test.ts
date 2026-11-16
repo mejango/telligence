@@ -46,7 +46,7 @@ function chainPayment(chain: number, token = "0x00000000000000000000000000000000
 }
 
 function bundle(uuid: string, payments: ChainPayment[]): RelayrPostBundleResponse {
-  return { bundle_uuid: uuid, payment_info: payments, per_txn: [], txn_uuids: [] };
+  return { bundle_uuid: uuid, payment_info: payments };
 }
 
 describe("stale-quote rebuild — frozen stage starts and the 7-day cash-out delay", () => {
@@ -106,8 +106,9 @@ describe("stale-quote rebuild — frozen stage starts and the 7-day cash-out del
     const rebuildStaleQuote = vi.fn().mockResolvedValue(refreshed);
     const onRebuild = vi.fn();
 
+    const stale = bundle("stale-uuid", [payment]);
     const result = await ensureFreshQuote({
-      bundle: bundle("stale-uuid", [payment]),
+      bundle: stale,
       payment,
       quotedStageStart: { timestamp: NOW + 60, explicit: false },
       rebuildStaleQuote,
@@ -115,7 +116,8 @@ describe("stale-quote rebuild — frozen stage starts and the 7-day cash-out del
       nowSeconds: NOW,
     });
 
-    expect(rebuildStaleQuote).toHaveBeenCalledTimes(1);
+    // The rebuild is handed the stale quote, which it releases before relaunching.
+    expect(rebuildStaleQuote).toHaveBeenCalledExactlyOnceWith(stale);
     expect(onRebuild).toHaveBeenCalledTimes(1);
     expect(result.bundle).toBe(refreshed);
     expect(result.payment).toBe(refreshedPayment);

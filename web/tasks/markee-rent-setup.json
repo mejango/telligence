@@ -1,0 +1,75 @@
+{
+  "status": "prepared-plan-only-not-broadcast",
+  "date": "2026-10-12",
+  "chainId": 8453,
+  "strategy": "Rent",
+  "scope": "homepage only",
+  "admin": "0x823b92d6a4b2AED4b15675c7917c9f922ea8ADAD",
+  "beneficiary": {
+    "ens": "team.rev.eth",
+    "resolutionNetwork": "Ethereum mainnet",
+    "address": "0x6b92c73682f0e1fac35A18ab17efa5e77DDE9fE1",
+    "receivingNetwork": "Base",
+    "asset": "ETHx",
+    "observedBaseSafeVersion": "1.4.1",
+    "observedBaseSafeThreshold": 3,
+    "reResolveBeforeExecution": true,
+    "automaticRevAddToBalance": false
+  },
+  "observedFactory": {
+    "address": "0x37f420fdE5c98e611EB7cb9b74ef579D84697039",
+    "implementation": "0xd2038c21efCf5245547a66f85229Cd654C7664B7",
+    "implementationVersion": "streaming-1.0.0",
+    "beneficiaryBps": "6200",
+    "minimumMonthlyRateWei": "999999997884000",
+    "mutableSettingsRequireFreshReview": true
+  },
+  "transaction": {
+    "from": "0x823b92d6a4b2AED4b15675c7917c9f922ea8ADAD",
+    "to": "0x37f420fdE5c98e611EB7cb9b74ef579D84697039",
+    "valueWei": "0",
+    "function": "createLeaderboard(address,string,string,string)",
+    "args": [
+      "0x6b92c73682f0e1fac35A18ab17efa5e77DDE9fE1",
+      "revnet.money",
+      "website",
+      "revnet.money"
+    ],
+    "calldata": "0x2c5b06730000000000000000000000006b92c73682f0e1fac35a18ab17efa5e77dde9fe1000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000c7265766e65742e6d6f6e6579000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000077765627369746500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c7265766e65742e6d6f6e65790000000000000000000000000000000000000000"
+  },
+  "verification": {
+    "creationEthCall": "success",
+    "broadcast": false,
+    "teamEthxAccrual": "verified on a private Base fork only; live board not created",
+    "receiptRequirements": [
+      "Canonical successful receipt from exact streaming factory",
+      "Decode actual board/seed addresses",
+      "Verify selected admin, resolved beneficiary, factory implementation and SuperApp registration",
+      "Do not use eth_call-predicted addresses as deployed configuration"
+    ],
+    "localForkEvidence": "markee-rent-fork-evidence.json"
+  },
+  "retiredDependencies": [
+    "REV add-to-balance payer clone",
+    "ETHx unwrap-and-forward receiver",
+    "new keeper service"
+  ],
+  "supersedes": "markee-buy-setup.json",
+  "rollout": {
+    "firstSite": "https://dev.revnet.money",
+    "productionSite": "https://revnet.money",
+    "order": [
+      "local fixtures and Base fork",
+      "existing dev deployment and acceptance",
+      "later production promotion"
+    ],
+    "firstSiteHealthObserved": {
+      "status": "ok",
+      "revision": "8c0d2cd0ac3f59665ac069b7ab105a607fddb9c2"
+    },
+    "hostingDoesNotChangeChain": true,
+    "chainId": 8453,
+    "liveSetupOrTestSpendAuthorityInferred": false,
+    "productionEnabledDuringDevAcceptance": false
+  }
+}

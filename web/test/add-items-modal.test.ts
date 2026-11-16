@@ -6,6 +6,15 @@ const beneficiaryA = "0x1111111111111111111111111111111111111111";
 const beneficiaryB = "0x2222222222222222222222222222222222222222";
 
 describe("revnet shop item editor", () => {
+  it("refuses a price finer than the token holds, never rounds it", () => {
+    expect(buildTierConfigs([{ ...newDraftItem(), price: "1.0000005" }], 6)).toBe(
+      "the price exceeds 6 decimal places.",
+    );
+    expect(typeof buildTierConfigs([{ ...newDraftItem(), price: "1.000001" }], 6)).not.toBe(
+      "string",
+    );
+  });
+
   it("makes new items permanently transferable by default", () => {
     const result = buildTierConfigs([{ ...newDraftItem(), price: "1" }], 6);
     expect(typeof result).not.toBe("string");
@@ -46,12 +55,12 @@ describe("revnet shop item editor", () => {
       reserveFrequency: 10,
       reserveBeneficiary: beneficiaryA,
       discountPercent: 25,
-      votingUnits: 7,
+      votingUnits: 0,
       splitPercent: 500_000_000,
       flags: {
         allowOwnerMint: true,
         transfersPausable: true,
-        useVotingUnits: true,
+        useVotingUnits: false,
         cantBeRemoved: true,
         cantIncreaseDiscountPercent: true,
         cantBuyWithCredits: true,
@@ -135,7 +144,7 @@ describe("revnet shop item editor", () => {
       "Short description (optional)",
       "More options",
       "Split sales",
-      "Discount",
+      "Add discount",
       "Reserve inventory",
       "Voting power",
       "Item rules",
@@ -149,4 +158,33 @@ describe("revnet shop item editor", () => {
     }
     // Permission-before-upload behavior is exercised by shop-multichain-dialogs.test.tsx.
   });
+});
+
+it("rejects reserved single-supply items in the shared compiler, including per-chain overrides", () => {
+  const item = {
+    ...newDraftItem(),
+    price: "1",
+    supply: "1",
+    reserveFrequency: "5",
+    reserveBeneficiary: beneficiaryA,
+  };
+  expect(buildTierConfigs([item], 6)).toContain("supply of at least 2");
+  expect(
+    buildTierConfigs([{ ...item, supply: "10", perChainSupply: { 8453: "1" } }], 6, 8453),
+  ).toContain("supply of at least 2");
+  for (const supply of ["2", ""])
+    expect(typeof buildTierConfigs([{ ...item, supply }], 6)).not.toBe("string");
+  expect(typeof buildTierConfigs([{ ...item, reserveFrequency: "0" }], 6)).not.toBe("string");
+});
+
+it("always uses price-based votes, including legacy imported custom-vote fields", () => {
+  for (const votingUnits of ["", "0", "7", "invalid legacy value"]) {
+    const tiers = buildTierConfigs([{ ...newDraftItem(), price: "2", votingUnits }], 6);
+    expect(typeof tiers).not.toBe("string");
+    if (typeof tiers === "string") throw new Error(tiers);
+    expect(tiers[0]).toMatchObject({
+      votingUnits: 0,
+      flags: { useVotingUnits: false },
+    });
+  }
 });

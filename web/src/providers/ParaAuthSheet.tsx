@@ -1,13 +1,13 @@
 "use client";
 
-import { BrandMark, WalletFallbackMark } from "@/components/BrandMarks";
+import { BrandMark, WalletIcon } from "@/components/BrandMarks";
 import { ViewAsForm } from "@/components/ViewAsForm";
 import { Button } from "@/components/ui/button";
 import { X } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
-import { useMobileWallet } from "@/hooks/useMobileWallet";
 import { offerableWallets } from "@/lib/wallet-list";
 import { mobileWalletLinks, walletDappUrl } from "@/lib/walletLinks";
+import { useMobileWallet } from "@bananapus/nana-sdk-core/review/react";
 import {
   useAuthenticateWithEmailOrPhone,
   useAuthenticateWithOAuth,
@@ -636,13 +636,7 @@ export default function ParaAuthSheet({
                   .catch((cause) => setLocalError(messageOf(cause)));
               }}
             >
-              {connector.icon ? (
-                // EIP-6963 hands us the wallet's own mark as a data URI.
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={connector.icon} alt="" className="h-5 w-5 shrink-0" />
-              ) : (
-                <WalletFallbackMark id={connector.id} className="h-5 w-5 shrink-0" />
-              )}
+              <WalletIcon id={connector.id} icon={connector.icon} className="h-5 w-5 shrink-0" />
             </Button>
           ))}
         </div>

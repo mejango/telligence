@@ -1,23 +1,26 @@
-"use client";
-
 /**
  * The wallet-prompt queue for a multi-transaction flow, shown before the first
- * prompt so a signer knows how many are coming and why. Steps are strictly
- * sequential: everything before `activeIndex` is done, and a flow that finishes
- * passes `steps.length`.
+ * prompt so a signer knows how many are coming and why. Steps default to
+ * sequential: everything before `activeIndex` is done, and a flow that has
+ * finished passes `steps.length`. Pass -1 while nothing is running yet, or
+ * an explicit state per step for results that arrive independently.
  */
 export function TxSteps({
   steps,
   activeIndex,
   intro,
   ariaLabel,
-  className = "rounded border border-melon-200 bg-melon-50 p-3 text-xs",
+  className = "mt-3 border border-melon-200 bg-melon-50 p-3",
 }: {
   steps: readonly {
     /** Stable list key; falls back to the title when it is a plain string. */
     key?: string;
     title: React.ReactNode;
-    detail?: string;
+    /** Independent progress, shown beside the heading rather than buried in details. */
+    status?: React.ReactNode;
+    /** Overrides sequential progress when results arrive out of order. */
+    state?: "pending" | "active" | "complete" | "failed";
+    detail?: React.ReactNode;
   }[];
   activeIndex: number;
   intro?: string;
@@ -26,51 +29,76 @@ export function TxSteps({
 }) {
   return (
     <div className={className} aria-label={ariaLabel}>
-      <p className="text-[11px] leading-relaxed text-zinc-500">
+      <p className="text-xs leading-relaxed text-zinc-600">
         {intro ??
           (steps.length === 1
             ? "Your wallet will ask for one action."
             : `Your wallet will ask for ${steps.length} actions. This stays open and advances through each one.`)}
       </p>
-      <ol className="mt-2 space-y-1">
-        {steps.map((step, index) => (
-          <li
-            key={step.key ?? String(step.title)}
-            data-state={
-              activeIndex > index ? "complete" : activeIndex === index ? "active" : "pending"
-            }
-            aria-current={activeIndex === index ? "step" : undefined}
-            className="flex items-start gap-2"
-          >
-            <span
-              aria-hidden="true"
-              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
-                activeIndex === index
-                  ? "border-teal-600 bg-teal-50 text-teal-700"
-                  : activeIndex > index
-                    ? "border-teal-500 bg-teal-500 text-white"
-                    : "border-zinc-300 text-zinc-400"
-              }`}
+      <ol className="mt-3 space-y-2">
+        {steps.map((step, index) => {
+          const state =
+            step.state ??
+            (activeIndex > index ? "complete" : activeIndex === index ? "active" : "pending");
+          const complete = state === "complete";
+          const active = state === "active";
+          const failed = state === "failed";
+          return (
+            <li
+              key={step.key ?? String(step.title)}
+              data-state={state}
+              aria-current={active ? "step" : undefined}
+              className={`flex items-start gap-2 text-sm ${step.status ? "border-melon-200 not-first:border-t not-first:pt-3" : ""}`}
             >
-              {activeIndex > index ? "✓" : index + 1}
-            </span>
-            <span className="min-w-0 flex-1">
               <span
-                className={
-                  activeIndex === index ? "font-medium text-zinc-900" : "block text-zinc-500"
-                }
+                aria-hidden="true"
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs ${
+                  failed
+                    ? "border-red-600 bg-red-50 text-red-700"
+                    : complete
+                      ? "border-melon-400 bg-melon-400 text-zinc-900"
+                      : active
+                        ? "border-melon-600 bg-melon-50 text-melon-700"
+                        : "border-zinc-300 text-zinc-500"
+                }`}
               >
-                <span className="sr-only">
-                  Step {index + 1} of {steps.length}:{" "}
-                </span>
-                {step.title}
+                {failed ? "×" : complete ? "✓" : index + 1}
               </span>
-              {step.detail ? (
-                <span className="mt-0.5 block text-[11px] text-zinc-500">{step.detail}</span>
-              ) : null}
-            </span>
-          </li>
-        ))}
+              <span className="min-w-0 flex-1">
+                <span
+                  className={
+                    step.status
+                      ? "flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1"
+                      : undefined
+                  }
+                >
+                  <span
+                    className={
+                      active || step.status
+                        ? "min-w-0 font-medium text-zinc-900"
+                        : "block text-zinc-600"
+                    }
+                  >
+                    <span className="sr-only">
+                      Step {index + 1} of {steps.length}:{" "}
+                    </span>
+                    {step.title}
+                  </span>
+                  {step.status ? (
+                    <span
+                      className={`shrink-0 font-medium ${failed ? "text-red-700" : "text-zinc-900"}`}
+                    >
+                      {step.status}
+                    </span>
+                  ) : null}
+                </span>
+                {step.detail ? (
+                  <span className="mt-0.5 block text-xs text-zinc-500">{step.detail}</span>
+                ) : null}
+              </span>
+            </li>
+          );
+        })}
       </ol>
     </div>
   );
@@ -106,10 +134,10 @@ export function TxStep({
         aria-hidden="true"
         className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium ${
           complete
-            ? "border-teal-500 bg-teal-500 text-white"
+            ? "border-melon-400 bg-melon-400 text-zinc-900"
             : active
-              ? "border-teal-600 bg-teal-50 text-teal-700"
-              : "border-zinc-300 text-zinc-400"
+              ? "border-melon-600 bg-melon-50 text-melon-700"
+              : "border-zinc-300 text-zinc-500"
         }`}
       >
         {complete ? "✓" : number}
@@ -117,7 +145,7 @@ export function TxStep({
       <div className="min-w-0 flex-1">
         <p
           className={`text-[11px] uppercase tracking-wide ${
-            complete || active ? "text-teal-700" : "text-zinc-400"
+            complete || active ? "text-melon-700" : "text-zinc-400"
           }`}
         >
           Step {number} of {total}

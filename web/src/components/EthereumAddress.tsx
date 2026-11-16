@@ -1,19 +1,11 @@
 import { useEnsName } from "@/hooks/ens/useEnsName";
+import { ensAvatarUrlForAddress } from "@/lib/ensAvatarUrl";
 import { formatEthAddress } from "@/lib/utils";
 import Image from "next/image";
 import { twMerge } from "tailwind-merge";
 import { Address, Chain } from "viem";
 import EtherscanLink from "./EtherscanLink";
-
-const STAMP_FYI_BASE_URL = "https://cdn.stamp.fyi";
-
-export function ensAvatarUrlForAddress(address: string, { size }: { size?: number } = {}) {
-  let url = `${STAMP_FYI_BASE_URL}/avatar/${address}`;
-  if (size) {
-    url += `?s=${size}`;
-  }
-  return url;
-}
+import { SafeBadge } from "./SafeBadge";
 
 export function EthereumAddress({
   address,
@@ -23,6 +15,7 @@ export function EthereumAddress({
   avatarProps,
   className,
   chain,
+  showSafe = false,
 }: {
   address: Address;
   short?: boolean;
@@ -31,17 +24,19 @@ export function EthereumAddress({
   avatarProps?: { size?: "sm" | "md" };
   className?: string;
   chain?: Chain;
+  showSafe?: boolean;
 }) {
   const { data } = useEnsName(address, { enabled: withEnsName });
   const formattedAddress = short ? formatEthAddress(address) : address;
-  const ensName = data as string | undefined;
+  // A disabled query still returns another component's cached lookup.
+  const ensName = withEnsName === false ? undefined : (data as string | undefined);
 
   const renderValue = ensName ?? formattedAddress;
 
   const avatarSize = avatarProps?.size ?? "md";
   const avatarDimensions = avatarSize === "md" ? 36 : 24;
 
-  return (
+  const link = (
     <EtherscanLink
       className={twMerge("inline-flex items-center", className)}
       value={address}
@@ -65,5 +60,13 @@ export function EthereumAddress({
       )}
       {renderValue}
     </EtherscanLink>
+  );
+  return showSafe && chain ? (
+    <span className="inline-flex items-center">
+      {link}
+      <SafeBadge address={address} chainId={chain.id} />
+    </span>
+  ) : (
+    link
   );
 }

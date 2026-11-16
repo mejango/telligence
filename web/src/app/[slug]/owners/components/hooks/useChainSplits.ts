@@ -20,7 +20,13 @@ import { chainsAtStage } from "../splitsLib";
  */
 export function useChainSplits(stageIdx: number) {
   const { contractAddress } = useJBContractContext();
-  const { data: suckers, refetch } = useSuckers();
+  const {
+    data: suckers,
+    verifiedPairs,
+    isVerified: suckersVerified,
+    isError: suckersError,
+    refetch,
+  } = useSuckers();
   const { suckerPairsWithRulesets } = useFetchProjectRulesets(suckers);
 
   const stageChains = useMemo(
@@ -98,6 +104,9 @@ export function useChainSplits(stageIdx: number) {
     chainSplits,
     allRulesets,
     isLoading,
+    /** The pairs a save may target: chainSplits rows can still be indexer-seeded. */
+    verifiedPairs,
+    suckerCheck: { isVerified: suckersVerified, isError: suckersError },
     refetch: refetchAll,
   };
 }

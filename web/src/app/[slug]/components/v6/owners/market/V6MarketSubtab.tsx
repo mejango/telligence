@@ -1,5 +1,6 @@
 "use client";
 
+import { useHydrated } from "@/hooks/useHydrated";
 import { PERSIST } from "@/lib/query-persist";
 import { useQuery } from "@tanstack/react-query";
 import { ProjectItem } from "../../shared";
@@ -15,14 +16,17 @@ import { SplitHookCard } from "./SplitHookCard";
  */
 export function V6MarketSubtab({ projects }: { projects: ProjectItem[] }) {
   const chains = toChainProjects(projects);
+  const hydrated = useHydrated();
 
-  const { data: tokenSymbol = "tokens" } = useQuery({
+  const { data } = useQuery({
     queryKey: ["v6ProjectTokenSymbol", chainProjectsKey(chains)],
     meta: PERSIST,
     enabled: projects.length > 0,
     staleTime: Infinity,
     queryFn: () => projectTokenSymbol(projects),
   });
+
+  const tokenSymbol = hydrated ? (data ?? "tokens") : "tokens";
 
   if (chains.length === 0) {
     return <div className="text-zinc-500">No project chains found.</div>;

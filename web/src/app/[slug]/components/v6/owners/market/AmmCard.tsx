@@ -1,10 +1,14 @@
 "use client";
 
+import { formatPriceValue } from "@/lib/number";
+import dynamic from "next/dynamic";
+
 import { ParticipantsPieChart } from "@/app/[slug]/owners/components/ParticipantsPieChart";
 import { ButtonWithWallet } from "@/components/ButtonWithWallet";
 import { ChainLogo } from "@/components/ChainLogo";
 import { EthereumAddress } from "@/components/EthereumAddress";
 import { ExternalLink } from "@/components/ExternalLink";
+import { Input } from "@/components/ui/input";
 import { Revalidating } from "@/components/ui/Revalidating";
 import { SkeletonLines } from "@/components/ui/skeleton";
 import {
@@ -15,18 +19,30 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
-import { useAllowance } from "@/hooks/useAllowance";
+import { ErrorNote } from "@/components/ui/TxError";
+import { SummaryRow, TxProgress } from "@/components/ui/TxProgress";
+import { useHydrated } from "@/hooks/useHydrated";
+import { useReviewedAction } from "@/hooks/useReviewedAction";
+import { useViewedAccount } from "@/hooks/useViewedAccount";
 import {
-  isSafeConnection,
-  proposeSafeBatch,
-  submittedViaSafe,
-  useWaitForTransactionReceipt,
-  useWriteContract,
-} from "@/hooks/useReviewedWriteContract";
+  liquidityMovePlan,
+  poolSqrtPriceX96,
+  readMovablePosition,
+} from "@/lib/buyback-pool-migration";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
 import { cachedQuery } from "@/lib/query-persist";
+import {
+  ACCOUNT_CHANGED,
+  requireProposedOrDone,
+  reviewClosed,
+  reviewedCall,
+  ReviewRefusal,
+  SAFE_PROPOSAL_UNCONFIRMED_LINE,
+} from "@/lib/reviewed-call";
+import { isSafeConnection, useSafeConnection } from "@/lib/safe-connector";
 import { explorerBaseUrl } from "@/lib/utils";
-import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
+import { heldLineOf } from "@/lib/write-hold";
+import { liquidityIntent } from "@bananapus/nana-sdk-core/review";
 import {
   uniswapV4AmountsForLiquidity,
   uniswapV4DefaultPriceRange,
@@ -52,7 +68,6 @@ import {
   explorerAddressUrl,
   fmtUnits,
 } from "../settlement/lib";
-import { EditPositionPanel } from "./EditPositionPanel";
 import { liquidityFormView, type LiquidityFormMode, type LiquidityFormSide } from "./formView";
 import {
   AmmChainState,
@@ -61,9 +76,6 @@ import {
   groupMarketPositions,
   lpBandPrices,
   lpDeadline,
-  PERMIT2_ABI,
-  PERMIT2_ADDRESS,
-  permit2ApprovalArgs,
   POSITION_MANAGER_ABI,
   POSITION_MANAGER_BY_CHAIN,
   prepareAddLiquidity,
@@ -72,14 +84,17 @@ import {
   prepareMarketLiquidity,
   prepareRemoveLiquidity,
   readLpPositionFees,
+  readMovableLpPositions,
   readPoolLpPositions,
   readUserLpPositions,
+  refreshPoolAndPosition,
   refreshUserLpPosition,
   reverifyAddLiquidity,
   reverifyMarketLiquidity,
   type AddLiquidityPlan,
   type MarketLiquidityPlan,
   type MarketSides,
+  type MovableLpPosition,
   type PoolComposition,
   type PoolSnapshot,
   type PositionGroup,
@@ -88,11 +103,21 @@ import {
 import { LiquidityRangePreview } from "./LiquidityRangePreview";
 import {
   approvalStepsFor,
-  runApprovalStep,
-  SummaryRow,
+  liquidityReviewedCalls,
+  safeBatchIntro,
   type LiquidityStep,
 } from "./liquidityWrite";
-import { MarketEditPanel } from "./MarketEditPanel";
+
+// The edit panels load when first opened; hover or focus on Edit or Remove loads them early.
+const loadEditPosition = () => import("./EditPositionPanel");
+const loadMarketEdit = () => import("./MarketEditPanel");
+const EditPositionPanel = dynamic(
+  () => loadEditPosition().then((module) => module.EditPositionPanel),
+  { ssr: false },
+);
+const MarketEditPanel = dynamic(() => loadMarketEdit().then((module) => module.MarketEditPanel), {
+  ssr: false,
+});
 
 /** A plan's band on the display axis, "min – max PAIR/TOKEN". */
 function bandLabel(
@@ -105,9 +130,15 @@ function bandLabel(
 }
 
 function formatPrice(price: number): string {
-  if (!isFinite(price) || price <= 0) return "—";
-  if (price < 0.0001) return price.toExponential(2);
-  return Intl.NumberFormat("en", { maximumFractionDigits: price >= 1 ? 4 : 8 }).format(price);
+  return isFinite(price) && price > 0 ? formatPriceValue(price) : "—";
+}
+
+/** On phones a table row stacks: each cell is a small key above its value. */
+export const STACKED_ROW = "max-sm:grid max-sm:grid-cols-2 max-sm:gap-x-4 max-sm:py-2";
+export const STACKED_CELL =
+  "max-sm:block max-sm:min-w-0 max-sm:px-2 max-sm:py-1 max-sm:text-left max-sm:whitespace-normal";
+export function CellKey({ children }: { children: string }) {
+  return <span className="block text-xs font-normal text-zinc-500 sm:hidden">{children}</span>;
 }
 
 function MarketChainRow({
@@ -155,28 +186,22 @@ function MarketChainRow({
             1 {pool.pair.symbol} = {inverse ? formatPrice(inverse) : "—"} {tokenSymbol}
           </p>
           {issuance || cashOut ? (
-            <dl className="mt-4 space-y-1.5 border-t border-zinc-100 pt-3 text-sm">
+            <div className="mt-4 grid grid-cols-2 gap-3 border-t border-zinc-100 pt-3">
               {issuance ? (
-                <div className="flex items-baseline justify-between gap-3">
-                  <dt className="text-zinc-500">Current issuance price</dt>
-                  <dd className="font-medium text-zinc-900">
-                    <Revalidating pending={pending}>
-                      {formatPrice(issuance)} {pool.pair.symbol}
-                    </Revalidating>
-                  </dd>
-                </div>
+                <SummaryRow label="Current issuance price">
+                  <Revalidating pending={pending}>
+                    {formatPrice(issuance)} {pool.pair.symbol}
+                  </Revalidating>
+                </SummaryRow>
               ) : null}
               {cashOut ? (
-                <div className="flex items-baseline justify-between gap-3">
-                  <dt className="text-zinc-500">Current cash out price</dt>
-                  <dd className="font-medium text-zinc-900">
-                    <Revalidating pending={pending}>
-                      {formatPrice(cashOut)} {pool.pair.symbol}
-                    </Revalidating>
-                  </dd>
-                </div>
+                <SummaryRow label="Current cash out price">
+                  <Revalidating pending={pending}>
+                    {formatPrice(cashOut)} {pool.pair.symbol}
+                  </Revalidating>
+                </SummaryRow>
               ) : null}
-            </dl>
+            </div>
           ) : null}
           <p className="mt-3 text-xs text-zinc-400">
             Uniswap V4 pool, {pool.key.fee / 10_000}% fee.
@@ -209,6 +234,30 @@ function tickPrice(pool: PoolSnapshot, tick: number): number {
  * The positions come from the index where it has them and the onchain scan
  * otherwise, which is why this can render before the depth chart resolves.
  */
+function PoolReadFailed({
+  line,
+  retrying,
+  onRetry,
+}: {
+  line: string;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <p className="mt-2 text-sm text-zinc-500" role="status">
+      {line}{" "}
+      <button
+        type="button"
+        className="underline disabled:opacity-50"
+        disabled={retrying}
+        onClick={onRetry}
+      >
+        {retrying ? "Retrying…" : "Retry"}
+      </button>
+    </p>
+  );
+}
+
 function LiquidityProviders({ pool, tokenSymbol }: { pool: PoolSnapshot; tokenSymbol: string }) {
   const positions = useQuery({
     queryKey: ["revnetPoolLpProviders", pool.chainId, pool.poolId],
@@ -244,6 +293,15 @@ function LiquidityProviders({ pool, tokenSymbol }: { pool: PoolSnapshot; tokenSy
 
   if (positions.isLoading) {
     return <p className="mt-2 text-sm text-zinc-400">Reading liquidity providers…</p>;
+  }
+  if (positions.isError) {
+    return (
+      <PoolReadFailed
+        line="Could not load the providers."
+        retrying={positions.isFetching}
+        onRetry={() => void positions.refetch()}
+      />
+    );
   }
   if (!owners.length) return null;
 
@@ -309,14 +367,16 @@ function LiquidityProviders({ pool, tokenSymbol }: { pool: PoolSnapshot; tokenSy
   );
 }
 
-function LiquidityVisualization({
+export function LiquidityVisualization({
   pool,
   composition,
   tokenSymbol,
+  reference,
 }: {
   pool: PoolSnapshot;
   composition: PoolComposition;
   tokenSymbol: string;
+  reference: AmmChainState["reference"];
 }) {
   const model = useMemo(() => {
     const pairAmount = Number(formatUnits(composition.pairAmount, pool.pair.decimals));
@@ -352,8 +412,17 @@ function LiquidityVisualization({
       return { pairAmount, tokenAmount, pairPercent, tokenPercent, depth: null };
     }
 
-    const low = Math.min(...ranges.map((range) => range.low), pool.price);
-    const high = Math.max(...ranges.map((range) => range.high), pool.price);
+    const prices = [
+      { label: "Pool price", value: pool.price, color: "#f59e0b" },
+      { label: "Cash out price", value: reference.cashOut, color: "#6366f1" },
+      { label: "Issuance price", value: reference.issuance, color: "#65a578" },
+    ].filter(
+      (price): price is { label: string; value: number; color: string } =>
+        price.value != null && Number.isFinite(price.value) && price.value > 0,
+    );
+    // Include reference prices outside the LP ranges so every marker stays visible.
+    const low = Math.min(...ranges.map((range) => range.low), ...prices.map((p) => p.value));
+    const high = Math.max(...ranges.map((range) => range.high), ...prices.map((p) => p.value));
     if (!(high > low)) {
       return { pairAmount, tokenAmount, pairPercent, tokenPercent, depth: null };
     }
@@ -376,10 +445,12 @@ function LiquidityVisualization({
       let pair = 0n;
       let token = 0n;
       for (const range of ranges) {
-        if (mid >= range.low && mid <= range.high) liquidity += range.liquidity;
         const overlapLow = Math.max(bandTickLow, range.tickLower);
         const overlapHigh = Math.min(bandTickHigh, range.tickUpper);
         if (overlapLow >= overlapHigh) continue;
+        // Average over the logarithmic band so narrow ranges remain visible
+        // even when reference prices put the band's midpoint outside them.
+        liquidity += (range.liquidity * (overlapHigh - overlapLow)) / (bandTickHigh - bandTickLow);
         const amounts = uniswapV4AmountsForLiquidity(
           pool.sqrtP,
           uniswapV4SqrtPriceX96AtTick(Math.round(overlapLow)),
@@ -392,16 +463,19 @@ function LiquidityVisualization({
       return { mid, liquidity, pair, token };
     });
     const maxLiquidity = Math.max(...bands.map((band) => band.liquidity), 1);
-    const priceX = ((Math.log(pool.price) - logLow) / span) * DEPTH_WIDTH;
+    const markers = prices.map((price) => ({
+      ...price,
+      x: ((Math.log(price.value) - logLow) / span) * DEPTH_WIDTH,
+    }));
 
     return {
       pairAmount,
       tokenAmount,
       pairPercent,
       tokenPercent,
-      depth: { bands, maxLiquidity, low, high, priceX },
+      depth: { bands, maxLiquidity, low, high, markers },
     };
-  }, [composition, pool]);
+  }, [composition, pool, reference]);
 
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   // With nothing hovered, report the band holding the current price.
@@ -453,9 +527,21 @@ function LiquidityVisualization({
       {model.depth ? (
         <div>
           <div className="text-xs text-zinc-500">Depth</div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-xs">
+            {model.depth.markers.map((marker) => (
+              <span key={marker.label} className="flex items-center gap-1.5">
+                <span
+                  className="h-2.5 w-2.5 shrink-0"
+                  style={{ backgroundColor: marker.color }}
+                  aria-hidden="true"
+                />
+                {marker.label}: {formatPrice(marker.value)} {pool.pair.symbol}/{tokenSymbol}
+              </span>
+            ))}
+          </div>
           <svg
-            viewBox={`0 0 ${DEPTH_WIDTH} 128`}
-            className="mt-2 h-auto w-full cursor-crosshair touch-none"
+            viewBox={`0 16 ${DEPTH_WIDTH} 84`}
+            className="mt-2 h-auto w-full cursor-crosshair touch-none overflow-visible"
             role="img"
             aria-label={`${tokenSymbol} liquidity depth from ${formatPrice(model.depth.low)} to ${formatPrice(model.depth.high)} ${pool.pair.symbol}`}
             onPointerMove={(event) => {
@@ -482,53 +568,31 @@ function LiquidityVisualization({
                 />
               );
             })}
-            <line x1="1" y1="20" x2="1" y2="98" stroke="#71717a" strokeDasharray="3 2" />
-            <line
-              x1={model.depth.priceX.toFixed(1)}
-              y1="20"
-              x2={model.depth.priceX.toFixed(1)}
-              y2="98"
-              stroke="#f59e0b"
-              strokeWidth="1.5"
-              strokeDasharray="3 2"
-            />
-            <line x1="319" y1="20" x2="319" y2="98" stroke="#14b8a6" strokeDasharray="3 2" />
-            <text x="1" y="13" fontSize="8" fill="#71717a">
-              floor
-            </text>
-            {/* ponytail: measured at 8px in the page font, "floor" and the
-                centered "price" are 24.3 wide and "ceiling" 34.1 — so the
-                centered label collides with an end label outside this band.
-                Drop it there rather than print over them: the amber line still
-                marks the price and the readout below the chart names it. */}
-            {model.depth.priceX > 42 && model.depth.priceX < DEPTH_WIDTH - 52 ? (
-              <text
-                x={model.depth.priceX.toFixed(1)}
-                y="13"
-                fontSize="8"
-                fill="#71717a"
-                textAnchor="middle"
+            {model.depth.markers.map((marker) => (
+              <line
+                key={marker.label}
+                aria-label={`${marker.label}: ${formatPrice(marker.value)} ${pool.pair.symbol}/${tokenSymbol}`}
+                x1={marker.x.toFixed(1)}
+                y1="20"
+                x2={marker.x.toFixed(1)}
+                y2="98"
+                stroke={marker.color}
+                strokeWidth="1"
+                strokeDasharray="3 2"
               >
-                price
-              </text>
-            ) : null}
-            <text x="319" y="13" fontSize="8" fill="#71717a" textAnchor="end">
-              ceiling
-            </text>
-            <text x="1" y="119" fontSize="8" fill="#71717a">
-              {formatPrice(model.depth.low)}
-            </text>
-            <text x="319" y="119" fontSize="8" fill="#71717a" textAnchor="end">
-              {formatPrice(model.depth.high)}
-            </text>
+                <title>
+                  {marker.label}: {formatPrice(marker.value)} {pool.pair.symbol}/{tokenSymbol}
+                </title>
+              </line>
+            ))}
           </svg>
           <p className="mt-1 text-xs text-zinc-600" aria-live="polite">
             {shownBand ? (
               <>
                 <span className="font-medium text-zinc-900">
-                  ~{formatPrice(shownBand.mid)} {pool.pair.symbol}/{tokenSymbol}
-                </span>{" "}
-                | {shownBand.mid < pool.price! ? "buy-side" : "sell-side"} —{" "}
+                  Band near {formatPrice(shownBand.mid)} {pool.pair.symbol}/{tokenSymbol}
+                </span>
+                , {shownBand.mid < pool.price! ? "buy-side" : "sell-side"}:{" "}
                 {fmtUnits(shownBand.token, 18)} {tokenSymbol} +{" "}
                 {fmtUnits(shownBand.pair, pool.pair.decimals)} {pool.pair.symbol}
               </>
@@ -544,7 +608,13 @@ function LiquidityVisualization({
   );
 }
 
-function LiquidityChainRow({ state, tokenSymbol }: { state: AmmChainState; tokenSymbol: string }) {
+export function LiquidityChainRow({
+  state,
+  tokenSymbol,
+}: {
+  state: AmmChainState;
+  tokenSymbol: string;
+}) {
   const { pool } = state;
   const compositionQuery = useQuery({
     queryKey: ["v6PoolComposition", state.chainId, pool?.poolId],
@@ -552,7 +622,7 @@ function LiquidityChainRow({ state, tokenSymbol }: { state: AmmChainState; token
     staleTime: 60_000,
     queryFn: () => fetchPoolComposition(pool!),
   });
-  const composition = compositionQuery.data ?? null;
+  const composition = compositionQuery.data;
   return (
     <div className="border-b border-zinc-50 py-3 last:border-b-0">
       <div className="flex items-center gap-2 text-sm font-medium text-zinc-900">
@@ -568,18 +638,21 @@ function LiquidityChainRow({ state, tokenSymbol }: { state: AmmChainState; token
           {/* The provider table has its own (fast) source; only the depth
               bands wait on the composition. */}
           <LiquidityProviders pool={pool} tokenSymbol={tokenSymbol} />
-          {compositionQuery.isLoading ? (
-            <SkeletonLines lines={3} className="mt-2" />
-          ) : composition == null ? (
-            <p className="mt-2 text-sm text-zinc-400">
-              The RPC could not return the complete pool history, so liquidity is unavailable.
-            </p>
-          ) : (
+          {composition ? (
             <LiquidityVisualization
               pool={pool}
               composition={composition}
               tokenSymbol={tokenSymbol}
+              reference={state.reference}
             />
+          ) : compositionQuery.isError ? (
+            <PoolReadFailed
+              line="Could not load the reserves."
+              retrying={compositionQuery.isFetching}
+              onRetry={() => void compositionQuery.refetch()}
+            />
+          ) : (
+            <SkeletonLines lines={3} className="mt-2" />
           )}
         </>
       )}
@@ -607,10 +680,10 @@ export function AddLiquidityForm({
 }) {
   const { address } = useAccount();
   const wagmiConfig = useConfig();
+  const viaSafe = useSafeConnection(wagmiConfig);
   const chainId = Number(state.chainId);
   const publicClient = usePublicClient({ chainId });
-  const { ensureAllowance, isApproving } = useAllowance(chainId);
-  const { writeContractAsync, isPending } = useWriteContract();
+  const { run } = useReviewedAction();
   // Revnets have a corridor to make a market in; anything without both edges
   // falls back to the solved single band.
   const [mode, setMode] = useState<LiquidityFormMode>(
@@ -625,8 +698,11 @@ export function AddLiquidityForm({
     reviewed: ReviewedPlan;
     steps: LiquidityStep[];
     snapshot: string;
+    /** The mint's recipient: the position goes to the account that reviewed it. */
+    account: Address;
   } | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
   const [minted, setMinted] = useState<Hex | null>(null);
   const [busy, setBusy] = useState(false);
@@ -662,6 +738,8 @@ export function AddLiquidityForm({
         args: [address!],
       }),
   });
+  // The pool is found from the server sucker-group project: fund only a registry-listed pair.
+  const gate = useGroupWriteGate([state]);
 
   if (!pool || !POSITION_MANAGER_BY_CHAIN[chainId]) return null;
 
@@ -715,12 +793,17 @@ export function AddLiquidityForm({
   };
 
   const prepare = async () => {
+    setFailure(null);
     if (!address || !publicClient) {
       setStatus("Connect a wallet first.");
       return;
     }
     if (!view.ready || view.minPrice == null || view.maxPrice == null) {
       setStatus(view.note ?? "Finish the amounts first.");
+      return;
+    }
+    if (gate.blocked) {
+      setStatus(gate.line ?? "Still confirming this project's chains onchain. Try again.");
       return;
     }
     setBusy(true);
@@ -801,6 +884,7 @@ export function AddLiquidityForm({
               },
         ],
         snapshot,
+        account: address,
       });
       // The headroom is still worth naming when it outruns the balance — the
       // mint reverts if the price moves against the position before it lands.
@@ -822,103 +906,103 @@ export function AddLiquidityForm({
     }
   };
 
+  const reviewContext = !review
+    ? []
+    : [
+        ...(review.kind === "market"
+          ? [
+              ...(review.plan.tokenSide
+                ? [
+                    {
+                      label: "Sells above the price",
+                      value: amountsText(sideUnits("token"), 0n),
+                      note: bandLabel(pool, tokenSymbol, review.plan.tokenSide),
+                      strong: true,
+                    },
+                  ]
+                : []),
+              ...(review.plan.pairSide
+                ? [
+                    {
+                      label: "Buys below the price",
+                      value: amountsText(0n, sideUnits("pair")),
+                      note: bandLabel(pool, tokenSymbol, review.plan.pairSide),
+                      strong: true,
+                    },
+                  ]
+                : []),
+            ]
+          : [
+              {
+                label: "Adds",
+                value: amountsText(sideUnits("token"), sideUnits("pair")),
+                note: bandLabel(pool, tokenSymbol, review.plan),
+                strong: true,
+              },
+            ]),
+        { label: "On", value: chainName(state.chainId) },
+        {
+          label: "Authorizes up to",
+          value: amountsText(review.plan.tokenMaximum, review.plan.pairMaximum),
+          note: `1% price headroom, spent only if the price moves before the mint lands${
+            pool.pair.addr === zeroAddress ? `. Unused ${pool.pair.symbol} is refunded` : ""
+          }`,
+        },
+      ];
+
   const execute = async () => {
     if (!address || !publicClient || !reviewed || reviewed.snapshot !== snapshot) return;
-    const { reviewed: built, steps } = reviewed;
+    if (gate.blocked) return;
+    const { reviewed: built, steps, account } = reviewed;
+    if (account.toLowerCase() !== address.toLowerCase()) {
+      setReviewed(null);
+      setStatus(ACCOUNT_CHANGED);
+      return;
+    }
     const plan = built.plan;
+    // One liquidity action in this pool: its approvals are its steps, its batch is it.
+    const lpIntent = liquidityIntent({ chainId, pool: pool.poolId, positions: [] });
     setBusy(true);
     setStatus(null);
+    setFailure(null);
     try {
-      // ponytail: Safe app only; other EIP-5792 wallets keep the sequential path.
-      if (isSafeConnection(wagmiConfig) && steps.length > 1) {
-        if (built.kind === "market") await reverifyMarketLiquidity(pool, built.plan);
-        else await reverifyAddLiquidity(pool, built.plan);
-        const calls = steps.map((step) =>
-          step.approval?.kind === "erc20"
-            ? {
-                address: step.approval.currency,
-                abi: erc20Abi,
-                functionName: "approve",
-                args: [PERMIT2_ADDRESS, step.approval.max],
-              }
-            : step.approval
-              ? {
-                  address: PERMIT2_ADDRESS,
-                  abi: PERMIT2_ABI,
-                  functionName: "approve",
-                  args: permit2ApprovalArgs(
-                    state.chainId,
-                    step.approval.currency,
-                    step.approval.max,
-                  ),
-                }
-              : {
-                  address: POSITION_MANAGER_BY_CHAIN[chainId]!,
-                  abi: POSITION_MANAGER_ABI,
-                  functionName: "modifyLiquidities",
-                  args: [plan.unlockData, lpDeadline(true)],
-                  value: plan.value,
-                  dependsOnPrior: true,
-                },
-        );
-        await proposeSafeBatch(
-          wagmiConfig,
-          chainId,
-          built.kind === "market" ? "Make the market" : "Add liquidity",
-          calls,
-        );
+      const result = requireProposedOrDone(
+        await run({
+          // The position goes to the reviewed account: only it may fund the mint.
+          account,
+          title: built.kind === "market" ? "Review the market" : "Review liquidity",
+          confirmLabel:
+            built.kind === "market" ? "Agree & make the market" : "Agree & add liquidity",
+          context: reviewContext,
+          calls: liquidityReviewedCalls(lpIntent, {
+            chainId: state.chainId,
+            steps,
+            unlockData: plan.unlockData,
+            value: plan.value,
+            safe: isSafeConnection(wagmiConfig),
+          }),
+          scope: steps.length > 1 ? lpIntent : undefined,
+          // A Safe proposes the approvals and the write as one transaction.
+          batch: true,
+          reverify: async (call) => {
+            if (call.functionName !== "modifyLiquidities") return;
+            if (built.kind === "market") await reverifyMarketLiquidity(pool, built.plan);
+            else await reverifyAddLiquidity(pool, built.plan);
+          },
+          beforeWallet: (_call, step) => setStepIndex(step),
+        }),
+      );
+      if (result.status === "proposed") {
         setStatus(
-          "Proposed to Safe as one batch. Once its signers approve and it executes, the position shows under Your liquidity.",
+          steps.length > 1
+            ? "Proposed to Safe as one batch. Once its signers approve and it executes, the position shows under Your liquidity."
+            : "Liquidity mint was proposed to Safe and awaits approvals and execution.",
         );
         setReviewed(null);
         return;
       }
-      for (const [index, step] of steps.entries()) {
-        setStepIndex(index);
-        if (step.approval) {
-          const outcome = await runApprovalStep(step, {
-            chainId: state.chainId,
-            address,
-            publicClient: publicClient as PublicClient,
-            ensureAllowance,
-            approvePermit2: (args) =>
-              writeContractAsync({
-                chainId,
-                address: PERMIT2_ADDRESS,
-                abi: PERMIT2_ABI,
-                functionName: "approve",
-                args,
-              }),
-          });
-          if (outcome === "safe-proposed") {
-            setStatus(
-              "Permit2 authorization was proposed to Safe. Execute it, then review liquidity again.",
-            );
-            setReviewed(null);
-            return;
-          }
-          continue;
-        }
-        if (built.kind === "market") await reverifyMarketLiquidity(pool, built.plan);
-        else await reverifyAddLiquidity(pool, built.plan);
-        const hash = await writeContractAsync({
-          chainId,
-          address: POSITION_MANAGER_BY_CHAIN[chainId]!,
-          abi: POSITION_MANAGER_ABI,
-          functionName: "modifyLiquidities",
-          args: [plan.unlockData, lpDeadline(isSafeConnection(wagmiConfig))],
-          value: plan.value,
-        });
-        if (submittedViaSafe(hash)) {
-          setStatus("Liquidity mint was proposed to Safe and awaits approvals and execution.");
-          setReviewed(null);
-          return;
-        }
-        const receipt = await waitForReceiptWithRetry(publicClient, hash);
-        if (receipt.status !== "success") throw new Error(`Liquidity mint ${hash} reverted.`);
-        setStepIndex(steps.length);
-        setMinted(hash);
-      }
+      setStepIndex(steps.length);
+      setMinted(result.hashes.at(-1) ?? null);
       setReviewed(null);
       setPairText("");
       setTokenText("");
@@ -929,22 +1013,23 @@ export function AddLiquidityForm({
         queryClient.invalidateQueries({ queryKey: ["revnetPoolLpProviders"] }),
       ]);
     } catch (cause) {
-      setStatus(txMessage(cause, "Could not add liquidity."));
+      if (reviewClosed(cause)) setReviewed(null);
+      else setFailure(txMessage(cause, "Could not add liquidity."));
     } finally {
       setBusy(false);
     }
   };
 
-  const disabled = busy || isApproving || isPending;
+  const disabled = busy;
   return (
     <div className="mt-3 border-t border-zinc-100 pt-3">
       <div className="flex items-center justify-between gap-3">
         <div className="text-xs font-medium text-zinc-600">Add liquidity</div>
         <span className="text-[11px] text-zinc-400">
-          Current ~{pool.price?.toPrecision(6) ?? "—"} {pool.pair.symbol}/{tokenSymbol}
+          Current ~{formatPrice(pool.price ?? NaN)} {pool.pair.symbol}/{tokenSymbol}
         </span>
       </div>
-      <div className="mt-2 flex flex-wrap gap-1 text-[11px]">
+      <div className="mt-2 flex flex-wrap gap-1">
         {(
           [
             ["market", "Make the market"],
@@ -957,8 +1042,8 @@ export function AddLiquidityForm({
             type="button"
             className={
               mode === id
-                ? "bg-zinc-900 px-2 py-1 text-white"
-                : "border border-zinc-300 px-2 py-1 hover:bg-zinc-50"
+                ? "h-7 border border-teal-500 bg-teal-500 px-2 text-sm text-melon-950"
+                : "h-7 border border-zinc-300 bg-white px-2 text-sm text-zinc-700 hover:bg-zinc-100"
             }
             disabled={disabled}
             onClick={() => {
@@ -1017,10 +1102,10 @@ export function AddLiquidityForm({
       />
       {mode === "range" ? (
         <div className="mt-2 grid grid-cols-2 gap-2">
-          <label className="text-[11px] text-zinc-500">
+          <label className="text-xs text-zinc-600">
             Min price
-            <input
-              className="mt-1 w-full border border-zinc-200 px-2 py-1.5 text-xs"
+            <Input
+              className="mt-1"
               type="number"
               min="0"
               value={minText}
@@ -1031,10 +1116,10 @@ export function AddLiquidityForm({
               }}
             />
           </label>
-          <label className="text-[11px] text-zinc-500">
+          <label className="text-xs text-zinc-600">
             Max price
-            <input
-              className="mt-1 w-full border border-zinc-200 px-2 py-1.5 text-xs"
+            <Input
+              className="mt-1"
               type="number"
               min="0"
               value={maxText}
@@ -1047,16 +1132,16 @@ export function AddLiquidityForm({
           </label>
         </div>
       ) : null}
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <label className="text-[11px] text-zinc-500">
-          <span className="flex items-center justify-between">
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <label className="text-xs text-zinc-600">
+          <span className="flex items-center justify-between gap-2">
             {mode === "market" ? `${tokenSymbol} to sell above the price` : tokenSymbol}
             {mode !== "amounts" && view.derived === "token" ? (
               <span className="text-zinc-400">≈ auto</span>
             ) : null}
           </span>
-          <input
-            className="mt-1 w-full border border-zinc-200 px-2 py-1.5 text-xs"
+          <Input
+            className="mt-1"
             type="number"
             min="0"
             placeholder="0"
@@ -1074,8 +1159,8 @@ export function AddLiquidityForm({
             </span>
           ) : null}
         </label>
-        <label className="text-[11px] text-zinc-500">
-          <span className="flex items-center justify-between">
+        <label className="text-xs text-zinc-600">
+          <span className="flex items-center justify-between gap-2">
             {mode === "market"
               ? `${pool.pair.symbol} to buy with below the price`
               : pool.pair.symbol}
@@ -1083,8 +1168,8 @@ export function AddLiquidityForm({
               <span className="text-zinc-400">≈ auto</span>
             ) : null}
           </span>
-          <input
-            className="mt-1 w-full border border-zinc-200 px-2 py-1.5 text-xs"
+          <Input
+            className="mt-1"
             type="number"
             min="0"
             placeholder="0"
@@ -1100,11 +1185,12 @@ export function AddLiquidityForm({
       </div>
       {view.summary ? <p className="mt-2 text-xs text-zinc-600">{view.summary}</p> : null}
       {view.note ? <p className="mt-1 text-[11px] text-zinc-500">{view.note}</p> : null}
+      {gate.line ? <p className="mt-2 text-xs text-zinc-600">{gate.line}</p> : null}
       <div className="mt-3 flex justify-end">
         <ButtonWithWallet
           targetChainId={state.chainId}
-          loading={disabled}
-          disabled={disabled || !view.ready}
+          loading={disabled || gate.pending}
+          disabled={disabled || !view.ready || gate.blocked}
           onClick={() => void prepare()}
           connectWalletText="Connect Wallet"
           className="bg-teal-500 text-melon-950 hover:bg-teal-600"
@@ -1113,73 +1199,27 @@ export function AddLiquidityForm({
         </ButtonWithWallet>
       </div>
       {review || (busy && !review) ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(open) => {
-            if (!open) setReviewed(null);
-          }}
+          onClose={() => setReviewed(null)}
           title={mode === "market" ? "Confirm market" : "Confirm liquidity"}
-          chainId={state.chainId}
           preparing={!review}
           steps={reviewSteps}
           activeIndex={busy ? stepIndex : -1}
-          stepsIntro={
-            isSafeConnection(wagmiConfig) && reviewSteps.length > 1
-              ? `Goes to your Safe as one batch of ${reviewSteps.length} calls: approved once, executed together.`
-              : undefined
-          }
-          action={mode === "market" ? "Make the market" : "Add liquidity"}
-          onConfirm={() => void execute()}
+          stepsIntro={viaSafe && reviewSteps.length > 1 ? safeBatchIntro(reviewSteps) : undefined}
+          start={() => void execute()}
           busy={disabled}
           status={status}
-        >
-          {!review ? null : review.kind === "market" ? (
-            <>
-              {review.plan.tokenSide ? (
-                <SummaryRow label="Sells above the price">
-                  {amountsText(sideUnits("token"), 0n)}
-                  <span className="block text-xs text-zinc-500">
-                    {bandLabel(pool, tokenSymbol, review.plan.tokenSide)}
-                  </span>
-                </SummaryRow>
-              ) : null}
-              {review.plan.pairSide ? (
-                <SummaryRow label="Buys below the price">
-                  {amountsText(0n, sideUnits("pair"))}
-                  <span className="block text-xs text-zinc-500">
-                    {bandLabel(pool, tokenSymbol, review.plan.pairSide)}
-                  </span>
-                </SummaryRow>
-              ) : null}
-            </>
-          ) : (
-            <SummaryRow label="Adds">
-              {amountsText(sideUnits("token"), sideUnits("pair"))}
-              <span className="block text-xs text-zinc-500">
-                {bandLabel(pool, tokenSymbol, review.plan)}
-              </span>
-            </SummaryRow>
-          )}
-          {review ? (
-            <>
-              <SummaryRow label="On">{chainName(state.chainId)}</SummaryRow>
-              <SummaryRow label="Authorizes up to">
-                {amountsText(review.plan.tokenMaximum, review.plan.pairMaximum)}
-                <span className="block text-xs text-zinc-500">
-                  1% price headroom, spent only if the price moves before the mint lands
-                  {pool.pair.addr === zeroAddress ? `. Unused ${pool.pair.symbol} is refunded` : ""}
-                </span>
-              </SummaryRow>
-            </>
-          ) : null}
-        </TxConfirmDialog>
+          error={failure}
+          rows={reviewContext}
+        />
       ) : null}
       {minted ? (
-        <div className="mt-2 border border-teal-300 bg-teal-50 p-2 text-xs" role="status">
+        <div className="mt-2 border border-teal-300 p-2 text-xs" role="status">
           <p className="font-medium text-teal-800">Liquidity added.</p>
           <p className="mt-1 text-[11px] text-zinc-600">
             The position is yours and now earns fees. It is listed under &ldquo;Your
-            liquidity&rdquo; below.
+            liquidity&rdquo;.
           </p>
           {explorerBaseUrl(chainId) ? (
             <ExternalLink
@@ -1218,24 +1258,27 @@ export function LiquidityManager({
   /** Section heading; null when a dialog title already names the view. */
   heading?: string | null;
 }) {
-  const { address } = useAccount();
+  const { address, isViewAs } = useViewedAccount();
   const pooled = states.filter(
     (state) => state.pool && POSITION_MANAGER_BY_CHAIN[Number(state.chainId)],
   );
   // Per-chain scan outcomes reported up by the row groups, so the aggregate
   // empty state is knowable without lifting each chain's queries out of them.
-  const [scan, setScan] = useState<Record<number, number | "loading" | "error">>({});
+  const [scan, setScan] = useState<Record<string, number | "loading" | "error">>({});
   // The edit/remove panels portal here, BELOW the scroll wrapper — inside the
   // table they'd inherit its full scrollable width and get cut off.
   const [panelHost, setPanelHost] = useState<HTMLDivElement | null>(null);
-  const onStatus = useCallback((chainId: number, status: number | "loading" | "error") => {
-    setScan((current) =>
-      current[chainId] === status ? current : { ...current, [chainId]: status },
-    );
+  const onStatus = useCallback((key: number | string, status: number | "loading" | "error") => {
+    setScan((current) => (current[key] === status ? current : { ...current, [key]: status }));
   }, []);
 
   if (!pooled.length) return null;
-  const allEmpty = pooled.length > 0 && pooled.every((state) => scan[Number(state.chainId)] === 0);
+  // Empty only when every scan, the retired-pool one included, answered with nothing.
+  const allEmpty =
+    pooled.length > 0 &&
+    pooled.every(
+      (state) => scan[Number(state.chainId)] === 0 && scan[`retired:${state.chainId}`] === 0,
+    );
 
   return (
     // min-w-0: as a grid item of the dialog panel this must be allowed to
@@ -1243,9 +1286,25 @@ export function LiquidityManager({
     <div className={heading ? "mt-3 min-w-0 border-t border-zinc-100 pt-3" : "min-w-0"}>
       {heading ? <div className="text-xs font-medium text-zinc-600">{heading}</div> : null}
       {!address ? (
-        <p className="mt-1 text-xs text-zinc-400">Connect a wallet to manage its LP positions.</p>
+        <p className="mt-1 text-xs text-zinc-400">
+          Connect a wallet to manage the tokens it offers for trading.
+        </p>
       ) : (
-        <>
+        // A viewed account's positions are shown; only its own wallet can act on them.
+        <fieldset disabled={isViewAs} className="m-0 min-w-0 border-0 p-0">
+          {isViewAs ? (
+            <p className="mt-1 text-xs text-zinc-500">
+              You&apos;re viewing another account. Connect as it to claim, edit, or remove.
+            </p>
+          ) : null}
+          {pooled.map((state) => (
+            <MovableLiquidity
+              key={state.chainId}
+              state={state}
+              tokenSymbol={tokenSymbol}
+              onStatus={onStatus}
+            />
+          ))}
           {allEmpty ? (
             <p className="mt-1 text-xs text-zinc-400">
               No positions owned by this wallet on any chain.
@@ -1254,8 +1313,8 @@ export function LiquidityManager({
           {/* Hidden rather than unmounted while empty so the per-chain queries
               keep watching for a position minted from the form above. */}
           <div className={allEmpty ? "hidden" : "mt-2 w-full min-w-0 overflow-auto"}>
-            <Table>
-              <TableHeader>
+            <Table className="max-sm:block">
+              <TableHeader className="max-sm:hidden">
                 <TableRow>
                   <TableHead>Chain</TableHead>
                   <TableHead>Position</TableHead>
@@ -1265,7 +1324,7 @@ export function LiquidityManager({
                   <TableHead />
                 </TableRow>
               </TableHeader>
-              <TableBody>
+              <TableBody className="max-sm:block">
                 {pooled.map((state) => (
                   <ChainPositionRows
                     key={state.chainId}
@@ -1279,8 +1338,238 @@ export function LiquidityManager({
             </Table>
           </div>
           <div ref={setPanelHost} className="min-w-0" />
-        </>
+        </fieldset>
       )}
+    </div>
+  );
+}
+
+/**
+ * The wallet's positions still in a pool the project's buyback has left, each moved into the
+ * current pool by one reviewed `modifyLiquidities`.
+ */
+function MovableLiquidity({
+  state,
+  tokenSymbol,
+  onStatus,
+}: {
+  state: AmmChainState;
+  tokenSymbol: string;
+  onStatus: (key: string, status: number | "loading" | "error") => void;
+}) {
+  const { address } = useViewedAccount();
+  const wagmiConfig = useConfig();
+  const chainId = Number(state.chainId);
+  const pool = state.pool;
+  const positionManager = POSITION_MANAGER_BY_CHAIN[chainId];
+  const client = usePublicClient({ chainId }) as PublicClient | undefined;
+  const move = useReviewedAction();
+  const [reviewed, setReviewed] = useState<{
+    movable: MovableLpPosition;
+    plan: ReturnType<typeof liquidityMovePlan>;
+    account: Address;
+  } | null>(null);
+  const [refreshing, setRefreshing] = useState<bigint | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const movable = useQuery({
+    queryKey: ["revnetMovableLpPositions", state.chainId, pool?.poolId, address?.toLowerCase()],
+    enabled: Boolean(pool && positionManager && address),
+    retry: 0,
+    staleTime: 30_000,
+    queryFn: () => readMovableLpPositions(pool!, address!),
+  });
+  const enabled = Boolean(pool && positionManager && address);
+  useEffect(() => {
+    onStatus(
+      `retired:${state.chainId}`,
+      !enabled ? 0 : movable.isError ? "error" : (movable.data?.length ?? "loading"),
+    );
+  }, [state.chainId, onStatus, enabled, movable.isError, movable.data?.length]);
+  if (!pool || !positionManager || !address || !client) return null;
+  // A failed scan is not "nothing to move".
+  if (movable.isError) {
+    return (
+      <p role="status" className="mt-2 text-xs text-red-600">
+        Could not check for liquidity left in the old pool.{" "}
+        <button type="button" className="underline" onClick={() => void movable.refetch()}>
+          Retry
+        </button>
+      </p>
+    );
+  }
+  if (!movable.data?.length && move.status !== "done") return null;
+
+  const beginReview = async ({ from, position }: MovableLpPosition) => {
+    setError(null);
+    move.reset();
+    setRefreshing(position.tokenId);
+    try {
+      // The plan comes from the PositionManager's own state, never the index.
+      const [fresh, onchain, toSqrtPriceX96] = await Promise.all([
+        refreshPoolAndPosition(from, position.tokenId, address),
+        readMovablePosition(client, positionManager, position.tokenId, from.key, address),
+        poolSqrtPriceX96(client, chainId, pool.key),
+      ]);
+      setReviewed({
+        movable: { from: fresh.pool, position: { ...fresh.position, ...onchain } },
+        plan: liquidityMovePlan({
+          ...onchain,
+          to: pool.key,
+          fromSqrtPriceX96: fresh.pool.sqrtP,
+          toSqrtPriceX96,
+          owner: address,
+        }),
+        account: address,
+      });
+    } catch (cause) {
+      setError(txMessage(cause, "Could not read this position."));
+    } finally {
+      setRefreshing(null);
+    }
+  };
+
+  const pairMinimum = (plan: ReturnType<typeof liquidityMovePlan>) =>
+    pool.pairIsC0 ? plan.amount0Minimum : plan.amount1Minimum;
+  const tokenMinimum = (plan: ReturnType<typeof liquidityMovePlan>) =>
+    pool.pairIsC0 ? plan.amount1Minimum : plan.amount0Minimum;
+  const moveContext = reviewed
+    ? [
+        {
+          label: "Position",
+          value: `#${reviewed.movable.position.tokenId.toString()} on ${chainName(state.chainId)}`,
+        },
+        {
+          label: "Moves into the new pool",
+          value: `~${fmtUnits(reviewed.movable.position.tokenAmount, 18)} ${tokenSymbol} + ${fmtUnits(reviewed.movable.position.pairAmount, pool.pair.decimals)} ${pool.pair.symbol}, same band`,
+          strong: true,
+        },
+        {
+          label: "Enforced onchain",
+          value: `At least ${fmtUnits(tokenMinimum(reviewed.plan), 18)} ${tokenSymbol} + ${fmtUnits(pairMinimum(reviewed.plan), pool.pair.decimals)} ${pool.pair.symbol} out of the old pool; leftovers and fees come back to you`,
+        },
+      ]
+    : [];
+
+  const send = async () => {
+    if (!reviewed) return;
+    if (reviewed.account.toLowerCase() !== address.toLowerCase()) {
+      setReviewed(null);
+      setError(ACCOUNT_CHANGED);
+      return;
+    }
+    setError(null);
+    setMoving(true);
+    try {
+      const { movable: target, plan, account } = reviewed;
+      const result = requireProposedOrDone(
+        await move.run({
+          account,
+          title: "Review liquidity move",
+          description:
+            "Burn this position in the old pool and open the same band in the new pool. The reviewed minimums are enforced onchain.",
+          confirmLabel: "Agree & move liquidity",
+          context: moveContext,
+          calls: [
+            reviewedCall(
+              {
+                chainId,
+                address: positionManager,
+                abi: POSITION_MANAGER_ABI,
+                functionName: "modifyLiquidities",
+                args: [plan.unlockData, lpDeadline(isSafeConnection(wagmiConfig))],
+              },
+              {
+                intent: liquidityIntent({
+                  chainId,
+                  pool: target.from.poolId,
+                  positions: [target.position.tokenId],
+                }),
+              },
+            ),
+          ],
+          reverify: async () => {
+            const fresh = await readMovablePosition(
+              client,
+              positionManager,
+              target.position.tokenId,
+              target.from.key,
+              account,
+            );
+            if (fresh.liquidity !== target.position.liquidity)
+              throw new ReviewRefusal("This position changed. Review it again before moving it.");
+          },
+        }),
+      );
+      if (result.status === "done") {
+        setReviewed(null);
+        void movable.refetch();
+      }
+    } catch (cause) {
+      if (reviewClosed(cause)) setReviewed(null);
+      else setError(txMessage(cause, "Could not move this position."));
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  const busy = move.busy || moving;
+  return (
+    <div className="mt-2 space-y-1">
+      {(movable.data ?? []).map(({ from, position }) => (
+        <div
+          key={position.tokenId.toString()}
+          className="flex flex-wrap items-center justify-between gap-2 border border-zinc-200 px-2 py-1.5 text-xs"
+        >
+          <span className="inline-flex items-center gap-1.5">
+            <ChainLogo chainId={state.chainId} width={14} height={14} />
+            Position #{position.tokenId.toString()} is still in the old pool.
+          </span>
+          <button
+            type="button"
+            className="border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"
+            disabled={busy || refreshing !== null}
+            onClick={() => void beginReview({ from, position })}
+          >
+            {refreshing === position.tokenId ? "Refreshing…" : "Move to new pool"}
+          </button>
+        </div>
+      ))}
+      {move.status === "done" ? (
+        <p className="text-xs text-green-700">Liquidity moved to the new pool.</p>
+      ) : null}
+      {move.phase === "proposed" ? (
+        <p className="text-xs text-zinc-600">
+          Move proposed to Safe. The table updates once it executes.
+        </p>
+      ) : null}
+      {error && !reviewed ? <ErrorNote message={error} /> : null}
+      {reviewed || refreshing !== null ? (
+        <TxProgress
+          open
+          onClose={() => {
+            setReviewed(null);
+            // A move only followed until its hold settles closes too; the hold keeps it shown.
+            if (!busy || move.following) move.dismiss();
+          }}
+          title="Confirm move"
+          preparing={!reviewed}
+          status={
+            !reviewed ? "Reading the live position…" : busy ? "Waiting for confirmation…" : null
+          }
+          steps={[
+            {
+              title: "Move the position",
+              detail: "Burns it in the old pool and opens the same band in the new one.",
+            },
+          ]}
+          activeIndex={busy ? 0 : -1}
+          start={() => void send()}
+          busy={busy}
+          error={error}
+          rows={moveContext}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1298,11 +1587,11 @@ function ChainPositionRows({
 }: {
   state: AmmChainState;
   tokenSymbol: string;
-  onStatus: (chainId: number, status: number | "loading" | "error") => void;
+  onStatus: (key: number, status: number | "loading" | "error") => void;
   /** Where the edit/remove panels render, below the table's scroll wrapper. */
   panelHost: HTMLDivElement | null;
 }) {
-  const { address } = useAccount();
+  const { address } = useViewedAccount();
   const wagmiConfig = useConfig();
   const chainId = Number(state.chainId);
   const pool = state.pool;
@@ -1310,6 +1599,8 @@ function ChainPositionRows({
   const [reviewed, setReviewed] = useState<{
     position: UserLpPosition;
     plan: ReturnType<typeof prepareRemoveLiquidity>;
+    /** Both sides go back to the account that reviewed the removal. */
+    account: Address;
   } | null>(null);
   // The position whose holdings/band are being edited in the panel below, or
   // the market (two sides) being edited or removed.
@@ -1322,21 +1613,22 @@ function ChainPositionRows({
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<bigint | null>(null);
   const [claiming, setClaiming] = useState<bigint | null>(null);
+  const [removing, setRemoving] = useState(false);
   const [claimReview, setClaimReview] = useState<UserLpPosition[] | null>(null);
   const client = usePublicClient({ chainId }) as PublicClient | undefined;
-  const {
-    writeContractAsync,
-    data: hash,
-    isPending,
-  } = useWriteContract({
-    transactionReview: {
-      title: "Review liquidity removal",
-      description:
-        "Burn this Uniswap V4 position and return both currencies to the connected wallet. The reviewed minimum returns are enforced onchain.",
-      confirmLabel: "Agree & remove liquidity",
-    },
-  });
-  const receipt = useWaitForTransactionReceipt({ hash });
+  const claim = useReviewedAction();
+  const removal = useReviewedAction();
+  const isPending = claim.busy || removal.busy;
+  // A removal that may still land keeps every position action locked, after its confirm closes
+  // too, so the same position cannot be sent twice.
+  const removalSettling = removal.status === "receipt";
+  const removalProposed = removal.phase === "proposed";
+  const removalSafeUnconfirmed = removalProposed && !!removal.held?.exit;
+  const removalHeldLine = removal.held && !removalProposed ? heldLineOf(removal.held) : null;
+  // A held removal without its exit may still land; once the hold offers the exit, sending it
+  // again goes through the hold's own dialog.
+  const removalHeld = !!removal.held && !removalProposed && !removal.held.exit;
+  const removalOutstanding = removalSettling || removalProposed || removalHeld;
   const positions = useQuery({
     queryKey: ["revnetWalletLpPositions", state.chainId, pool?.poolId, address?.toLowerCase()],
     enabled: Boolean(pool && positionManager && address),
@@ -1375,26 +1667,18 @@ function ChainPositionRows({
     );
   }, [chainId, onStatus, positions.isLoading, positions.isError, positions.data?.length]);
 
-  useEffect(() => {
-    if (receipt.isSuccess) {
-      setReviewed(null);
-      void positions.refetch();
-      void fees.refetch();
-    }
-    // Refetch only on the receipt transition; the query object changes each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [receipt.isSuccess]);
-
   if (!pool || !positionManager || !address) return null;
 
   const beginReview = async (position: UserLpPosition) => {
     setError(null);
+    removal.reset();
     setRefreshing(position.tokenId);
     try {
       const fresh = await refreshUserLpPosition(pool, position.tokenId, address);
       setReviewed({
         position: fresh,
         plan: prepareRemoveLiquidity(pool, fresh, address, isSafeConnection(wagmiConfig)),
+        account: address,
       });
     } catch (cause) {
       setError(txMessage(cause, "Could not refresh this position."));
@@ -1402,6 +1686,44 @@ function ChainPositionRows({
       setRefreshing(null);
     }
   };
+
+  const claimContext = (positions: UserLpPosition[]) => {
+    const total = (key: "tokenFees" | "pairFees") =>
+      positions.reduce(
+        (sum, position) => sum + (fees.data?.[position.tokenId.toString()]?.[key] ?? 0n),
+        0n,
+      );
+    return [
+      {
+        label: positions.length === 1 ? "Position" : "Positions",
+        value: positions.map((position) => `#${position.tokenId.toString()}`).join(", "),
+      },
+      { label: "On", value: chainName(state.chainId) },
+      {
+        label: "To your wallet",
+        value: `${fmtUnits(total("tokenFees"), 18)} ${tokenSymbol}`,
+        lines: [`${fmtUnits(total("pairFees"), pool.pair.decimals)} ${pool.pair.symbol}`],
+        strong: true,
+      },
+    ];
+  };
+  const removalContext = reviewed
+    ? [
+        {
+          label: "Position",
+          value: `#${reviewed.position.tokenId.toString()} on ${chainName(state.chainId)}`,
+        },
+        {
+          label: "Back to your wallet",
+          value: `~${fmtUnits(reviewed.position.tokenAmount, 18)} ${tokenSymbol} + ${fmtUnits(reviewed.position.pairAmount, pool.pair.decimals)} ${pool.pair.symbol} + unclaimed fees`,
+          strong: true,
+        },
+        {
+          label: "Enforced onchain",
+          value: `At least ${fmtUnits(reviewed.plan.tokenMinimum, 18)} ${tokenSymbol} + ${fmtUnits(reviewed.plan.pairMinimum, pool.pair.decimals)} ${pool.pair.symbol} back (95% floors)`,
+        },
+      ]
+    : [];
 
   // Claim fees only. Nothing is swapped and the position is untouched, so
   // there is no reviewed amount to re-verify — only the wallet's ownership,
@@ -1419,16 +1741,39 @@ function ChainPositionRows({
               positions.map((position) => position.tokenId),
               address,
             ).unlockData;
-      await writeContractAsync({
-        chainId,
-        address: positionManager,
-        abi: POSITION_MANAGER_ABI,
-        functionName: "modifyLiquidities",
-        args: [unlockData, lpDeadline(isSafeConnection(wagmiConfig))],
-      });
+      const result = requireProposedOrDone(
+        await claim.run({
+          account: address,
+          title: "Review fee claim",
+          description:
+            "Claim this position's unclaimed fees to the connected wallet. The position stays open.",
+          confirmLabel: "Agree & claim fees",
+          context: claimContext(positions),
+          calls: [
+            reviewedCall(
+              {
+                chainId,
+                address: positionManager,
+                abi: POSITION_MANAGER_ABI,
+                functionName: "modifyLiquidities",
+                args: [unlockData, lpDeadline(isSafeConnection(wagmiConfig))],
+              },
+              {
+                intent: liquidityIntent({
+                  chainId,
+                  pool: pool.poolId,
+                  positions: positions.map((position) => position.tokenId),
+                }),
+              },
+            ),
+          ],
+        }),
+      );
+      if (result.status === "done") void fees.refetch();
       setClaimReview(null);
     } catch (cause) {
-      setError(txMessage(cause, "Could not claim fees."));
+      if (reviewClosed(cause)) setClaimReview(null);
+      else setError(txMessage(cause, "Could not claim fees."));
     } finally {
       setClaiming(null);
     }
@@ -1436,29 +1781,67 @@ function ChainPositionRows({
 
   const remove = async () => {
     if (!reviewed) return;
+    if (reviewed.account.toLowerCase() !== address.toLowerCase()) {
+      setReviewed(null);
+      setError(ACCOUNT_CHANGED);
+      return;
+    }
     setError(null);
+    setRemoving(true);
     try {
-      const fresh = await refreshUserLpPosition(pool, reviewed.position.tokenId, address);
-      if (fresh.liquidity < reviewed.position.liquidity) {
-        throw new Error("This position changed. Review its current return before removing it.");
+      const { position, plan, account } = reviewed;
+      const result = requireProposedOrDone(
+        await removal.run({
+          account,
+          title: "Review liquidity removal",
+          description:
+            "Burn this Uniswap V4 position and return both currencies to the connected wallet. The reviewed minimum returns are enforced onchain.",
+          confirmLabel: "Agree & remove liquidity",
+          context: removalContext,
+          calls: [
+            reviewedCall(
+              {
+                chainId,
+                address: positionManager,
+                abi: POSITION_MANAGER_ABI,
+                functionName: "modifyLiquidities",
+                // The reviewed minimums live in `unlockData`.
+                args: [plan.unlockData, lpDeadline(isSafeConnection(wagmiConfig))],
+              },
+              {
+                intent: liquidityIntent({
+                  chainId,
+                  pool: pool.poolId,
+                  positions: [position.tokenId],
+                }),
+              },
+            ),
+          ],
+          reverify: async () => {
+            const fresh = await refreshUserLpPosition(pool, position.tokenId, account);
+            if (fresh.liquidity < position.liquidity)
+              throw new ReviewRefusal(
+                "This position changed. Review its current return before removing it.",
+              );
+          },
+        }),
+      );
+      if (result.status === "done") {
+        setReviewed(null);
+        void positions.refetch();
+        void fees.refetch();
       }
-      await writeContractAsync({
-        chainId,
-        address: positionManager,
-        abi: POSITION_MANAGER_ABI,
-        functionName: "modifyLiquidities",
-        // The reviewed minimums live in `unlockData` and stay frozen; only the
-        // deadline is re-stamped, so a slow review can't ship an already-expired
-        // window.
-        args: [reviewed.plan.unlockData, lpDeadline(isSafeConnection(wagmiConfig))],
-      });
     } catch (cause) {
-      setError(txMessage(cause, "Could not remove liquidity."));
+      if (reviewClosed(cause)) setReviewed(null);
+      else setError(txMessage(cause, "Could not remove liquidity."));
+    } finally {
+      setRemoving(false);
     }
   };
 
   const chainCell = (
-    <TableCell className="whitespace-nowrap">
+    <TableCell className={`whitespace-nowrap ${STACKED_CELL}`}>
+      <CellKey>Chain</CellKey>
       <span className="inline-flex items-center gap-1.5">
         <ChainLogo chainId={state.chainId} width={14} height={14} />
         {chainName(state.chainId)}
@@ -1468,9 +1851,9 @@ function ChainPositionRows({
 
   if (positions.isLoading) {
     return (
-      <TableRow>
+      <TableRow className={STACKED_ROW}>
         {chainCell}
-        <TableCell colSpan={5} className="text-xs text-zinc-400">
+        <TableCell colSpan={5} className={`text-xs text-zinc-400 ${STACKED_CELL}`}>
           Reading your positions…
         </TableCell>
       </TableRow>
@@ -1479,9 +1862,9 @@ function ChainPositionRows({
   // An incomplete log scan must not read as "you have no positions".
   if (positions.isError) {
     return (
-      <TableRow>
+      <TableRow className={STACKED_ROW}>
         {chainCell}
-        <TableCell colSpan={5} className="text-xs text-red-600">
+        <TableCell colSpan={5} className={`text-xs text-red-600 ${STACKED_CELL}`}>
           Could not verify the complete position history. Nothing has been hidden as an empty
           result.
         </TableCell>
@@ -1497,7 +1880,8 @@ function ChainPositionRows({
     refreshing !== null ||
     reviewed !== null ||
     editing !== null ||
-    editingMarket !== null;
+    editingMarket !== null ||
+    removalOutstanding;
 
   const renderSingle = (position: UserLpPosition) => {
     const owed = fees.data?.[position.tokenId.toString()];
@@ -1508,18 +1892,23 @@ function ChainPositionRows({
       refreshing !== null ||
       reviewed !== null ||
       editing !== null ||
-      editingMarket !== null;
+      editingMarket !== null ||
+      removalOutstanding;
     return (
-      <TableRow key={position.tokenId.toString()} className="align-top">
+      <TableRow key={position.tokenId.toString()} className={`align-top ${STACKED_ROW}`}>
         {chainCell}
-        <TableCell className="font-mono text-xs">#{position.tokenId.toString()}</TableCell>
-        <TableCell className="whitespace-nowrap text-right tabular-nums">
+        <TableCell className={`font-mono text-xs ${STACKED_CELL}`}>
+          <CellKey>Position</CellKey>#{position.tokenId.toString()}
+        </TableCell>
+        <TableCell className={`whitespace-nowrap text-right tabular-nums ${STACKED_CELL}`}>
+          <CellKey>Holdings</CellKey>
           {fmtUnits(position.tokenAmount, 18)} {tokenSymbol}
           <span className="block text-xs text-zinc-500">
             {fmtUnits(position.pairAmount, pool.pair.decimals)} {pool.pair.symbol}
           </span>
         </TableCell>
-        <TableCell className="whitespace-nowrap text-right tabular-nums">
+        <TableCell className={`whitespace-nowrap text-right tabular-nums ${STACKED_CELL}`}>
+          <CellKey>Unclaimed fees</CellKey>
           {fees.isLoading || owed === undefined ? (
             <span className="text-zinc-400">Reading…</span>
           ) : !owed ? (
@@ -1535,7 +1924,8 @@ function ChainPositionRows({
             </>
           )}
         </TableCell>
-        <TableCell className="whitespace-nowrap text-right tabular-nums">
+        <TableCell className={`whitespace-nowrap text-right tabular-nums ${STACKED_CELL}`}>
+          <CellKey>Lifetime fees</CellKey>
           {(() => {
             // The pool forgets what a position already took, so lifetime is
             // only knowable where the index has been accumulating it.
@@ -1557,8 +1947,8 @@ function ChainPositionRows({
             );
           })()}
         </TableCell>
-        <TableCell className="whitespace-nowrap text-right">
-          <span className="inline-flex gap-2">
+        <TableCell className={`whitespace-nowrap text-right ${STACKED_CELL} max-sm:col-span-2`}>
+          <span className="inline-flex flex-wrap gap-2">
             <button
               type="button"
               className="border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"
@@ -1579,6 +1969,8 @@ function ChainPositionRows({
                 setEdited(null);
                 setEditing(position);
               }}
+              onPointerEnter={() => void loadEditPosition()}
+              onFocus={() => void loadEditPosition()}
             >
               Edit
             </button>
@@ -1618,21 +2010,24 @@ function ChainPositionRows({
     const key = `market:${group.tokenSide.tokenId.toString()}:${group.pairSide.tokenId.toString()}`;
     const pending = sides.some((side) => claiming === side.tokenId);
     return (
-      <TableRow key={key} className="align-top">
+      <TableRow key={key} className={`align-top ${STACKED_ROW}`}>
         {chainCell}
-        <TableCell className="whitespace-nowrap font-mono text-xs">
+        <TableCell className={`whitespace-nowrap font-mono text-xs ${STACKED_CELL}`}>
+          <CellKey>Position</CellKey>
           Market
           <span className="block text-zinc-500">
-            #{group.tokenSide.tokenId.toString()} · #{group.pairSide.tokenId.toString()}
+            #{group.tokenSide.tokenId.toString()} and #{group.pairSide.tokenId.toString()}
           </span>
         </TableCell>
-        <TableCell className="whitespace-nowrap text-right tabular-nums">
+        <TableCell className={`whitespace-nowrap text-right tabular-nums ${STACKED_CELL}`}>
+          <CellKey>Holdings</CellKey>
           {fmtUnits(tokenHeld, 18)} {tokenSymbol}
           <span className="block text-xs text-zinc-500">
             {fmtUnits(pairHeld, pool.pair.decimals)} {pool.pair.symbol}
           </span>
         </TableCell>
-        <TableCell className="whitespace-nowrap text-right tabular-nums">
+        <TableCell className={`whitespace-nowrap text-right tabular-nums ${STACKED_CELL}`}>
+          <CellKey>Unclaimed fees</CellKey>
           {fees.isLoading || !feesKnown ? (
             <span className="text-zinc-400">Reading…</span>
           ) : !feesUsable ? (
@@ -1648,7 +2043,8 @@ function ChainPositionRows({
             </>
           )}
         </TableCell>
-        <TableCell className="whitespace-nowrap text-right tabular-nums">
+        <TableCell className={`whitespace-nowrap text-right tabular-nums ${STACKED_CELL}`}>
+          <CellKey>Lifetime fees</CellKey>
           {!lifetimeKnown ? (
             <span className="text-zinc-400">—</span>
           ) : lifetimeToken <= 0n && lifetimePair <= 0n ? (
@@ -1662,8 +2058,8 @@ function ChainPositionRows({
             </>
           )}
         </TableCell>
-        <TableCell className="whitespace-nowrap text-right">
-          <span className="inline-flex gap-2">
+        <TableCell className={`whitespace-nowrap text-right ${STACKED_CELL} max-sm:col-span-2`}>
+          <span className="inline-flex flex-wrap gap-2">
             <button
               type="button"
               className="border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"
@@ -1684,6 +2080,8 @@ function ChainPositionRows({
                 setEdited(null);
                 setEditingMarket({ sides: group, startEmpty: false });
               }}
+              onPointerEnter={() => void loadMarketEdit()}
+              onFocus={() => void loadMarketEdit()}
             >
               Edit
             </button>
@@ -1696,6 +2094,8 @@ function ChainPositionRows({
                 setEdited(null);
                 setEditingMarket({ sides: group, startEmpty: true });
               }}
+              onPointerEnter={() => void loadMarketEdit()}
+              onFocus={() => void loadMarketEdit()}
             >
               Remove
             </button>
@@ -1711,13 +2111,10 @@ function ChainPositionRows({
         group.kind === "single" ? renderSingle(group.position) : renderMarket(group),
       )}
       {claimReview ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(open) => {
-            if (!open) setClaimReview(null);
-          }}
+          onClose={() => setClaimReview(null)}
           title="Confirm fee claim"
-          chainId={state.chainId}
           steps={[
             {
               title: "Claim fees",
@@ -1725,79 +2122,50 @@ function ChainPositionRows({
             },
           ]}
           activeIndex={isPending ? 0 : -1}
-          action="Claim fees"
-          onConfirm={() => void claimFees(claimReview)}
+          start={() => void claimFees(claimReview)}
           busy={isPending || claiming !== null}
           error={error}
-        >
-          <SummaryRow label={claimReview.length === 1 ? "Position" : "Positions"}>
-            {claimReview.map((position) => `#${position.tokenId.toString()}`).join(" · ")}
-          </SummaryRow>
-          <SummaryRow label="On">{chainName(state.chainId)}</SummaryRow>
-          <SummaryRow label="To your wallet">
-            {fmtUnits(
-              claimReview.reduce(
-                (sum, position) =>
-                  sum + (fees.data?.[position.tokenId.toString()]?.tokenFees ?? 0n),
-                0n,
-              ),
-              18,
-            )}{" "}
-            {tokenSymbol}
-            <span className="block text-xs text-zinc-500">
-              {fmtUnits(
-                claimReview.reduce(
-                  (sum, position) =>
-                    sum + (fees.data?.[position.tokenId.toString()]?.pairFees ?? 0n),
-                  0n,
-                ),
-                pool.pair.decimals,
-              )}{" "}
-              {pool.pair.symbol}
-            </span>
-          </SummaryRow>
-        </TxConfirmDialog>
+          rows={claimContext(claimReview)}
+        />
       ) : null}
       {reviewed || refreshing !== null ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(open) => {
-            if (!open) setReviewed(null);
+          onClose={() => {
+            setReviewed(null);
+            // A removal only followed until its hold settles closes too; it stays outstanding. A
+            // Safe proposal's run already returned: closing keeps following it.
+            if (!removalOutstanding || (removal.following && removal.phase !== "proposed"))
+              removal.dismiss();
           }}
           title="Confirm removal"
-          chainId={state.chainId}
           preparing={!reviewed}
-          status={reviewed ? null : "Reading the live position…"}
+          status={
+            !reviewed
+              ? "Reading the live position…"
+              : removalSafeUnconfirmed
+                ? SAFE_PROPOSAL_UNCONFIRMED_LINE
+                : removalProposed
+                  ? "The removal was proposed to Safe and awaits approvals and execution."
+                  : removalHeldLine
+                    ? removalHeldLine
+                    : removalSettling
+                      ? "Waiting for confirmation…"
+                      : null
+          }
           steps={[
             {
               title: "Remove the position",
               detail: "Burns it and returns both sides to your wallet.",
             },
           ]}
-          activeIndex={isPending ? 0 : -1}
-          action="Remove the position"
-          onConfirm={() => void remove()}
-          busy={isPending}
+          activeIndex={isPending || removing || removalSettling ? 0 : -1}
+          start={() => void remove()}
+          busy={isPending || removing || removalSettling}
+          complete={removalProposed || removalHeld}
           error={error}
-        >
-          {reviewed ? (
-            <>
-              <SummaryRow label="Position">
-                #{reviewed.position.tokenId.toString()} on {chainName(state.chainId)}
-              </SummaryRow>
-              <SummaryRow label="Back to your wallet">
-                ~{fmtUnits(reviewed.position.tokenAmount, 18)} {tokenSymbol} +{" "}
-                {fmtUnits(reviewed.position.pairAmount, pool.pair.decimals)} {pool.pair.symbol} +
-                unclaimed fees
-              </SummaryRow>
-              <SummaryRow label="Enforced onchain">
-                At least {fmtUnits(reviewed.plan.tokenMinimum, 18)} {tokenSymbol} +{" "}
-                {fmtUnits(reviewed.plan.pairMinimum, pool.pair.decimals)} {pool.pair.symbol} back
-                (95% floors)
-              </SummaryRow>
-            </>
-          ) : null}
-        </TxConfirmDialog>
+          rows={removalContext}
+        />
       ) : null}
       {/* The panels live OUTSIDE the scroll wrapper — as table rows they would
           inherit the table's full scrollable width and get cut off. */}
@@ -1845,15 +2213,22 @@ function ChainPositionRows({
                   }}
                 />
               ) : null}
-              {receipt.isSuccess ? (
+              {removal.status === "done" ? (
                 <p className="mt-2 text-xs text-green-700">Liquidity removal confirmed.</p>
               ) : null}
-              {edited ? <p className="mt-2 text-xs text-green-700">{edited}</p> : null}
-              {error && !reviewed && !claimReview ? (
-                <p className="mt-2 wrap-anywhere text-xs text-red-600" role="alert">
-                  {error}
+              {removalSafeUnconfirmed ? (
+                <p className="mt-2 text-xs text-zinc-600">{SAFE_PROPOSAL_UNCONFIRMED_LINE}</p>
+              ) : null}
+              {!reviewed && removalHeldLine ? (
+                <p className="mt-2 text-xs text-zinc-600">{removalHeldLine}</p>
+              ) : null}
+              {!reviewed && removalProposed && !removalSafeUnconfirmed ? (
+                <p className="mt-2 text-xs text-zinc-600">
+                  Removal proposed to Safe. The table updates once it executes.
                 </p>
               ) : null}
+              {edited ? <p className="mt-2 text-xs text-green-700">{edited}</p> : null}
+              {error && !reviewed && !claimReview ? <ErrorNote message={error} /> : null}
             </>,
             panelHost,
           )
@@ -1870,7 +2245,8 @@ function ChainPositionRows({
  * hardcoded native token.
  */
 export function AmmCard({ chains, tokenSymbol }: { chains: ChainProject[]; tokenSymbol: string }) {
-  const { data, isLoading, isError, isFetching } = useQuery(
+  const hydrated = useHydrated();
+  const query = useQuery(
     cachedQuery({
       queryKey: ["v6AmmStates", chainProjectsKey(chains)],
       enabled: chains.length > 0,
@@ -1879,6 +2255,9 @@ export function AmmCard({ chains, tokenSymbol }: { chains: ChainProject[]; token
     }),
   );
 
+  const data = hydrated ? query.data : undefined;
+  const isLoading = hydrated ? query.isLoading : chains.length > 0;
+  const isError = hydrated && query.isError;
   const anyHook = data?.some((s) => s.hook) ?? false;
 
   const content = (kind: "market" | "liquidity") => {
@@ -1889,7 +2268,7 @@ export function AmmCard({ chains, tokenSymbol }: { chains: ChainProject[]; token
     if (!anyHook) {
       return (
         <div className="py-3 text-sm text-zinc-400">
-          No buyback hook configured — there is no project-owned AMM pool to show.
+          No buyback hook is configured, so there is no project pool.
         </div>
       );
     }
@@ -1899,7 +2278,7 @@ export function AmmCard({ chains, tokenSymbol }: { chains: ChainProject[]; token
           key={state.chainId}
           state={state}
           tokenSymbol={tokenSymbol}
-          pending={isFetching}
+          pending={query.isFetching}
         />
       ) : (
         <LiquidityChainRow key={state.chainId} state={state} tokenSymbol={tokenSymbol} />
@@ -1910,12 +2289,11 @@ export function AmmCard({ chains, tokenSymbol }: { chains: ChainProject[]; token
   return (
     <div className="flex flex-col gap-4">
       <div className="border border-teal-200 bg-teal-50 p-4">
-        <h3 className="font-medium text-zinc-900">
-          Pool <span className="ml-1 text-xs uppercase tracking-wide text-zinc-400">AMM</span>
-        </h3>
+        <h3 className="font-medium text-zinc-900">Trading pool</h3>
         <p className="mt-1 text-sm text-zinc-500">
-          The market fills orders that would give payers more {tokenSymbol} than issuance. Arbitrage
-          keeps its price between the issuance ceiling and the cash-out floor.
+          A payment can buy existing {tokenSymbol} here when it returns more than creating new
+          tokens. Trading can bring the market, new-token and cash-out prices closer. It does not
+          guarantee a price range.
         </p>
         <div className="mt-2">{content("market")}</div>
       </div>
@@ -1923,7 +2301,7 @@ export function AmmCard({ chains, tokenSymbol }: { chains: ChainProject[]; token
       <div className="border border-teal-200 bg-teal-50 p-4">
         <h3 className="font-medium text-zinc-900">Liquidity</h3>
         <p className="mt-1 text-sm text-zinc-500">
-          The tokens currently pooled across the market&apos;s active price ranges.
+          Tokens offered for trading, in price ranges that include the current market price.
         </p>
         <div className="mt-2">{content("liquidity")}</div>
       </div>

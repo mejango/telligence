@@ -1,9 +1,9 @@
 import type { ChartTooltipSeries } from "@/components/ui/chart";
 import { formatClock, formatShortDate } from "@/lib/date";
-import { formatCompact, formatDecimals } from "@/lib/number";
+import { formatCompact, formatPriceValue } from "@/lib/number";
 import { poolReservesAt, type PoolReservePoint } from "@/lib/priceSeries";
 import { TimeRange } from "@/lib/timeRange";
-import { JB_TOKEN_DECIMALS } from "@bananapus/nana-sdk-core";
+import { CashOutTaxRate, JB_TOKEN_DECIMALS } from "@bananapus/nana-sdk-core";
 import { formatUnits } from "viem";
 
 type PriceTooltipDatum = {
@@ -30,6 +30,8 @@ interface Props {
   series: readonly ChartTooltipSeries<PriceTooltipDatum>[];
   baseTokenSymbol: string;
   baseTokenDecimals: number;
+  /** The unit of the price series, which can differ from the accounting token's symbol. */
+  priceSymbol?: string;
   range: TimeRange;
   /** The pool's reserves over time; the tooltip shows what it held at the hovered moment. */
   poolReserves?: readonly PoolReservePoint[];
@@ -41,6 +43,7 @@ export function PriceChartTooltip({
   series,
   baseTokenSymbol,
   baseTokenDecimals,
+  priceSymbol = baseTokenSymbol,
   range,
   poolReserves = [],
   projectTokenSymbol,
@@ -65,7 +68,7 @@ export function PriceChartTooltip({
           />
           <span className="shrink-0 text-zinc-400">{entry.label}:</span>
           <span className="shrink-0 font-mono text-white">
-            {formatDecimals(entry.value, 6)} {baseTokenSymbol}
+            {formatPriceValue(entry.value)} {priceSymbol}
           </span>
         </div>
       ))}
@@ -97,7 +100,9 @@ export function PriceChartTooltip({
           </div>
           <div className="flex justify-between gap-4 whitespace-nowrap">
             <span>Cash Out Tax:</span>
-            <span className="font-mono">{((datum.cashOutTaxRate ?? 0) / 100).toFixed(2)}%</span>
+            <span className="font-mono">
+              {new CashOutTaxRate(datum.cashOutTaxRate ?? 0).format()}
+            </span>
           </div>
         </div>
       )}

@@ -162,6 +162,7 @@ export function PermissionsCard({ rows }: { rows: ChainProjectRow[] }) {
             {owners.map((owner) => (
               <div key={owner.address} className="flex flex-wrap items-center gap-2">
                 <EthereumAddress
+                  showSafe
                   address={owner.address}
                   short
                   chain={JB_CHAINS[owner.chains[0]]?.chain}
@@ -177,8 +178,8 @@ export function PermissionsCard({ rows }: { rows: ChainProjectRow[] }) {
               </div>
             ))}
             <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-              Every power. The revnet is owned by the REVOwner contract, which acts directly and
-              never needs a grant — it is what delegates the powers below to the revnet operator.
+              The REVOwner contract holds the owner role and enforces the revnet&apos;s rules. It
+              gives the operator the limited permissions listed below.
             </p>
           </div>
         ) : null}
@@ -188,8 +189,7 @@ export function PermissionsCard({ rows }: { rows: ChainProjectRow[] }) {
           <p className="text-sm text-zinc-500 mt-3">Could not read permissions.</p>
         ) : grants.length === 0 ? (
           <p className="mt-3 text-sm text-zinc-500">
-            No other accounts have been granted permissions, according to the indexer. Grants are
-            read from the index, so one made very recently may not appear yet.
+            No other permissions appear in the records yet. Recent changes may take time to appear.
           </p>
         ) : (
           <div className="mt-3 divide-y divide-melon-200 bg-melon-50 px-4">
@@ -200,6 +200,7 @@ export function PermissionsCard({ rows }: { rows: ChainProjectRow[] }) {
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <EthereumAddress
+                    showSafe
                     address={grant.operator}
                     short
                     withEnsName
@@ -213,9 +214,9 @@ export function PermissionsCard({ rows }: { rows: ChainProjectRow[] }) {
                   {grant.wildcard ? (
                     <span
                       className="rounded-full bg-amber-50 text-amber-700 px-2 py-0.5 text-[11px] font-medium"
-                      title={`Granted on project 0 — the wildcard scope. This applies to EVERY project ${grant.account} owns, not just this one.`}
+                      title={`Granted for every project ${grant.account} owns, not just this one.`}
                     >
-                      All projects
+                      Every project this owner owns
                     </span>
                   ) : null}
                   {grant.differs ? (

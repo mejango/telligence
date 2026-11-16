@@ -8,6 +8,7 @@ import {
   BENDYSTRAW_OPERATIONS,
   BROWSER_BENDYSTRAW_OPERATIONS,
   IndexedBuybackPoolsOperation,
+  IndexedPoolRangesOperation,
   IndexedPoolSwapsOperation,
   MintNftEventsOperation,
   OwnedNftsOperation,
@@ -214,6 +215,7 @@ describe("reviewed Bendystraw operations", () => {
       [V6AutoIssueEventsOperation, "autoIssueEvents"],
       [AllLoansOperation, "loans"],
       [IndexedBuybackPoolsOperation, "buybackPoolEvents"],
+      [IndexedPoolRangesOperation, "buybackPoolRanges"],
       [IndexedPoolSwapsOperation, "swapEvents"],
       [OwnedNftsOperation, "nfts"],
       [MintNftEventsOperation, "mintNftEvents"],
@@ -242,6 +244,25 @@ describe("reviewed Bendystraw operations", () => {
           [root]: { items: [{ chainId: 8453, projectId: 7, version: 0 }] },
         }),
       ).toBe(false);
+
+      if (
+        operation !== AccountPermissionHoldersOperation &&
+        operation !== PermissionHoldersOperation
+      ) {
+        for (const projectIds of [
+          [0, 6],
+          [6, 0],
+        ]) {
+          expect(
+            operation.validateData({
+              [root]: {
+                items: projectIds.map((projectId) => ({ chainId: 8453, projectId, version: 6 })),
+              },
+            }),
+            `${operation.id} must reject project 0 at any position`,
+          ).toBe(false);
+        }
+      }
     }
   });
 });

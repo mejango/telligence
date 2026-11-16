@@ -46,15 +46,33 @@ export function OperatorSection({ disabled = false }: { disabled?: boolean }) {
   const entryFor = (chainId: JBChainId) =>
     operators.find((entry) => Number(entry.chainId) === Number(chainId));
 
-  const latestRef = useRef({ operators, sortedChains, setFieldValue, fromStage, controlsEnabled });
-  latestRef.current = { operators, sortedChains, setFieldValue, fromStage, controlsEnabled };
+  // One operator for the whole revnet is the common case, so the per-chain rows are opt-in —
+  // the same affordance a split beneficiary uses. They open by themselves when the addresses
+  // already differ, which is how an imported draft with per-chain operators arrives.
+  const distinctAddresses = new Set(
+    sortedChains.map((chainId) => entryFor(chainId)?.address?.trim().toLowerCase() ?? ""),
+  );
+  const [perChain, setPerChain] = useState(() => distinctAddresses.size > 1);
 
-  // An imported draft arrives after mount, so the initial answer above can be the wrong one.
-  useEffect(() => {
-    if (operators.length > 0 && !operators.every((entry) => isDisabled(entry.address))) {
-      setControlsEnabled(true);
-    }
-  }, [operators]);
+  // What was typed before the controls were turned off, for when they are turned back on.
+  const typedAddresses = useRef(new Map<number, string>());
+
+  const latestRef = useRef({
+    operators,
+    sortedChains,
+    setFieldValue,
+    fromStage,
+    controlsEnabled,
+    perChain,
+  });
+  latestRef.current = {
+    operators,
+    sortedChains,
+    setFieldValue,
+    fromStage,
+    controlsEnabled,
+    perChain,
+  };
 
   // The rows mirror the chains that are actually selected: one entry each, no more. Anything
   // else is a validation error the reader cannot see, since only selected chains are rendered —
@@ -67,10 +85,14 @@ export function OperatorSection({ disabled = false }: { disabled?: boolean }) {
       const existing = latest.operators.find(
         (entry) => Number(entry.chainId) === Number(chainId),
       )?.address;
+      // The single field speaks for every chain, so a chain added under it takes its address.
+      const shown = latest.perChain
+        ? undefined
+        : latest.operators.find((entry) => entry.address && !isDisabled(entry.address))?.address;
       const seed = latest.controlsEnabled
-        ? isDisabled(latest.fromStage)
-          ? ""
-          : latest.fromStage
+        ? shown ||
+          typedAddresses.current.get(Number(chainId)) ||
+          (isDisabled(latest.fromStage) ? "" : latest.fromStage)
         : PERMANENTLY_DISABLED_OPERATOR;
       // Keep whatever was typed, unless the answer above contradicts it.
       const keep =
@@ -86,14 +108,6 @@ export function OperatorSection({ disabled = false }: { disabled?: boolean }) {
       );
     if (!unchanged) latest.setFieldValue("operator", next);
   }, [values.chainIds, controlsEnabled, operators]);
-
-  // One operator for the whole revnet is the common case, so the per-chain rows are opt-in —
-  // the same affordance a split beneficiary uses. They open by themselves when the addresses
-  // already differ, which is how an imported draft with per-chain operators arrives.
-  const distinctAddresses = new Set(
-    sortedChains.map((chainId) => entryFor(chainId)?.address?.trim().toLowerCase() ?? ""),
-  );
-  const [perChain, setPerChain] = useState(() => distinctAddresses.size > 1);
 
   const setEveryAddress = (address: string) => {
     setFieldValue(
@@ -112,6 +126,11 @@ export function OperatorSection({ disabled = false }: { disabled?: boolean }) {
   };
 
   const answerControls = (enabled: boolean) => {
+    if (!enabled) {
+      typedAddresses.current = new Map(
+        operators.map((entry) => [Number(entry.chainId), entry.address]),
+      );
+    }
     setControlsEnabled(enabled);
     if (values.stages.length > 0 && !enabled) {
       setFieldValue("stages.0.initialOperator", PERMANENTLY_DISABLED_OPERATOR);
@@ -123,10 +142,11 @@ export function OperatorSection({ disabled = false }: { disabled?: boolean }) {
       <div className="md:col-span-1">
         <h2 className="mb-4 text-lg font-bold md:mb-2">5. Operator</h2>
         <p className="text-lg text-zinc-600">
-          An optional address holding limited controls over the revnet once it&apos;s deployed.
+          Optionally, choose an operator to manage the revnet after launch, with only the powers
+          listed here.
         </p>
         <p className="mt-2 text-lg text-zinc-600">
-          Whoever you name here can be changed later only by the operator itself.
+          Only the current operator can pass the role to someone else.
         </p>
       </div>
       <div className="mt-6 md:col-span-2 md:mt-0">
@@ -159,7 +179,7 @@ export function OperatorSection({ disabled = false }: { disabled?: boolean }) {
         </label>
         {controlsEnabled && sortedChains.length === 0 ? (
           <p className="mt-3 text-sm text-zinc-500">
-            Pick the chains you&apos;re deploying on, and an address per chain appears here.
+            Choose your chains first, then enter the operator address.
           </p>
         ) : controlsEnabled ? (
           <div className="mt-4">
@@ -184,13 +204,19 @@ export function OperatorSection({ disabled = false }: { disabled?: boolean }) {
                 className="mt-2 flex w-fit items-center gap-2 text-md italic text-zinc-400"
                 htmlFor="perChainOperator"
               >
-                set operator per chain?
+                Use a different operator on each chain
                 <input
                   type="checkbox"
                   id="perChainOperator"
                   checked={perChain}
                   disabled={disabled}
-                  onChange={(event) => setPerChain(event.target.checked)}
+                  onChange={(event) => {
+                    setPerChain(event.target.checked);
+                    // The single field shows one address, so no other may stay behind it.
+                    if (!event.target.checked) {
+                      setEveryAddress(entryFor(sortedChains[0])?.address ?? "");
+                    }
+                  }}
                 />
               </label>
             ) : null}
@@ -215,9 +241,7 @@ export function OperatorSection({ disabled = false }: { disabled?: boolean }) {
               : null}
           </div>
         ) : (
-          <p className="mt-3 text-sm text-zinc-500">
-            No operator address will retain these limited controls.
-          </p>
+          <p className="mt-3 text-sm text-zinc-500">No one will have these controls.</p>
         )}
       </div>
     </>

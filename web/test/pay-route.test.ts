@@ -1,4 +1,4 @@
-import { minReturnedTokens } from "@/lib/quote";
+import { rolloutAddress, rolloutChain } from "@/lib/protocol-rollout";
 import {
   formatPayAmount,
   formatStartCountdown,
@@ -17,18 +17,31 @@ import {
   NATIVE_TOKEN,
   USDC_ADDRESSES,
 } from "@bananapus/nana-sdk-core";
-import type { PayPreview } from "@bananapus/nana-sdk-core/v6";
-import type { Address, PublicClient } from "viem";
+import { PaySwapQuoteFailedError, type PayPreview } from "@bananapus/nana-sdk-core/v6";
+import { ContractFunctionRevertedError, type Address, type PublicClient } from "viem";
 import { sepolia } from "viem/chains";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_ACCOUNT } from "./fixtures/revnet";
 
 const { previewPayMock } = vi.hoisted(() => ({ previewPayMock: vi.fn() }));
 
-vi.mock("@bananapus/nana-sdk-core/v6", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@bananapus/nana-sdk-core/v6")>()),
-  previewPay: previewPayMock,
-}));
+vi.mock("@bananapus/nana-sdk-core/v6", async (importOriginal) => {
+  const { bestUserPayOver } = await import("./support/best-user-pay");
+  const prepareUserPay = async (...args: unknown[]) => ({
+    preview: await previewPayMock(...args),
+    metadata: "0x",
+    minReturnedTokens: 0n,
+  });
+  const actual = await importOriginal<typeof import("@bananapus/nana-sdk-core/v6")>();
+  return {
+    ...actual,
+    prepareUserPay,
+    prepareBestUserPay: bestUserPayOver(
+      prepareUserPay,
+      (error) => error instanceof actual.PaySwapQuoteFailedError,
+    ),
+  };
+});
 
 import { resolveBestV6PayRoute } from "@/lib/paymentTerminal";
 
@@ -47,6 +60,7 @@ const routeArgs = {
   token: TOKEN,
   amount: 1_000_000n,
   beneficiary: TEST_ACCOUNT,
+  attachedTerminals: [ROUTER, MULTI],
 };
 
 function preview(beneficiaryTokenCount: bigint, reservedTokenCount = 0n): PayPreview {
@@ -57,8 +71,8 @@ beforeEach(() => {
   previewPayMock.mockReset();
 });
 
-describe("wallet-action:pay — v6 payment route selection", () => {
-  it("selects the live route which returns the beneficiary the most tokens", async () => {
+describe("v6 payment route selection", () => {
+  it("wallet-action:pay selects the live route which returns the beneficiary the most tokens", async () => {
     previewPayMock.mockImplementation(async (_client: PublicClient, args: { terminal: Address }) =>
       args.terminal.toLowerCase() === ROUTER.toLowerCase() ? preview(100n) : preview(120n),
     );
@@ -75,9 +89,86 @@ describe("wallet-action:pay — v6 payment route selection", () => {
         token: TOKEN,
         amount: 1_000_000n,
         beneficiary: TEST_ACCOUNT,
-        metadata: "0x",
       }),
     );
+  });
+
+  it("quotes and preserves the actual directly attached gateway or previous router", async () => {
+    const gateway = rolloutAddress("JBRouterTerminalGateway", sepolia.id)!;
+    const previous = rolloutChain(sepolia.id)!.history.JBRouterTerminal!.previous as Address;
+    for (const terminal of [gateway, previous]) {
+      previewPayMock.mockReset();
+      previewPayMock.mockResolvedValue(preview(100n));
+      const result = await resolveBestV6PayRoute({ ...routeArgs, attachedTerminals: [terminal] });
+      expect(result).toMatchObject({ address: terminal, type: "swap" });
+      expect(previewPayMock).toHaveBeenCalledTimes(1);
+      expect(previewPayMock).toHaveBeenCalledWith(
+        routeArgs.client,
+        expect.objectContaining({ terminal }),
+      );
+    }
+  });
+
+  it("recovers an unknown attachment list using only the freshly confirmed direct primary", async () => {
+    const readContract = vi.fn().mockResolvedValue(MULTI);
+    previewPayMock.mockResolvedValue(preview(100n));
+    const route = await resolveBestV6PayRoute({
+      ...routeArgs,
+      attachedTerminals: undefined,
+      client: { readContract } as unknown as PublicClient,
+    });
+    expect(route).toMatchObject({ address: MULTI, type: "multi" });
+    expect(readContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        functionName: "primaryTerminalOf",
+        args: [routeArgs.projectId, TOKEN],
+      }),
+    );
+    expect(previewPayMock).toHaveBeenCalledOnce();
+    expect(previewPayMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ terminal: MULTI }),
+    );
+  });
+
+  it("never reopens global router candidates for an unknown, absent, or unsupported primary", async () => {
+    for (const primary of [
+      "0x0000000000000000000000000000000000000000",
+      ROUTER,
+      "0x0000000000000000000000000000000000000001",
+    ]) {
+      const readContract = vi.fn().mockResolvedValue(primary);
+      expect(
+        await resolveBestV6PayRoute({
+          ...routeArgs,
+          attachedTerminals: undefined,
+          client: { readContract } as unknown as PublicClient,
+        }),
+      ).toBeNull();
+    }
+    await expect(
+      resolveBestV6PayRoute({
+        ...routeArgs,
+        attachedTerminals: undefined,
+        client: {
+          readContract: vi.fn().mockRejectedValue(new Error("Directory unavailable")),
+        } as unknown as PublicClient,
+      }),
+    ).rejects.toThrow("Directory unavailable");
+    expect(previewPayMock).not.toHaveBeenCalled();
+  });
+
+  it("treats a confirmed empty attachment list as empty, without a primary fallback", async () => {
+    const readContract = vi.fn();
+    expect(
+      await resolveBestV6PayRoute({
+        ...routeArgs,
+        attachedTerminals: [],
+        client: { readContract } as unknown as PublicClient,
+      }),
+    ).toBeNull();
+    expect(readContract).not.toHaveBeenCalled();
+    expect(previewPayMock).not.toHaveBeenCalled();
   });
 
   it("uses reserved issuance as the second tie-breaker, then prefers the direct terminal", async () => {
@@ -104,6 +195,26 @@ describe("wallet-action:pay — v6 payment route selection", () => {
     previewPayMock.mockRejectedValue(new Error("no accounting context"));
     expect(await resolveBestV6PayRoute(routeArgs)).toBeNull();
   });
+
+  it("passes on a failed swap quote when no other route can be previewed", async () => {
+    previewPayMock.mockImplementation(
+      async (_client: PublicClient, args: { terminal: Address }) => {
+        if (args.terminal.toLowerCase() === ROUTER.toLowerCase())
+          throw new PaySwapQuoteFailedError();
+        throw new Error("no accounting context");
+      },
+    );
+    await expect(resolveBestV6PayRoute(routeArgs)).rejects.toBeInstanceOf(PaySwapQuoteFailedError);
+
+    previewPayMock.mockImplementation(
+      async (_client: PublicClient, args: { terminal: Address }) => {
+        if (args.terminal.toLowerCase() === ROUTER.toLowerCase())
+          throw new PaySwapQuoteFailedError();
+        return preview(50n);
+      },
+    );
+    expect(await resolveBestV6PayRoute(routeArgs)).toMatchObject({ address: MULTI, type: "multi" });
+  });
 });
 
 describe("router and minimum-output guardrails", () => {
@@ -117,18 +228,14 @@ describe("router and minimum-output guardrails", () => {
     expect(isNativePayToken(NATIVE_TOKEN.toLowerCase())).toBe(true);
   });
 
-  it("accepts only a preview with a live ruleset and caches the exact route probe", async () => {
+  it("accepts only a preview with a live ruleset and rereads the exact route probe", async () => {
     const readContract = vi.fn().mockResolvedValue([{ id: 9n }]);
     const client = { readContract } as unknown as PublicClient;
     const projectId = 9001n;
 
-    await expect(
-      routerPayRouteWorks(client, sepolia.id, projectId, ROUTER, TOKEN, 6),
-    ).resolves.toBe(true);
-    await expect(
-      routerPayRouteWorks(client, sepolia.id, projectId, ROUTER, TOKEN, 6),
-    ).resolves.toBe(true);
-    expect(readContract).toHaveBeenCalledTimes(1);
+    await expect(routerPayRouteWorks(client, projectId, ROUTER, TOKEN, 6)).resolves.toBe(true);
+    await expect(routerPayRouteWorks(client, projectId, ROUTER, TOKEN, 6)).resolves.toBe(true);
+    expect(readContract).toHaveBeenCalledTimes(2);
     expect(readContract).toHaveBeenCalledWith(
       expect.objectContaining({
         address: ROUTER,
@@ -138,7 +245,20 @@ describe("router and minimum-output guardrails", () => {
     );
   });
 
-  it("fails closed for a dead or unavailable custom-token router path", async () => {
+  it("does not offer a confirmed reverted route, and checks it again after recovery", async () => {
+    const readContract = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ContractFunctionRevertedError({ abi: [], functionName: "previewPayFor" }),
+      )
+      .mockResolvedValue([{ id: 9n }]);
+    const client = { readContract } as unknown as PublicClient;
+    await expect(routerPayRouteWorks(client, 9004n, ROUTER, TOKEN, 6)).resolves.toBe(false);
+    await expect(routerPayRouteWorks(client, 9004n, ROUTER, TOKEN, 6)).resolves.toBe(true);
+    expect(readContract).toHaveBeenCalledTimes(2);
+  });
+
+  it("distinguishes a confirmed dead route from an unavailable route probe", async () => {
     const deadClient = {
       readContract: vi.fn().mockResolvedValue([{ id: 0n }]),
     } as unknown as PublicClient;
@@ -146,19 +266,10 @@ describe("router and minimum-output guardrails", () => {
       readContract: vi.fn().mockRejectedValue(new Error("RPC unavailable")),
     } as unknown as PublicClient;
 
-    await expect(
-      routerPayRouteWorks(deadClient, sepolia.id, 9002n, ROUTER, TOKEN, 6),
-    ).resolves.toBe(false);
-    await expect(
-      routerPayRouteWorks(unavailableClient, sepolia.id, 9003n, ROUTER, TOKEN, 6),
-    ).resolves.toBe(false);
-  });
-
-  it("keeps verified zero issuance at zero and never erases protection for a positive quote", () => {
-    expect(minReturnedTokens(0n)).toBe(0n);
-    expect(minReturnedTokens(-1n)).toBe(0n);
-    expect(minReturnedTokens(10_000n, 500n)).toBe(9_500n);
-    expect(minReturnedTokens(1n, 500n)).toBe(1n);
+    await expect(routerPayRouteWorks(deadClient, 9002n, ROUTER, TOKEN, 6)).resolves.toBe(false);
+    await expect(routerPayRouteWorks(unavailableClient, 9003n, ROUTER, TOKEN, 6)).rejects.toThrow(
+      "RPC unavailable",
+    );
   });
 });
 

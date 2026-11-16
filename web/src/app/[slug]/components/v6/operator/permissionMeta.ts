@@ -36,10 +36,10 @@ const DESCRIPTIONS: Record<keyof typeof JBPermissionIdsV6, string> = {
   SET_BUYBACK_POOL: "Register Uniswap pools on the buyback hook.",
   SET_BUYBACK_HOOK: "Point the project at a buyback hook in the registry.",
   SET_ROUTER_TERMINAL: "Set the terminal router-swapped payments forward into.",
-  MAP_SUCKER_TOKEN: "Map bridgeable tokens on the project's suckers.",
-  DEPLOY_SUCKERS: "Deploy new suckers (cross-chain bridges) for the project.",
+  MAP_SUCKER_TOKEN: "Map bridgeable tokens on the project's bridges.",
+  DEPLOY_SUCKERS: "Connect the project to another chain.",
   SET_SUCKER_PEER: "Point a sucker at a new cross-chain peer.",
-  SUCKER_SAFETY: "Use the suckers' emergency safety controls.",
+  SUCKER_SAFETY: "Use the bridges' emergency safety controls.",
   SET_SUCKER_DEPRECATION: "Schedule a sucker's deprecation.",
   OPEN_LOAN: "Open REVLoans against the holder's token collateral.",
   REALLOCATE_LOAN: "Reallocate collateral across the holder's loans.",
@@ -48,7 +48,17 @@ const DESCRIPTIONS: Record<keyof typeof JBPermissionIdsV6, string> = {
 
 export type PermissionInfo = { id: number; name: string; label: string; description: string };
 
+/** Plain names where the contract's own word would need explaining. */
+const LABELS: Record<string, string> = {
+  MAP_SUCKER_TOKEN: "Map bridge token",
+  DEPLOY_SUCKERS: "Add a chain",
+  SET_SUCKER_PEER: "Set bridge peer",
+  SUCKER_SAFETY: "Bridge safety controls",
+  SET_SUCKER_DEPRECATION: "Retire a bridge",
+};
+
 function labelFromName(name: string): string {
+  if (LABELS[name]) return LABELS[name];
   const words = name.toLowerCase().replace(/_/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
 }

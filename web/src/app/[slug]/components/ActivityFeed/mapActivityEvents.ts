@@ -1,12 +1,27 @@
-import type { ActivityEventsQuery } from "@/lib/bendystraw/types";
+import { chainDisplayName } from "@/app/constants";
+import type { ActivityEventsQuery, EventToken } from "@/lib/bendystraw/types";
 import type { JBChainId } from "@/lib/nana/types";
-import { exactNumber, formatCompact, formatDecimals, prettyNumber } from "@/lib/number";
-import { JBProjectToken } from "@bananapus/nana-sdk-core";
+import { commaNumber, exactNumber, formatCompact, prettyNumber } from "@/lib/number";
+import { isStickyHook } from "@/lib/sticky";
+import { getTokenSymbolFromAddress, groupMixesTokens } from "@/lib/tokenUtils";
+import { JBProjectToken, mergeCrossChainActivityGroups } from "@bananapus/nana-sdk-core";
 import { Address, formatUnits } from "viem";
 import { formatUsd, usdFromScaled } from "../v6/extras/projectPayers";
 import type { ActivityEvent } from "./ActivityItem";
 
 export type ActivityEventItem = ActivityEventsQuery["activityEvents"]["items"][number];
+
+/**
+ * The symbol and decimals of the token an event names: null when unknown or
+ * unresolved, undefined when the query did not select the field.
+ */
+function ownToken(asset: EventToken): { symbol: string; decimals: number } | null | undefined {
+  if (asset.token === undefined) return undefined;
+  const symbol = asset.token
+    ? asset.tokenSymbol || getTokenSymbolFromAddress(asset.token)
+    : "TOKEN";
+  return symbol !== "TOKEN" && asset.decimals != null ? { symbol, decimals: asset.decimals } : null;
+}
 
 /** Holder permission grants are account history, not project activity. */
 export function isProjectFeedActivityEvent(event: ActivityEventItem): boolean {
@@ -23,9 +38,10 @@ export type ActivityTokenContext = {
   tokenSymbol?: string | null;
   decimals?: number | null;
   /**
-   * Denominate flow amounts in the indexer's 18-decimal USD figures instead of
-   * the chain's accounting token. The ecosystem convention: token amounts only
-   * when the project has exactly one accounting-token kind across its chains.
+   * Denominate flow amounts that name no known token in the indexer's 18-decimal
+   * USD figures instead of the chain's accounting token. The ecosystem
+   * convention: accounting-token amounts only when the project has exactly one
+   * accounting-token kind across its chains.
    */
   denominateInUsd?: boolean;
 } | null;
@@ -40,14 +56,10 @@ export function projectFeedTokenContext(
     chainId: number;
     tokenSymbol: string | null;
     decimals: number | null;
+    accountingTokenCount?: number | null;
   }>,
 ): (item: ActivityEventItem) => ActivityTokenContext {
-  const tokenKinds = new Set(
-    projects
-      .filter((project) => project.tokenSymbol)
-      .map((project) => `${project.tokenSymbol}:${project.decimals ?? 18}`),
-  );
-  const denominateInUsd = tokenKinds.size > 1;
+  const denominateInUsd = groupMixesTokens(projects);
 
   return (event) => {
     const projectForChain = projects.find((project) => project.chainId === event.chainId);
@@ -97,6 +109,12 @@ function reservePercentLabel(
  */
 const SAME_TX_ORDER: ActivityEvent["type"][] = [
   "projectCreate",
+  // A loan or a bridge claim moves money and tokens in its own transaction: it is the row, by
+  // its own account, and the deposit or mint inside it reads after it.
+  "borrowLoan",
+  "repayLoan",
+  "liquidateLoan",
+  "bridgeClaim",
   "in",
   "addToBalance",
   "out",
@@ -105,9 +123,11 @@ const SAME_TX_ORDER: ActivityEvent["type"][] = [
   "issuance",
   "swap",
   "mint",
+  "mintNft",
   "autoIssue",
   "reserved",
   "reservedSplit",
+  "bridgeSend",
 ];
 
 function sameTxRank(type: ActivityEvent["type"]): number {
@@ -141,6 +161,31 @@ export function groupSameTxEvents(events: ActivityEvent[]): ActivityEvent[] {
     }
   }
   return order.map(foldSameTxActivities);
+}
+
+/** Project-feed pool setup repeats across chains, with every original tx retained. */
+export function groupCrossChainPoolEvents(events: ActivityEvent[]): ActivityEvent[] {
+  return mergeCrossChainActivityGroups(
+    events.map((event) => ({
+      value: event,
+      // Group standalone pool setup only. Financial and mixed-action rows keep
+      // their own amounts and descriptions rather than a representative.
+      signature:
+        event.type === "buybackPool" && !event.also?.length
+          ? `buybackPool:${event.beneficiary.toLowerCase()}`
+          : `transaction:${event.chainId}:${event.txHash}`,
+      chainId: event.chainId,
+      txHash: event.txHash,
+      timestamp: event.timestamp,
+    })),
+  ).map(({ value, chains }) =>
+    chains.length > 1
+      ? {
+          ...value,
+          chains: chains.map((chain) => ({ ...chain, chainId: chain.chainId as JBChainId })),
+        }
+      : value,
+  );
 }
 
 /** Fold one same-tx group into its primary row, the rest carried in `also`. */
@@ -195,6 +240,14 @@ export function mapActivityEvents(
   // Leftover issuance joins the bought tokens in ONE beneficiary remint;
   // sells can also remint internally. Neither shape supports per-buy matching.
   const mixedSwapTxs = new Set<string>();
+  // A cash out that sells through the buyback pool: the terminal burns the
+  // holder's tokens, the hook remints them to itself and sells. That mint is
+  // plumbing, not anyone's receipt.
+  const sellSwapTxs = new Set<string>();
+  const cashOutTxs = new Set<string>();
+  // A sucker cashes out its own tokens inside a bridge send; the send's row says what happened,
+  // so that cash out makes no row.
+  const bridgeSends = new Set<string>();
   const mintCountsByTx = new Map<string, bigint[]>();
   const manualMintCountsByTx = new Map<string, bigint[]>();
   const pushSorted = (map: Map<string, bigint[]>, key: string, value: bigint) => {
@@ -205,12 +258,28 @@ export function mapActivityEvents(
   };
   // Several pays in one tx (a payer contract fanning out) read as one payment:
   // the payer's total, then who got what.
-  const payTotalsByTx = new Map<string, { count: number; amount: bigint; usd: bigint }>();
+  const payTotalsByTx = new Map<
+    string,
+    { count: number; amount: bigint; usd: bigint; asset: EventToken }
+  >();
   for (const event of items) {
     if (!event) continue;
     const key = projectTxKey(event);
     if (event.payEvent) {
-      const total = payTotalsByTx.get(key) ?? { count: 0, amount: 0n, usd: 0n };
+      const { token, decimals, tokenSymbol } = event.payEvent;
+      const total = payTotalsByTx.get(key) ?? {
+        count: 0,
+        amount: 0n,
+        usd: 0n,
+        asset: { token, decimals, tokenSymbol },
+      };
+      // A fan-out's total has a token only when every pay was in the same one.
+      if (
+        total.asset.token?.toLowerCase() !== token?.toLowerCase() ||
+        total.asset.decimals !== decimals
+      ) {
+        total.asset = { token: null, decimals: null };
+      }
       total.count += 1;
       total.amount += BigInt(event.payEvent.amount);
       total.usd += BigInt(event.payEvent.amountUsd ?? 0);
@@ -221,11 +290,16 @@ export function mapActivityEvents(
       mintCoveredTxs.add(key);
     }
     if (event.autoIssueEvent) autoIssueTxs.add(key);
+    if (event.cashOutTokensEvent) cashOutTxs.add(key);
+    if (event.bridgeToOutboxEvent) {
+      bridgeSends.add(`${key}:${event.bridgeToOutboxEvent.sucker.toLowerCase()}`);
+    }
     if (event.swapEvent) {
       if (event.swapEvent.direction.toLowerCase() === "buy") {
         pushSorted(buySwapAmountsByTx, key, BigInt(event.swapEvent.projectTokenAmount));
       } else {
         mixedSwapTxs.add(key);
+        if (event.swapEvent.direction.toLowerCase() === "sell") sellSwapTxs.add(key);
       }
     }
     if (event.mintTokensEvent) {
@@ -246,6 +320,12 @@ export function mapActivityEvents(
     return rank < 0 ? undefined : buySwapAmountsByTx.get(key)?.[rank]?.toString();
   };
 
+  const isHookRemint = (key: string) => cashOutTxs.has(key) && sellSwapTxs.has(key);
+  // With no reserve cut, the remint is the pool output the swap row already
+  // names. A fan-out hides its swaps, so its remints stay: they say who got what.
+  const restatesSwap = (key: string, swapAmount: string | undefined, count: bigint) =>
+    swapAmount === count.toString() && (payTotalsByTx.get(key)?.count ?? 0) < 2;
+
   const events: ActivityEvent[] = [];
   for (const event of items) {
     if (!event) continue;
@@ -254,19 +334,33 @@ export function mapActivityEvents(
     const tokenContext = tokenContextFor(event);
     if (!tokenContext) continue;
 
-    const baseTokenSymbol = tokenContext.tokenSymbol ?? undefined;
-    const baseTokenDecimals = tokenContext.decimals ?? 18;
     const txKey = projectTxKey(event);
 
     // In USD mode a missing/zero indexed figure falls back to the chain's
-    // token so the row still shows a meaningful amount.
-    const flowAmount = (tokenAmount: string | number, usdAmount?: string | number | null) => {
-      const usd = tokenContext.denominateInUsd ? usdFromScaled(usdAmount) : null;
+    // token so the row still shows a meaningful amount. A terminal event names
+    // its own token: a project accepting ETH and USDC is labeled per event,
+    // never by the chain's last-set context, and an unknown or unresolved
+    // token shows USD (or nothing) instead.
+    const flowAmount = (
+      tokenAmount: string | number,
+      usdAmount?: string | number | null,
+      asset?: EventToken,
+    ) => {
+      const own = asset && ownToken(asset);
+      const baseTokenSymbol =
+        own === undefined ? (tokenContext.tokenSymbol ?? undefined) : own?.symbol;
+      const contextDecimals = own === undefined ? tokenContext.decimals : (own?.decimals ?? null);
+      const baseTokenDecimals = contextDecimals ?? 18;
+      // An event that names a known token is shown in it; USD is for the rest.
+      const usd =
+        !own && (tokenContext.denominateInUsd || contextDecimals == null)
+          ? usdFromScaled(usdAmount)
+          : null;
       if (usd) {
         // USD is the headline; the raw accounting amount is what a hover reveals. It can
         // only be shown when the context's decimals are known.
         const exact =
-          tokenContext.decimals == null
+          contextDecimals == null
             ? undefined
             : `${exactNumber(formatUnits(BigInt(tokenAmount), baseTokenDecimals))}${
                 baseTokenSymbol ? ` ${baseTokenSymbol}` : ""
@@ -276,7 +370,7 @@ export function mapActivityEvents(
       // Without the accounting context's decimals the raw amount cannot be scaled — showing
       // it at an assumed 18 would be off by 1e12 on a 6-decimal token. Keep the row and omit
       // the amount rather than invent a magnitude.
-      if (tokenContext.decimals == null) {
+      if (contextDecimals == null) {
         return { baseAmount: undefined, baseTokenSymbol: undefined, exactAmount: undefined };
       }
       const whole = formatUnits(BigInt(tokenAmount), baseTokenDecimals);
@@ -302,16 +396,37 @@ export function mapActivityEvents(
         beneficiary: (fanOut ? event.payEvent.from : event.payEvent.beneficiary) as Address,
         chainId,
         ...(fanOut
-          ? flowAmount(payTotal.amount.toString(), payTotal.usd.toString())
-          : flowAmount(event.payEvent.amount, event.payEvent.amountUsd)),
+          ? flowAmount(payTotal.amount.toString(), payTotal.usd.toString(), payTotal.asset)
+          : flowAmount(event.payEvent.amount, event.payEvent.amountUsd, event.payEvent)),
         payee: fanOut ? (event.payEvent.beneficiary as Address) : undefined,
         tokenCount,
         memo: event.payEvent.memo || undefined,
       });
+    } else if (event.bridgeToOutboxEvent) {
+      const send = event.bridgeToOutboxEvent;
+      events.push({
+        id: event.id,
+        type: "bridgeSend",
+        txHash: send.txHash,
+        timestamp: send.timestamp,
+        beneficiary: send.caller as Address,
+        chainId,
+        tokenCount: new JBProjectToken(BigInt(send.projectTokenCount)).format(6),
+        detail: chainDisplayName(send.peerChainId),
+      });
+    } else if (
+      event.cashOutTokensEvent?.holder &&
+      bridgeSends.has(`${txKey}:${event.cashOutTokensEvent.holder.toLowerCase()}`)
+    ) {
+      continue;
     } else if (event.cashOutTokensEvent) {
       const tokenCount = new JBProjectToken(BigInt(event.cashOutTokensEvent.cashOutCount)).format(
         6,
       );
+      // Sold through the buyback pool, the terminal reclaims nothing: the
+      // same-tx sale carries the amount the holder got.
+      const soldInPool =
+        sellSwapTxs.has(txKey) && BigInt(event.cashOutTokensEvent.reclaimAmount) === 0n;
 
       events.push({
         id: event.id,
@@ -320,10 +435,13 @@ export function mapActivityEvents(
         timestamp: event.cashOutTokensEvent.timestamp,
         beneficiary: event.cashOutTokensEvent.beneficiary as Address,
         chainId,
-        ...flowAmount(
-          event.cashOutTokensEvent.reclaimAmount,
-          event.cashOutTokensEvent.reclaimAmountUsd,
-        ),
+        ...(soldInPool
+          ? {}
+          : flowAmount(
+              event.cashOutTokensEvent.reclaimAmount,
+              event.cashOutTokensEvent.reclaimAmountUsd,
+              event.cashOutTokensEvent,
+            )),
         tokenCount,
       });
     } else if (event.addToBalanceEvent) {
@@ -335,19 +453,18 @@ export function mapActivityEvents(
         timestamp: e.timestamp,
         beneficiary: e.from as Address,
         chainId,
-        baseAmount: formatDecimals(Number(formatUnits(BigInt(e.amount), baseTokenDecimals))),
-        baseTokenSymbol,
+        ...flowAmount(e.amount, e.amountUsd, e),
         memo: e.memo || undefined,
       });
     } else if (event.mintTokensEvent) {
-      if (mintCoveredTxs.has(txKey)) continue;
+      if (mintCoveredTxs.has(txKey) || isHookRemint(txKey)) continue;
       const e = event.mintTokensEvent;
+      const count = BigInt(e.beneficiaryTokenCount);
+      const swapAmount = pairedSwapAmount(txKey, mintCountsByTx, count);
+      if (restatesSwap(txKey, swapAmount, count)) continue;
       // Paired with a same-tx buyback swap, this mint is the reserved-rate
       // remint of the swap output — name the reserve instead of "minted".
-      const reservePercent = reservePercentLabel(
-        pairedSwapAmount(txKey, mintCountsByTx, BigInt(e.beneficiaryTokenCount)),
-        e.beneficiaryTokenCount,
-      );
+      const reservePercent = reservePercentLabel(swapAmount, e.beneficiaryTokenCount);
       events.push({
         id: event.id,
         type: "mint",
@@ -360,14 +477,14 @@ export function mapActivityEvents(
         detail: reservePercent ? `after the ${reservePercent}% split` : undefined,
       });
     } else if (event.manualMintTokensEvent) {
-      if (autoIssueTxs.has(txKey)) continue;
+      if (autoIssueTxs.has(txKey) || isHookRemint(txKey)) continue;
       const e = event.manualMintTokensEvent;
+      const count = BigInt(e.beneficiaryTokenCount);
+      const swapAmount = pairedSwapAmount(txKey, manualMintCountsByTx, count);
+      if (restatesSwap(txKey, swapAmount, count)) continue;
       // The buyback remint arrives as a manual mint (a direct mintTokensOf
       // call) — same reserved-rate story as the mintTokensEvent branch.
-      const reservePercent = reservePercentLabel(
-        pairedSwapAmount(txKey, manualMintCountsByTx, BigInt(e.beneficiaryTokenCount)),
-        e.beneficiaryTokenCount,
-      );
+      const reservePercent = reservePercentLabel(swapAmount, e.beneficiaryTokenCount);
       events.push({
         id: event.id,
         type: "mint",
@@ -379,8 +496,26 @@ export function mapActivityEvents(
         memo: e.memo || undefined,
         detail: reservePercent ? `after the ${reservePercent}% split` : undefined,
       });
+    } else if (event.mintNftEvent) {
+      const e = event.mintNftEvent;
+      events.push({
+        id: event.id,
+        type: "mintNft",
+        txHash: e.txHash,
+        timestamp: e.timestamp,
+        beneficiary: e.beneficiary as Address,
+        chainId,
+        item: event.project
+          ? {
+              projectId: event.project.projectId,
+              tierId: e.tierId,
+              amountPaid: String(e.totalAmountPaid),
+            }
+          : undefined,
+      });
     } else if (event.autoIssueEvent) {
       const e = event.autoIssueEvent;
+      const count = formatUnits(BigInt(e.count), 18);
       events.push({
         id: event.id,
         type: "autoIssue",
@@ -388,7 +523,8 @@ export function mapActivityEvents(
         timestamp: e.timestamp,
         beneficiary: e.beneficiary as Address,
         chainId,
-        tokenCount: new JBProjectToken(BigInt(e.count)).format(6),
+        tokenCount: prettyNumber(count),
+        exactTokenCount: commaNumber(count),
       });
     } else if (event.deployErc20Event) {
       const e = event.deployErc20Event;
@@ -474,6 +610,41 @@ export function mapActivityEvents(
         beneficiary: e.from as Address,
         chainId,
       });
+    } else if (event.bridgeClaimEvent) {
+      const e = event.bridgeClaimEvent;
+      events.push({
+        id: event.id,
+        type: "bridgeClaim",
+        txHash: e.txHash,
+        timestamp: e.timestamp,
+        // The index can hold the sucker leaf's 32-byte beneficiary: its last 20 bytes are the account.
+        beneficiary: `0x${e.beneficiary.slice(-40)}` as Address,
+        chainId,
+        tokenCount: new JBProjectToken(BigInt(e.projectTokenCount)).format(6),
+        detail: chainDisplayName(e.peerChainId),
+      });
+    } else if (event.borrowLoanEvent) {
+      const e = event.borrowLoanEvent;
+      events.push({
+        id: event.id,
+        type: "borrowLoan",
+        txHash: e.txHash,
+        timestamp: e.timestamp,
+        beneficiary: e.beneficiary as Address,
+        chainId,
+        tokenCount: new JBProjectToken(BigInt(e.collateral)).format(6),
+      });
+    } else if (event.repayLoanEvent || event.liquidateLoanEvent) {
+      const e = (event.repayLoanEvent ?? event.liquidateLoanEvent)!;
+      events.push({
+        id: event.id,
+        type: event.repayLoanEvent ? "repayLoan" : "liquidateLoan",
+        txHash: e.txHash,
+        timestamp: e.timestamp,
+        // Who called the loans contract: a Safe here, not the account that executed for it.
+        beneficiary: e.caller as Address,
+        chainId,
+      });
     } else if (event.sendPayoutsEvent) {
       const e = event.sendPayoutsEvent;
       events.push({
@@ -483,7 +654,7 @@ export function mapActivityEvents(
         timestamp: e.timestamp,
         beneficiary: e.from as Address,
         chainId,
-        ...flowAmount(e.amountPaidOut, e.amountPaidOutUsd),
+        ...flowAmount(e.amountPaidOut, e.amountPaidOutUsd, e),
       });
     } else if (event.sendReservedTokensToSplitsEvent) {
       const e = event.sendReservedTokensToSplitsEvent;
@@ -507,7 +678,14 @@ export function mapActivityEvents(
         chainId,
         tokenCount: prettyNumber(new JBProjectToken(BigInt(e.tokenCount)).format(6)),
         rawTokenCount: String(e.tokenCount),
-        detail: e.splitProjectId > 0 ? `project #${e.splitProjectId}` : undefined,
+        ...(e.hook && isStickyHook(e.hook, chainId)
+          ? {
+              sticky: {
+                projectId: BigInt(e.splitProjectId),
+                beneficiary: e.beneficiary as Address,
+              },
+            }
+          : { detail: e.splitProjectId > 0 ? `project #${e.splitProjectId}` : undefined }),
       });
     }
   }

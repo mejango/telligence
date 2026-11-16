@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
         where: {
           AND: [{ version: 6 }, { isRevnet: true }, { name_contains_nocase: text }],
         },
-        orderBy: "volume",
+        orderBy: "volumeUsd",
         orderDirection: "desc",
         limit: 32,
         offset: 0,
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
             where: {
               AND: [{ version: 6 }, { isRevnet: true }, { projectId: validNumericId }],
             },
-            orderBy: "volume",
+            orderBy: "volumeUsd",
             orderDirection: "desc",
             limit: 32,
             offset: 0,
@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
               where: {
                 AND: [{ isRevnet: true }, projectRefsWhere(tickerRefs)!],
               },
-              orderBy: "volume",
+              orderBy: "volumeUsd",
               orderDirection: "desc",
               limit: 32,
               offset: 0,
@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
         });
       } else {
         group.members.push(project);
-        if (BigInt(project.volume || "0") > BigInt(group.representative.volume || "0")) {
+        if (BigInt(project.volumeUsd || "0") > BigInt(group.representative.volumeUsd || "0")) {
           group.representative = project;
         }
       }

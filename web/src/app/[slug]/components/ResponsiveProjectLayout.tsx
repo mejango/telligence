@@ -1,8 +1,10 @@
 "use client";
 
-import { useSelectedLayoutSegment } from "next/navigation";
-import { ReactNode, useEffect, useState } from "react";
+import { ProjectContentSkeleton } from "@/components/loading/LoadingSkeletons";
+import { useSearchParams, useSelectedLayoutSegment } from "next/navigation";
+import { ReactNode, Suspense, useEffect, useState } from "react";
 import { ProjectMenu } from "./ProjectMenu";
+import { PROJECT_SECTIONS_ID } from "./projectSections";
 
 export function ResponsiveProjectLayout({
   sidebar,
@@ -16,6 +18,8 @@ export function ResponsiveProjectLayout({
   children: ReactNode;
 }) {
   const segment = useSelectedLayoutSegment();
+  const searchParams = useSearchParams();
+  const requestedView = searchParams.get("view");
   const [isSingleColumn, setIsSingleColumn] = useState(false);
   const [activitySelected, setActivitySelected] = useState(segment === null);
 
@@ -28,10 +32,9 @@ export function ResponsiveProjectLayout({
   }, []);
 
   useEffect(() => {
-    if (segment || new URL(window.location.href).searchParams.get("view") === "overview") {
-      setActivitySelected(false);
-    }
-  }, [segment]);
+    if (requestedView === "latest") setActivitySelected(true);
+    else if (segment || requestedView === "overview") setActivitySelected(false);
+  }, [segment, requestedView]);
 
   const activityActive = isSingleColumn && activitySelected;
 
@@ -63,8 +66,10 @@ export function ResponsiveProjectLayout({
         ) : null}
 
         <div
+          id={PROJECT_SECTIONS_ID}
+          tabIndex={-1}
           data-project-layout="menu"
-          className="order-2 mt-2 min-[801px]:order-none min-[801px]:mt-0"
+          className="order-2 mt-2 outline-none min-[801px]:order-none min-[801px]:mt-0"
         >
           <ProjectMenu
             mobileActivityActive={activityActive}
@@ -78,7 +83,7 @@ export function ResponsiveProjectLayout({
             activityActive ? "hidden" : "block"
           } min-[801px]:order-none min-[801px]:block min-[801px]:pt-0`}
         >
-          {children}
+          <Suspense fallback={<ProjectContentSkeleton segment={segment} />}>{children}</Suspense>
         </div>
       </div>
     </div>

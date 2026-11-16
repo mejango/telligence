@@ -25,7 +25,7 @@ export function PickupFromPreviousStage({
         className="h-4 w-4"
       />
       <label htmlFor="pickUpFromPrevious" className="text-md text-zinc-600">
-        Pick up where previous stage left off
+        Continue the previous stage’s token rate
       </label>
     </div>
   );

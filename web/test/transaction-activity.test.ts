@@ -191,6 +191,24 @@ describe("transaction activity persistence", () => {
     expect(malformed.transactionActivitySnapshot()).toHaveLength(25);
   });
 
+  it("dismisses a held entry only when its Safe result can't be confirmed here", async () => {
+    const activity = await freshActivityModule();
+    const held = {
+      kind: "safe",
+      title: "Make the market",
+      status: "safe-proposed",
+      message: "Submitted to Safe.",
+      manualVerificationRequired: true,
+    } as const;
+    activity.recordTransactionActivity({ ...held, id: "held" });
+    activity.recordTransactionActivity({ ...held, id: "unconfirmed", safeResultUnconfirmed: true });
+
+    activity.dismissTransactionActivity("held");
+    activity.dismissTransactionActivity("unconfirmed");
+
+    expect(activity.transactionActivitySnapshot().map((row) => row.id)).toEqual(["held"]);
+  });
+
   it("ignores updates for unknown ids", async () => {
     const activity = await freshActivityModule();
     activity.updateTransactionActivity("missing", { status: "failed" });

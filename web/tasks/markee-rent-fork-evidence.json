@@ -1,0 +1,23 @@
+{
+  "kind": "LOCAL-FORK-ONLY-NO-PUBLIC-TRANSACTIONS",
+  "forkBlock": "52520993",
+  "board": "0x7F5a19754A9d9a767Ea9DD419ABE13d1395EB27D",
+  "message": "0xd28BCfd6273980271355d4A009C4c3b1945FB34a",
+  "beneficiary": "0x6b92c73682f0e1fac35A18ab17efa5e77DDE9fE1",
+  "initialRatePerSec": "380517503",
+  "updatedRatePerSec": "761035007",
+  "beneficiaryRatePerSec": "235920851",
+  "teamEthxBefore": "323447486729",
+  "teamEthxAfter": "608439874737",
+  "localStartReceipt": "0x5b1462fb7d1f338e056ff1739d8614eebf2f048b0beb0cfea4cbabbc2da7a7f4",
+  "checks": [
+    "canonical board/message creation",
+    "factory/admin/recipient/SuperApp identity",
+    "exact tagged stream and refund pool",
+    "beneficiary rate/accrual",
+    "rate update",
+    "competing stream promotion and exact losing refund",
+    "stream cancellation",
+    "deposit withdrawal"
+  ]
+}

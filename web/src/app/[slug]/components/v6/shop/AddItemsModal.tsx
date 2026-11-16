@@ -2,7 +2,6 @@
 
 import { chainDisplayName } from "@/app/constants";
 import { ButtonWithWallet } from "@/components/ButtonWithWallet";
-import { ChainLogo } from "@/components/ChainLogo";
 import {
   MAX_MEDIA_BYTES,
   newDraftItem,
@@ -20,8 +19,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { TxError } from "@/components/ui/TxError";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { useMultichainBatch } from "@/hooks/useMultichainBatch";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
+import { reviewClosed } from "@/lib/review-refusal";
 import { jb721TiersHookAbi, JBChainId } from "@bananapus/nana-sdk-core";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -67,6 +69,12 @@ export function AddItemsModal({
     configs: ReturnType<typeof tierConfigsForDestination>;
     preconditions: ShopReadCondition[];
   }> | null>(null);
+  // Peer projects come from the server sucker-group list: a fresh selection, or a
+  // saved update resumed from storage, reaches only registry-listed pairs. A batch
+  // prepared in this session was checked when built.
+  const gate = useGroupWriteGate(
+    prepared ? [] : saved ? [{ chainId, projectId }, ...projects] : destinations,
+  );
 
   const [items, setItems] = useState<DraftItem[]>([newDraftItem()]);
   const [phase, setPhase] = useState<
@@ -151,6 +159,7 @@ export function AddItemsModal({
     setError(null);
     setPhase("checking");
     try {
+      gate.assertVerified(destinations);
       for (let index = 0; index < items.length; index++) {
         const item = items[index];
         if (
@@ -178,13 +187,34 @@ export function AddItemsModal({
     }
   };
 
+  const context = [
+    ...items.map((item, index) => ({
+      label: item.name.trim() || `Item ${index + 1}`,
+      value: item.supply.trim() ? `${item.supply.trim()} in stock` : "Unlimited stock",
+    })),
+    ...destinations.map((destination) => ({
+      label: `Project #${destination.projectId} on ${chainDisplayName(destination.chainId)}`,
+      value: `${items.length} item${items.length === 1 ? "" : "s"}`,
+      lines: items.map(
+        (item, index) =>
+          `${item.name || `Item ${index + 1}`}: ${
+            prices[`${destination.chainId}:${destination.projectId}`]?.[index] ?? item.price
+          } ${destination.shop.pricing.symbol}, ${
+            item.perChainSupply[destination.chainId] || item.supply || "Unlimited"
+          } stock`,
+      ),
+    })),
+  ];
+
   const submit = async (resume = false) => {
-    if (!address || busy) return;
+    if (!address || busy || (resume && gate.blocked)) return;
     setError(null);
     setProgress(null);
     try {
       let batch = prepared;
+      if (batch) gate.assertVerified(batch.map(({ destination }) => destination));
       if (!batch && !resume) {
+        gate.assertVerified(destinations);
         setPhase("checking");
         // Every destination is authorized before uploading any media.
         const conditions = await Promise.all(
@@ -208,6 +238,7 @@ export function AddItemsModal({
       setPhase("sending");
       const result = await runBatch({
         label: "Add shop items",
+        context: resume ? undefined : context,
         scope,
         onProgress: setProgress,
         calls: resume
@@ -247,7 +278,8 @@ export function AddItemsModal({
       setPhase("done");
     } catch (err) {
       setPhase("form");
-      setError(shortError(err));
+      if (reviewClosed(err)) setReviewing(false);
+      else setError(shortError(err));
     }
   };
 
@@ -270,10 +302,7 @@ export function AddItemsModal({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Add items for sale</DialogTitle>
-          <DialogDescription>
-            Stage items and choose the collections to stock. Review each chain’s prices and
-            inventory before submitting.
-          </DialogDescription>
+          <DialogDescription>Add items and pick the chains to sell them on.</DialogDescription>
         </DialogHeader>
 
         {phase === "done" || phase === "safe-proposed" ? (
@@ -281,7 +310,7 @@ export function AddItemsModal({
             <p className="text-sm font-medium text-zinc-900">
               {phase === "safe-proposed"
                 ? "Shop update pending"
-                : "Items added to every selected collection."}
+                : "Items added on every selected chain."}
             </p>
             {phase === "safe-proposed" ? (
               <p className="mx-auto mt-2 max-w-md text-sm text-zinc-600">
@@ -301,19 +330,22 @@ export function AddItemsModal({
         ) : (
           <>
             {saved ? (
-              <div className="space-y-2 bg-melon-50 p-3">
+              <div className="space-y-2 border border-zinc-200 p-3">
                 <p className="text-sm">
                   A saved shop update is awaiting completion. Confirmed chains will not be submitted
                   again.
                 </p>
-                <Button disabled={busy} onClick={() => void submit(true)}>
+                <Button disabled={busy || gate.blocked} onClick={() => void submit(true)}>
                   Resume saved shop update
                 </Button>
               </div>
             ) : null}
             <div className="flex flex-col gap-5">
               {items.map((item, index) => (
-                <div key={index} className="bg-melon-50 p-4 sm:p-5">
+                <div
+                  key={index}
+                  className="border border-melon-300 p-4 max-sm:-mx-6 max-sm:border-x-0 max-sm:px-6 sm:p-5"
+                >
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-zinc-800">Item {index + 1}</span>
                     {items.length > 1 ? (
@@ -351,7 +383,7 @@ export function AddItemsModal({
                 type="button"
                 onClick={() => setItems((current) => [...current, newDraftItem()])}
                 disabled={busy || !!prepared || !!saved}
-                className="self-start border border-dashed border-zinc-400 px-4 py-2.5 text-sm text-zinc-600 hover:border-zinc-700 hover:text-zinc-900"
+                className="self-start border border-dashed border-zinc-400 bg-white px-4 py-3 text-sm font-medium hover:border-zinc-600 disabled:opacity-50"
               >
                 + Add an item
               </button>
@@ -361,15 +393,12 @@ export function AddItemsModal({
                 <div
                   role="group"
                   aria-label="Chains to add items on"
-                  className="mt-2 flex flex-wrap gap-2"
+                  className="mt-2 flex flex-wrap gap-x-6 gap-y-3"
                 >
                   {peers.destinations.map((destination) => {
                     const key = `${destination.chainId}:${destination.projectId}`;
                     return (
-                      <label
-                        key={key}
-                        className="inline-flex min-h-11 items-center gap-2 border border-zinc-300 px-3 text-sm"
-                      >
+                      <label key={key} className="flex items-center gap-2 text-sm">
                         <input
                           type="checkbox"
                           aria-label={`Add on ${chainDisplayName(destination.chainId)}`}
@@ -382,10 +411,9 @@ export function AddItemsModal({
                                 : current.filter((entry) => entry !== key),
                             )
                           }
+                          className="h-4 w-4"
                         />
-                        <ChainLogo chainId={destination.chainId} width={22} height={22} />
-                        {chainDisplayName(destination.chainId)} · #
-                        {destination.projectId.toString()}
+                        {chainDisplayName(destination.chainId)}
                       </label>
                     );
                   })}
@@ -408,13 +436,13 @@ export function AddItemsModal({
                   <fieldset key={key} className="space-y-2 border-t border-zinc-200 pt-3">
                     <legend className="text-sm">
                       {chainDisplayName(destination.chainId)} prices (
-                      {destination.shop.pricing.symbol}; {destination.shop.pricing.decimals}{" "}
-                      decimals)
+                      {destination.shop.pricing.symbol})
                     </legend>
                     {items.map((item, index) => (
-                      <label key={index} className="flex items-center gap-3 text-xs">
+                      <label key={index} className="block text-xs">
                         {item.name || `Item ${index + 1}`}
                         <Input
+                          className="mt-1"
                           aria-label={`Item ${index + 1} price on ${chainDisplayName(destination.chainId)}`}
                           value={prices[key]?.[index] ?? item.price}
                           disabled={busy || !!prepared || !!saved}
@@ -432,11 +460,8 @@ export function AddItemsModal({
               })}
             </div>
 
-            {error && !reviewing ? (
-              <p role="alert" className="bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700">
-                {error}
-              </p>
-            ) : null}
+            {gate.line ? <p className="text-xs text-zinc-600">{gate.line}</p> : null}
+            <TxError error={reviewing ? null : error} />
 
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={onClose} disabled={busy}>
@@ -444,8 +469,8 @@ export function AddItemsModal({
               </Button>
               <ButtonWithWallet
                 targetChainId={chainId}
-                loading={busy}
-                disabled={busy || !!saved || (!prepared && !destinations.length)}
+                loading={busy || gate.pending}
+                disabled={busy || !!saved || gate.blocked || (!prepared && !destinations.length)}
                 onClick={() => (prepared ? setReviewing(true) : void review())}
                 connectWalletText="Connect Wallet"
                 className="bg-teal-500 text-melon-950 hover:bg-teal-600"
@@ -457,13 +482,10 @@ export function AddItemsModal({
         )}
       </DialogContent>
       {reviewing ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(open) => {
-            if (!open) setReviewing(false);
-          }}
+          onClose={() => setReviewing(false)}
           title="Confirm items"
-          chainId={chainId}
           preparing={phase === "checking"}
           steps={[
             {
@@ -472,35 +494,12 @@ export function AddItemsModal({
             },
           ]}
           activeIndex={busy ? 0 : -1}
-          action="Add items"
-          onConfirm={() => void submit()}
+          start={() => void submit()}
           busy={busy}
           status={status}
           error={error}
-        >
-          {items.map((item, index) => (
-            <SummaryRow key={index} label={item.name.trim() || `Item ${index + 1}`}>
-              <span className="block text-xs text-zinc-500">
-                {item.supply.trim() ? `${item.supply.trim()} in stock` : "Unlimited stock"}
-              </span>
-            </SummaryRow>
-          ))}
-          {destinations.map((destination) => (
-            <SummaryRow
-              key={`${destination.chainId}:${destination.projectId}`}
-              label={`${chainDisplayName(destination.chainId)} · #${destination.projectId}`}
-            >
-              {items.map((item, index) => (
-                <span className="block" key={index}>
-                  {item.name || `Item ${index + 1}`}:{" "}
-                  {prices[`${destination.chainId}:${destination.projectId}`]?.[index] ?? item.price}{" "}
-                  {destination.shop.pricing.symbol} ·{" "}
-                  {item.perChainSupply[destination.chainId] || item.supply || "Unlimited"} stock
-                </span>
-              ))}
-            </SummaryRow>
-          ))}
-        </TxConfirmDialog>
+          rows={context}
+        />
       ) : null}
     </Dialog>
   );

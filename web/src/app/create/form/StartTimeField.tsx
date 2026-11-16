@@ -1,9 +1,11 @@
 import { DateTimeField } from "@/components/ui/DateTimeField";
 import { useFormContext } from "@/lib/forms";
 import { timestampToLocalDateTimeInput } from "@/lib/time-zone";
-import { useState } from "react";
+import {
+  getCurrentStageDuration,
+  getStageCutFrequencySeconds,
+} from "../helpers/calculatePickupIssuance";
 import { StageData } from "../types";
-import { NotesSection } from "./AddStageDialog";
 import { FieldGroup } from "./Fields";
 
 interface StartTimeFieldProps {
@@ -13,25 +15,22 @@ interface StartTimeFieldProps {
 
 export function StartTimeField({ stageIdx, stages }: StartTimeFieldProps) {
   const { values, setFieldValue } = useFormContext<StageData>();
-  const [useFutureStart, setUseFutureStart] = useState(Boolean(values.futureStartTimestamp));
+  const useFutureStart = values.futureStartTimestamp !== undefined;
 
   if (stageIdx === 0) {
     return (
       <div className="pb-7">
         <label className="block text-md font-semibold leading-6 mb-3">3. Start Time</label>
         <p className="text-md text-zinc-500 mb-3">
-          By default, the revnet starts ~10 minutes after deployment.
+          By default, the revnet starts about 10 minutes after you prepare the launch.
         </p>
         <label className="flex items-center gap-2 cursor-pointer mb-3">
           <input
             type="checkbox"
             checked={useFutureStart}
-            onChange={(e) => {
-              setUseFutureStart(e.target.checked);
-              if (!e.target.checked) {
-                setFieldValue("futureStartTimestamp", undefined);
-              }
-            }}
+            onChange={(e) =>
+              setFieldValue("futureStartTimestamp", e.target.checked ? null : undefined)
+            }
             className="size-4"
           />
           <span className="text-md text-zinc-600">Start the revnet in the future</span>
@@ -46,8 +45,10 @@ export function StartTimeField({ stageIdx, stages }: StartTimeFieldProps) {
                   : ""
               }
               onChange={(value) => {
-                const timestamp = Math.floor(new Date(value).getTime() / 1000);
-                setFieldValue("futureStartTimestamp", timestamp);
+                setFieldValue(
+                  "futureStartTimestamp",
+                  value ? Math.floor(new Date(value).getTime() / 1000) : null,
+                );
               }}
               ariaLabel="Revnet start date and time"
               inputClassName="h-11 w-full border-2 border-melon-300 bg-melon-25 px-3 text-md hover:border-melon-400 focus:border-melon-600 focus:ring-0"
@@ -59,7 +60,7 @@ export function StartTimeField({ stageIdx, stages }: StartTimeFieldProps) {
   }
 
   const previousStage = stages[stageIdx - 1];
-  const daysPerCut = Number(previousStage.priceCeilingIncreaseFrequency);
+  const daysPerCut = getStageCutFrequencySeconds(previousStage) / 86_400;
   const previousStageHasCuts = daysPerCut > 0;
 
   if (previousStageHasCuts) {
@@ -71,7 +72,7 @@ export function StartTimeField({ stageIdx, stages }: StartTimeFieldProps) {
             3. Start Time
           </label>
           <p className="text-md text-zinc-500 mb-3">
-            How many issuance cuts of the previous stage before this stage starts?
+            After how many cuts to the previous stage’s token rate should this stage start?
           </p>
           <div className="flex items-center gap-2">
             <div className="relative w-32">
@@ -96,19 +97,14 @@ export function StartTimeField({ stageIdx, stages }: StartTimeFieldProps) {
             </div>
           </div>
           <div className="text-sm text-zinc-500 mt-2 pl-1">
-            = {cutsValue * Number(previousStage.priceCeilingIncreaseFrequency)} days
-            {` (${cutsValue} cuts × ${previousStage.priceCeilingIncreaseFrequency} days per cut)`}
+            ={" "}
+            {getCurrentStageDuration(
+              { ...values, stageStartCuts: String(cutsValue) },
+              previousStage,
+            )}{" "}
+            days, at the next cut boundary
           </div>
         </div>
-
-        <NotesSection>
-          <ul className="list-disc list-inside">
-            <li className="flex">
-              <span className="mr-2">•</span>
-              <div>Cuts must be a positive integer.</div>
-            </li>
-          </ul>
-        </NotesSection>
       </div>
     );
   }
@@ -127,14 +123,6 @@ export function StartTimeField({ stageIdx, stages }: StartTimeFieldProps) {
         description="How many days after the last stage's start time should this stage start?"
         width="w-32"
       />
-      <NotesSection>
-        <ul className="list-disc list-inside">
-          <li className="flex">
-            <span className="mr-2">•</span>
-            <div>Days must be a multiple of this stage's issuance cut rate.</div>
-          </li>
-        </ul>
-      </NotesSection>
     </div>
   );
 }

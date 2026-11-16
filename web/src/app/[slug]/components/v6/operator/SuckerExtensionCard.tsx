@@ -11,10 +11,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { ErrorNote } from "@/components/ui/TxError";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { useToast } from "@/components/ui/use-toast";
-import { isSafeProposalPendingError } from "@/hooks/useReviewedWriteContract";
-import { clearExtensionSalt, saltForExtension } from "@/lib/suckerExtensionSalt";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
+import { isSafeProposalPendingError, reviewClosed } from "@/lib/reviewed-call";
+import {
+  clearExtensionSalt,
+  discardUnreadableSalts,
+  saltForExtension,
+} from "@/lib/suckerExtensionSalt";
 import { formatWalletError } from "@/lib/utils";
 import {
   JBChainId,
@@ -23,6 +29,10 @@ import {
   revDeployerAbi,
   RevnetCoreContracts,
 } from "@bananapus/nana-sdk-core";
+import {
+  SAVED_ATTEMPT_CONTINUE_ANYWAY_LABEL,
+  SAVED_ATTEMPT_UNREADABLE_LINE,
+} from "@bananapus/nana-sdk-core/review";
 import { useState } from "react";
 import { useAccount } from "wagmi";
 import { chainName, ChainProjectRow, publicClientFor, v6ContractAddress } from "./operatorLib";
@@ -60,12 +70,27 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
   const [targetProjectId, setTargetProjectId] = useState("");
   const [ack, setAck] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Existing group rows come from the server list: each one gets a sucker, so
+  // only chain-verified pairs are written. The target is entered by the operator.
+  const gate = useGroupWriteGate(rows);
   const [review, setReview] = useState(false);
+  // A send that went to the Safe as a proposal: nothing more to send from here.
+  const [proposed, setProposed] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const candidates = extensionCandidateChains(rows);
+  const extendLabel = targetChainId ? `Extend to ${chainName(Number(targetChainId))}` : "Extend";
   const existingChains = rows.map((row) => chainName(row.chainId)).join(", ");
+  const context = [
+    {
+      label: "Extends to",
+      value: `Project #${targetProjectId.trim()} on ${chainName(Number(targetChainId))}`,
+      strong: true,
+    },
+    { label: "Pairs with", value: existingChains },
+    { label: "Transactions", value: String(rows.length + 1) },
+  ];
 
   const beginReview = () => {
     if (busy || !ack) return;
@@ -80,6 +105,7 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
     }
     setError(null);
     setStatus(null);
+    setProposed(false);
     setReview(true);
   };
 
@@ -96,6 +122,12 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
       return;
     }
     if (!ack) return;
+    try {
+      gate.assertVerified(rows);
+    } catch (e) {
+      setError((e as Error).message);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -126,15 +158,13 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
       if (targetHash === ZERO_HASH) {
         throw new Error(
           `No revnet configuration found for project #${projectId} on ${chainName(target)}. ` +
-            "The revnet must be deployed there first — through REVDeployer, with the " +
-            "byte-identical original configuration (only its hash is stored on-chain, so " +
-            "this client cannot reconstruct it; use the original deploy config).",
+            "Deploy the revnet there first, with its original configuration.",
         );
       }
       if (homeHash !== targetHash) {
         throw new Error(
           `Project #${projectId} on ${chainName(target)} was deployed with a DIFFERENT ` +
-            "configuration, so its suckers can never pair with this revnet's. Deploy the " +
+            "configuration, so it can never bridge with this revnet. Deploy the " +
             "revnet there with the byte-identical original configuration first.",
         );
       }
@@ -167,14 +197,15 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
       const result = await runWrites({
         writes,
         account: address,
-        label: "Deploy suckers",
+        label: extendLabel,
+        context,
         onProgress: setStatus,
       });
       if (result.safeQueued || result.safeConfirmed) {
         // The proposals carry this salt; a retry must find them, not mint a new one.
         const queued = result.safeQueued + result.safeConfirmed;
         const message =
-          `Sucker deployment proposed to the operator Safe on ${queued} chain${queued === 1 ? "" : "s"}. ` +
+          `Extension proposed to the operator Safe on ${queued} chain${queued === 1 ? "" : "s"}. ` +
           "Every chain's proposal must execute for the peers to pair; the Safe queue card above lists them.";
         setStatus(message);
         toast({ title: "Proposed to the operator Safe", description: message });
@@ -183,18 +214,21 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
       }
       // Every chain landed, so the next extension should start from a new salt.
       clearExtensionSalt(address, projectId, target);
-      setStatus(`Suckers deployed on ${result.chains} chain${result.chains === 1 ? "" : "s"}.`);
+      setStatus(`Extended to ${chainName(target)}.`);
       toast({ title: `Extended to ${chainName(target)}` });
       setReview(false);
       setOpen(false);
     } catch (e) {
       const message = formatWalletError(e) || "Could not extend the revnet.";
-      setError(message);
-      toast(
-        isSafeProposalPendingError(e)
-          ? { title: "Safe proposal submitted", description: message }
-          : { variant: "destructive", title: "Error", description: message },
-      );
+      if (reviewClosed(e)) setReview(false);
+      else if (isSafeProposalPendingError(e)) {
+        setStatus(message);
+        setProposed(true);
+        toast({ title: "Safe proposal submitted", description: message });
+      } else {
+        setError(message);
+        toast({ variant: "destructive", title: "Error", description: message });
+      }
     } finally {
       setBusy(false);
     }
@@ -206,8 +240,8 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
         <p className="text-sm text-zinc-500">
           This revnet runs on {rows.length} chain{rows.length === 1 ? "" : "s"}
           {rows.length > 0 ? ": " : ""}
-          {rows.map((row) => chainName(row.chainId)).join(", ")}. Suckers bridge its token between
-          them.
+          {rows.map((row) => chainName(row.chainId)).join(", ")}.
+          {rows.length > 1 ? " Its token can bridge between them." : null}
         </p>
         {candidates.length === 0 ? (
           <p className="mt-2 text-sm text-zinc-500">
@@ -227,7 +261,7 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
             Extend to another chain
           </Button>
         ) : (
-          <div className="mt-3 bg-melon-100 p-3">
+          <div className="mt-3 border-t border-melon-200 pt-3">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-medium">Extend to another chain</p>
               <button
@@ -240,16 +274,12 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
               </button>
             </div>
             <p className="text-xs text-zinc-500 mt-2">
-              Only the revnet's operator can extend it, its rules must allow deploying new suckers,
-              and the revnet must already be deployed on the target chain with the byte-identical
-              original configuration (its on-chain configuration hash is checked before anything
-              sends). One transaction runs on the target chain and one on each existing chain, all
-              from this wallet — the same operator address and salt on every chain are what make the
-              new suckers pair up.
+              Only the revnet's operator can extend it, and its rules must allow it. Deploy the
+              revnet on the target chain with its original configuration first.
             </p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="mt-3 grid gap-3">
               <Select value={targetChainId} onValueChange={(v) => setTargetChainId(v)}>
-                <SelectTrigger aria-label="Target chain">
+                <SelectTrigger aria-label="Target chain" className="w-fit gap-2">
                   <SelectValue placeholder="Target chain" />
                 </SelectTrigger>
                 <SelectContent>
@@ -263,19 +293,22 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
                   ))}
                 </SelectContent>
               </Select>
-              <ProjectIdInput
-                value={targetProjectId}
-                onChange={(value) => {
-                  setTargetProjectId(value);
-                  setError(null);
-                }}
-                chainId={Number(targetChainId) || undefined}
-                disabled={busy}
-                placeholder="Project ID on that chain"
-                ariaLabel="Project ID on the target chain"
-              />
+              <label className="block text-xs text-zinc-600">
+                Project ID on that chain
+                <ProjectIdInput
+                  value={targetProjectId}
+                  onChange={(value) => {
+                    setTargetProjectId(value);
+                    setError(null);
+                  }}
+                  chainId={Number(targetChainId) || undefined}
+                  disabled={busy}
+                  ariaLabel="Project ID on the target chain"
+                  className="mt-1"
+                />
+              </label>
             </div>
-            <label className="mt-3 flex items-start gap-2 border border-amber-300 bg-amber-50 rounded p-3">
+            <label className="mt-3 flex items-start gap-2 border border-amber-300 p-3">
               <input
                 type="checkbox"
                 checked={ack}
@@ -288,47 +321,57 @@ export function SuckerExtensionCard({ rows }: { rows: ChainProjectRow[] }) {
                 belongs to this revnet. Every transaction is simulated before it sends.
               </span>
             </label>
+            {gate.line ? <p className="text-xs text-zinc-600 mt-3">{gate.line}</p> : null}
             <div className="mt-3 flex justify-end">
               <ButtonWithWallet
                 targetChainId={(Number(targetChainId) || rows[0]?.chainId) as JBChainId}
                 connectWalletText="Connect wallet to extend"
-                loading={busy}
-                disabled={busy || !ack || !targetChainId || !targetProjectId.trim()}
+                loading={busy || gate.pending}
+                disabled={busy || gate.blocked || !ack || !targetChainId || !targetProjectId.trim()}
                 onClick={beginReview}
                 className="bg-teal-500 text-melon-950 hover:bg-teal-600"
               >
-                Deploy suckers
+                {extendLabel}
               </ButtonWithWallet>
             </div>
             {status && !review ? <p className="text-xs text-zinc-500 mt-2">{status}</p> : null}
-            {error && !review ? <p className="text-xs text-red-600 mt-2">{error}</p> : null}
+            {error && !review ? <ErrorNote message={error} /> : null}
             {review ? (
-              <TxConfirmDialog
+              <TxProgress
                 open
-                onOpenChange={(next) => {
-                  if (!next) setReview(false);
+                onClose={() => {
+                  setReview(false);
+                  setProposed(false);
                 }}
-                title="Confirm suckers"
-                chainId={Number(targetChainId) as JBChainId}
+                title="Confirm the extension"
                 steps={[
                   {
-                    title: "Deploy suckers",
-                    detail: `One transaction on ${chainName(Number(targetChainId))} and one on each existing chain, bundled with Relayr when the networks are all supported mainnets or all supported testnets. Safe and other networks need each chain deployed and confirmed separately.`,
+                    title: extendLabel,
+                    detail: `One transaction on ${chainName(Number(targetChainId))} and one on each existing chain, bundled together when the networks are all supported mainnets or all supported testnets. Safe and other networks need each chain deployed and confirmed separately.`,
                   },
                 ]}
                 activeIndex={busy ? 0 : -1}
-                action="Deploy suckers"
-                onConfirm={() => void submit()}
+                start={() => void submit()}
                 busy={busy}
                 status={status}
+                complete={proposed}
                 error={error}
+                rows={context}
               >
-                <SummaryRow label="Extends to">
-                  {chainName(Number(targetChainId))} · project #{targetProjectId.trim()}
-                </SummaryRow>
-                <SummaryRow label="Pairs with">{existingChains}</SummaryRow>
-                <SummaryRow label="Transactions">{rows.length + 1}</SummaryRow>
-              </TxConfirmDialog>
+                {error === SAVED_ATTEMPT_UNREADABLE_LINE ? (
+                  <button
+                    type="button"
+                    className="w-fit text-sm text-zinc-700 underline"
+                    onClick={() => {
+                      discardUnreadableSalts();
+                      setError(null);
+                      void submit();
+                    }}
+                  >
+                    {SAVED_ATTEMPT_CONTINUE_ANYWAY_LABEL}
+                  </button>
+                ) : null}
+              </TxProgress>
             ) : null}
           </div>
         )}

@@ -1,23 +1,9 @@
 import { defineConfig } from "@playwright/test";
-import browserProject from "./test/fixtures/browser-project.json";
-
-const appPort = browserProject.appPort;
-const appOrigin = `http://127.0.0.1:${appPort}`;
-const fixturePort = browserProject.fixturePort;
-const fixtureOrigin = `http://127.0.0.1:${fixturePort}`;
-
-const deterministicEnvironment = {
-  NEXT_PUBLIC_VERSION: "browser-test",
-  HOSTNAME: "127.0.0.1",
-  NEXT_PUBLIC_SITE_URL: appOrigin,
-  NEXT_PUBLIC_BENDYSTRAW_URL: fixtureOrigin,
-  NEXT_PUBLIC_DETERMINISTIC_BROWSER: "true",
-  NEXT_PUBLIC_PARA_API_KEY: "deterministic-browser-key",
-  NEXT_PUBLIC_PARA_ENV: "BETA",
-  NEXT_PUBLIC_RPC_FIXTURE_URL: `${fixtureOrigin}/rpc`,
-  NEXT_PUBLIC_TESTNET_BENDYSTRAW_URL: fixtureOrigin,
-  PORT: String(appPort),
-};
+import {
+  appOrigin,
+  deterministicEnvironment,
+  fixtureOrigin,
+} from "./scripts/lib/browser-environment.mjs";
 
 export default defineConfig({
   testDir: "./test/e2e",

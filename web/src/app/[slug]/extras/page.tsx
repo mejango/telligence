@@ -3,6 +3,8 @@ import { V6ExtrasTab } from "../components/v6/extras/V6ExtrasTab";
 import { projectItemsWithFallback } from "../components/v6/shared";
 import { getProjectWithFallback } from "../getProjectFallback";
 import { getSuckerGroup } from "../getSuckerGroup";
+import { ProjectPageBoundary } from "../ProjectRouteContext";
+import { projectRouteSnapshot } from "../projectRouteIdentity";
 import { resolveProjectRoute } from "../resolveProjectRoute.server";
 
 interface Props {
@@ -22,10 +24,17 @@ export default async function ExtrasPage(props: Props) {
   if (!resolved) notFound();
   const { project } = resolved;
 
-  const suckerGroup = await getSuckerGroup(project.suckerGroupId, chainId);
+  const suckerGroup = await getSuckerGroup(project.suckerGroupId, chainId, projectId);
   return (
-    <V6ExtrasTab
-      projects={projectItemsWithFallback(suckerGroup?.projects?.items, project, chainId, projectId)}
-    />
+    <ProjectPageBoundary snapshot={projectRouteSnapshot(route)}>
+      <V6ExtrasTab
+        projects={projectItemsWithFallback(
+          suckerGroup?.projects?.items,
+          project,
+          chainId,
+          projectId,
+        )}
+      />
+    </ProjectPageBoundary>
   );
 }

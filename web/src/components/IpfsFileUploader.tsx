@@ -14,10 +14,13 @@ export const pinFile = async (file: File) => {
 
 export function IpfsImageUploader({
   onUploadSuccess,
+  currentUri,
   disabled = false,
   className,
 }: {
   onUploadSuccess: (cid: string) => void;
+  /** The image already chosen, such as one from an imported draft. */
+  currentUri?: string;
   disabled?: boolean;
   className?: string;
 }) {
@@ -29,6 +32,8 @@ export function IpfsImageUploader({
       return ipfsCid;
     },
   });
+
+  const previewUri = currentUri || (uploadFile.data && ipfsUri(uploadFile.data.Hash));
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -54,10 +59,11 @@ export function IpfsImageUploader({
       {uploadFile.error && (
         <div className="text-md text-red-500">Logo upload failed, try again.</div>
       )}
-      {uploadFile.data && (
+      {previewUri && (
         <div className="mt-3 overflow-hidden">
           <IpfsImage
-            src={ipfsUri(uploadFile.data.Hash)}
+            key={previewUri}
+            src={previewUri}
             alt="Uploaded file"
             width={80}
             height={200}

@@ -12,28 +12,30 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { SkeletonLines } from "@/components/ui/skeleton";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { ErrorNote } from "@/components/ui/TxError";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { TxStep, stepStatus } from "@/components/ui/TxSteps";
 import { useToast } from "@/components/ui/use-toast";
 import { useCompleteProjectPermissions } from "@/hooks/useCompleteBendystrawLists";
 import {
+  ReviewRefusal,
   isSafeProposalPendingError,
-  requireOnchainExecution,
-  useWriteContract,
-} from "@/hooks/useReviewedWriteContract";
-import {
-  readCrossChainHandleAuthority,
-  type CrossChainHandleAuthorityStatus,
-} from "@/lib/cross-chain-authority";
+  requireDone,
+  reviewClosed,
+  reviewedCall,
+  useReviewedAction,
+  type WriteRequest,
+} from "@/hooks/useReviewedAction";
 import { getEnsPublicClient } from "@/lib/ensPublicClient";
+import { readHandleAuthority, unprovenSafeMessage } from "@/lib/handle-authority";
 import {
   ENS_NAME_WRAPPER_ADDRESS,
   ENS_REGISTRY_ADDRESS,
   JB_PROJECT_HANDLES_ADDRESS,
   PROJECT_HANDLE_CHAIN_ID,
   PROJECT_HANDLE_TEXT_KEY,
+  PROJECT_HANDLE_TEXT_WRITE_SIMULATION_GAS,
   canonicalProjectHandle,
-  canonicalProjectHandleParts,
   ensNameWrapperAbi,
   ensRegistryAbi,
   ensTextResolverAbi,
@@ -46,27 +48,25 @@ import {
   simulateExactEnsTextWrite,
   type ProjectHandle,
 } from "@/lib/projectHandles";
+import type { ReviewedCallOptions } from "@/lib/reviewed-call";
 import {
   findCurrentRevnetOperator,
   findRevnetOperatorFromPermissionHistory,
   revnetOperatorCandidates,
 } from "@/lib/revnetOperator";
-import {
-  fetchSafeCreation,
-  safeProxyFactoryAbi,
-  simulateSafeProxyDeployment,
-  validateSafeCreationForCurrentPolicy,
-  verifySafeDeploymentAfterReceipt,
-} from "@/lib/safeDeployment";
 import { formatWalletError } from "@/lib/utils";
-import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
 import {
   JBCoreContracts,
   RevnetCoreContracts,
   getJBContractAddress,
   type JBChainId,
 } from "@bananapus/nana-sdk-core";
-import { useQuery } from "@tanstack/react-query";
+import {
+  prepareSafeSameAddressDeployment,
+  validateSafeCreationForCurrentPolicy,
+  type CrossChainHandleAuthorityStatus,
+} from "@bananapus/nana-sdk-core/safe";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import {
   isAddress,
@@ -74,9 +74,11 @@ import {
   namehash,
   zeroAddress,
   type Address,
+  type Hex,
   type PublicClient,
 } from "viem";
 import { useAccount } from "wagmi";
+import { invalidateProjectRouteProofs } from "../../../projectRouteQuery";
 import {
   chainName,
   isLiveRevnetOperator,
@@ -113,6 +115,8 @@ function authorityStatusMessage(status: CrossChainHandleAuthorityStatus): string
       return "The operator Safe uses a guard or module policy which cannot publish a verified project handle.";
     case "contract-owner":
       return "Every operator Safe owner must be the same EOA (plain or exactly EIP-7702 delegated) on both chains.";
+    case "unproven-creation":
+      return unprovenSafeMessage(PROJECT_HANDLE_CHAIN_ID);
     default:
       return "The operator's Ethereum control could not be verified.";
   }
@@ -206,6 +210,7 @@ export function ProjectHandleEditor({
   project: ChainProjectRow;
   fallbackOperator?: string;
 }) {
+  const queryClient = useQueryClient();
   const { address } = useAccount();
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
@@ -213,6 +218,8 @@ export function ProjectHandleEditor({
   const [inputWasEdited, setInputWasEdited] = useState(false);
   const [busyAction, setBusyAction] = useState<"ens" | "deploy-safe" | "publish" | null>(null);
   const [review, setReview] = useState<"step" | "deploy-safe" | null>(null);
+  // A send that went to the Safe as a proposal: nothing more to send from here.
+  const [proposed, setProposed] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const siteOrigin = SITE_ORIGIN;
@@ -285,7 +292,7 @@ export function ProjectHandleEditor({
     enabled: Boolean(operator),
     staleTime: 10_000,
     queryFn: () =>
-      readCrossChainHandleAuthority({
+      readHandleAuthority({
         sourceChainId: project.chainId,
         sourceClient: publicClientFor(project.chainId),
         mainnetClient: getEnsPublicClient(),
@@ -296,18 +303,13 @@ export function ProjectHandleEditor({
   const sourceSafe =
     authorityQuery.data?.source?.kind === "safe" ? authorityQuery.data.source : undefined;
   const mainnetSafeMissing = authorityQuery.data?.status === "missing-mainnet-safe";
-  const safeCreationQuery = useQuery({
-    queryKey: ["v6-project-handle-safe-creation", project.chainId, operator],
-    enabled: Boolean(operator && mainnetSafeMissing),
-    staleTime: 60_000,
-    queryFn: () => fetchSafeCreation(operator!, [project.chainId]),
-  });
+  const safeCreation = authorityQuery.data?.creation ?? null;
   const safeCreationValidation = useMemo(
     () =>
-      sourceSafe && safeCreationQuery.data
-        ? validateSafeCreationForCurrentPolicy(safeCreationQuery.data, sourceSafe)
+      sourceSafe && safeCreation
+        ? validateSafeCreationForCurrentPolicy(safeCreation, sourceSafe)
         : null,
-    [safeCreationQuery.data, sourceSafe],
+    [safeCreation, sourceSafe],
   );
   const connectedIsSafeOwner = Boolean(
     address && sourceSafe?.owners.some((owner) => isAddressEqual(owner, address)),
@@ -368,171 +370,130 @@ export function ProjectHandleEditor({
   const connectedIsOperator = Boolean(
     address && operator && address.toLowerCase() === operator.toLowerCase(),
   );
-  const { writeContractAsync: writeEnsText } = useWriteContract({
-    transactionReview: {
-      title: "Review ENS project record",
-      label: "Set ENS juicebox record",
-      description: `Set the ENS ${PROJECT_HANDLE_TEXT_KEY} text record to ${expectedRecord}.`,
-    },
-    reverify: async (variables) => {
-      const node = variables.args?.[0];
-      if (typeof node !== "string") throw new Error("The ENS node changed before submission.");
-      const liveResolver = await getEnsPublicClient().readContract({
-        address: ENS_REGISTRY_ADDRESS,
-        abi: ensRegistryAbi,
-        functionName: "resolver",
-        args: [node as `0x${string}`],
-      });
-      if (liveResolver.toLowerCase() !== variables.address.toLowerCase()) {
-        throw new Error("The ENS resolver changed. Check the name and review again.");
-      }
-      // Resolver authorization is intentionally left to reviewed simulation:
-      // ENS owners can approve delegates and custom resolvers can define their
-      // own authorization policy. The exact resolver itself remains pinned.
-    },
-    preflightSimulation: async (variables, account) => {
-      const [node, key, value] = variables.args ?? [];
-      if (
-        typeof node !== "string" ||
-        key !== PROJECT_HANDLE_TEXT_KEY ||
-        typeof value !== "string"
-      ) {
-        throw new Error("The ENS record changed before simulation.");
-      }
-      const gas = await simulateExactEnsTextWrite(
-        getEnsPublicClient(),
-        variables.address,
-        node as `0x${string}`,
-        value,
+  const { run } = useReviewedAction();
+  /** One reviewed Ethereum step, sent exactly as reviewed; its receipt once it executed. */
+  const sendStep = async (
+    account: Address,
+    review: { title: string; description: string },
+    request: WriteRequest,
+    options: ReviewedCallOptions,
+    reverify: () => Promise<void>,
+  ) => {
+    const { receipts } = requireDone(
+      await run({
         account,
-      );
-      return { gas };
-    },
-  });
-  const { writeContractAsync: publishHandle } = useWriteContract({
-    transactionReview: {
-      title: "Review project handle",
-      label: "Publish project handle",
-      description: `Publish this handle for ${expectedRecord} under the current revnet operator's authoritative slot.`,
-    },
-    reverify: async (variables, account) => {
-      const [encodedChainId, encodedProjectId, encodedParts] = variables.args ?? [];
-      const callHandle = Array.isArray(encodedParts)
-        ? canonicalProjectHandleParts(
-            encodedParts.filter((part): part is string => typeof part === "string"),
-          )
-        : null;
-      if (
-        Number(variables.chainId) !== PROJECT_HANDLE_CHAIN_ID ||
-        !isAddressEqual(variables.address, JB_PROJECT_HANDLES_ADDRESS) ||
-        variables.functionName !== "setEnsNamePartsFor" ||
-        (variables.value !== undefined && BigInt(variables.value) !== 0n) ||
-        (variables.args?.length ?? 0) !== 3 ||
-        typeof encodedChainId !== "bigint" ||
-        encodedChainId !== BigInt(project.chainId) ||
-        typeof encodedProjectId !== "bigint" ||
-        encodedProjectId !== BigInt(project.projectId) ||
-        !Array.isArray(encodedParts) ||
-        !encodedParts.every((part) => typeof part === "string") ||
-        !callHandle ||
-        !parsed.handle ||
-        callHandle.handle !== parsed.handle.handle
-      ) {
-        throw new Error("The reviewed project-handle inputs changed before submission.");
-      }
-      const isCurrent = await isLiveRevnetOperator(
-        publicClientFor(project.chainId),
-        project,
-        account,
-      );
-      if (!isCurrent) throw new Error("The connected account is no longer this revnet's operator.");
-      const authority = await readCrossChainHandleAuthority({
-        sourceChainId: project.chainId,
-        sourceClient: publicClientFor(project.chainId),
-        mainnetClient: getEnsPublicClient(),
-        authority: account,
-      });
-      if (!authority.allowed) throw new Error(authorityStatusMessage(authority.status));
+        ...review,
+        context: handleContext,
+        reverify,
+        calls: [reviewedCall(request, options)],
+      }),
+    );
+    return receipts.at(-1)!;
+  };
+  /** The ENS name's resolver is still exactly the one the record is written to. */
+  const reverifyEnsText = async (resolver: Address, node: Hex, account: Address) => {
+    const client = getEnsPublicClient();
+    const liveResolver = await client.readContract({
+      address: ENS_REGISTRY_ADDRESS,
+      abi: ensRegistryAbi,
+      functionName: "resolver",
+      args: [node],
+    });
+    if (liveResolver.toLowerCase() !== resolver.toLowerCase()) {
+      throw new ReviewRefusal("The ENS resolver changed. Check the name and review again.");
+    }
+    // Resolver authorization is left to the bounded simulation: ENS owners can approve delegates
+    // and custom resolvers can define their own policy. The exact resolver stays pinned.
+    await simulateExactEnsTextWrite(client, resolver, node, expectedRecord, account);
+  };
+  /** The connected account still holds the operator slot, and ENS still has the exact record. */
+  const reverifyPublish = async (handle: NonNullable<typeof parsed.handle>, account: Address) => {
+    const isCurrent = await isLiveRevnetOperator(
+      publicClientFor(project.chainId),
+      project,
+      account,
+    );
+    if (!isCurrent)
+      throw new ReviewRefusal("The connected account is no longer this revnet's operator.");
+    const authority = await readHandleAuthority({
+      sourceChainId: project.chainId,
+      sourceClient: publicClientFor(project.chainId),
+      mainnetClient: getEnsPublicClient(),
+      authority: account,
+    });
+    if (!authority.allowed) throw new ReviewRefusal(authorityStatusMessage(authority.status));
 
-      const mainnetClient = getEnsPublicClient();
-      const blockNumber = await mainnetClient.getBlockNumber();
-      const node = namehash(callHandle.ensName);
-      const resolver = await mainnetClient.readContract({
-        address: ENS_REGISTRY_ADDRESS,
-        abi: ensRegistryAbi,
-        functionName: "resolver",
-        args: [node],
-        blockNumber,
-      });
-      if (isAddressEqual(resolver, zeroAddress)) {
-        throw new Error("The reviewed ENS name no longer has a resolver.");
-      }
-      const record = await readExactEnsText(mainnetClient, resolver, node, blockNumber);
-      if (record !== expectedRecord) {
-        throw new Error(`The exact ENS juicebox record must still equal ${expectedRecord}.`);
-      }
-    },
-  });
-  const { writeContractAsync: deployOperatorSafe } = useWriteContract({
-    transactionReview: {
-      title: "Review Ethereum Safe deployment",
-      label: "Deploy operator Safe",
-      description:
-        "Reproduce the operator Safe at its same address on Ethereum so that its exact policy can publish this project's handle.",
-    },
-    reverify: async (variables, account) => {
-      const sourceClient = publicClientFor(project.chainId);
-      const mainnetClient = getEnsPublicClient();
-      if (!operator || !(await isLiveRevnetOperator(sourceClient, project, operator))) {
-        throw new Error("The operator changed before the Safe deployment was submitted.");
-      }
-      const authority = await readCrossChainHandleAuthority({
-        sourceChainId: project.chainId,
-        sourceClient,
-        mainnetClient,
-        authority: operator,
-      });
-      if (authority.status !== "missing-mainnet-safe" || authority.source?.kind !== "safe") {
-        throw new Error("The operator Safe no longer needs this Ethereum deployment.");
-      }
-      if (!authority.source.owners.some((owner) => isAddressEqual(owner, account))) {
-        throw new Error("Connect a current EOA owner of the operator Safe to deploy it.");
-      }
-      const creation = await fetchSafeCreation(operator, [project.chainId]);
-      if (!creation) throw new Error("The Safe creation transaction could not be recovered.");
-      const validation = validateSafeCreationForCurrentPolicy(creation, authority.source);
-      if (!validation.valid) {
-        throw new Error("The Safe's creation policy no longer matches its live operator policy.");
-      }
-      const simulation = await simulateSafeProxyDeployment({
-        client: mainnetClient,
-        creation,
-        expectedSafe: operator,
-        account,
-        currentSafe: authority.source,
-      });
-      if (!simulation.valid) {
-        throw new Error(`The same-address Safe deployment is unavailable (${simulation.reason}).`);
-      }
-      if (
-        !isAddressEqual(variables.address, simulation.call.target) ||
-        variables.functionName !== simulation.call.functionName ||
-        !variables.args ||
-        variables.args[0] !== simulation.call.args[0] ||
-        variables.args[1] !== simulation.call.args[1] ||
-        variables.args[2] !== simulation.call.args[2]
-      ) {
-        throw new Error("The reviewed Safe deployment inputs changed before submission.");
-      }
-    },
-  });
+    const mainnetClient = getEnsPublicClient();
+    const blockNumber = await mainnetClient.getBlockNumber();
+    const node = namehash(handle.ensName);
+    const resolver = await mainnetClient.readContract({
+      address: ENS_REGISTRY_ADDRESS,
+      abi: ensRegistryAbi,
+      functionName: "resolver",
+      args: [node],
+      blockNumber,
+    });
+    if (isAddressEqual(resolver, zeroAddress)) {
+      throw new ReviewRefusal("The reviewed ENS name no longer has a resolver.");
+    }
+    const record = await readExactEnsText(mainnetClient, resolver, node, blockNumber);
+    if (record !== expectedRecord) {
+      throw new ReviewRefusal(`The exact ENS juicebox record must still equal ${expectedRecord}.`);
+    }
+  };
+  /** The operator Safe still needs exactly this same-address Ethereum deployment. */
+  const reverifySafeDeployment = async (
+    call: { target: Address; args: readonly unknown[] },
+    account: Address,
+  ) => {
+    const sourceClient = publicClientFor(project.chainId);
+    const mainnetClient = getEnsPublicClient();
+    if (!operator || !(await isLiveRevnetOperator(sourceClient, project, operator))) {
+      throw new ReviewRefusal("The operator changed before the Safe deployment was submitted.");
+    }
+    const authority = await readHandleAuthority({
+      sourceChainId: project.chainId,
+      sourceClient,
+      mainnetClient,
+      authority: operator,
+    });
+    if (authority.status !== "missing-mainnet-safe" || authority.source?.kind !== "safe") {
+      throw new ReviewRefusal("The operator Safe no longer needs this Ethereum deployment.");
+    }
+    if (!authority.source.owners.some((owner) => isAddressEqual(owner, account))) {
+      throw new ReviewRefusal("Connect a current EOA owner of the operator Safe to deploy it.");
+    }
+    if (!authority.creation) {
+      throw new ReviewRefusal("The Safe creation transaction could not be recovered.");
+    }
+    const deployment = await prepareSafeSameAddressDeployment({
+      sourceClient,
+      destinationClient: mainnetClient,
+      creation: authority.creation,
+      safe: operator,
+      from: account,
+    });
+    if (!deployment.valid) {
+      throw new ReviewRefusal(
+        `The same-address Safe deployment is unavailable (${deployment.reason}).`,
+      );
+    }
+    if (
+      !isAddressEqual(call.target, deployment.call.target) ||
+      call.args[0] !== deployment.call.args[0] ||
+      call.args[1] !== deployment.call.args[1] ||
+      call.args[2] !== deployment.call.args[2]
+    ) {
+      throw new ReviewRefusal("The reviewed Safe deployment inputs changed before submission.");
+    }
+  };
 
   const deploySafeOnMainnet = async () => {
     if (
       !address ||
       !operator ||
       !sourceSafe ||
-      !safeCreationQuery.data ||
+      !safeCreation ||
       !safeCreationValidation?.valid ||
       busyAction
     ) {
@@ -550,7 +511,7 @@ export function ProjectHandleEditor({
       if (!(await isLiveRevnetOperator(sourceClient, project, operator))) {
         throw new Error("The revnet operator changed before Safe deployment.");
       }
-      const liveAuthority = await readCrossChainHandleAuthority({
+      const liveAuthority = await readHandleAuthority({
         sourceChainId: project.chainId,
         sourceClient,
         mainnetClient,
@@ -562,38 +523,42 @@ export function ProjectHandleEditor({
       ) {
         throw new Error("The operator Safe no longer needs this Ethereum deployment.");
       }
-      const creation = await fetchSafeCreation(operator, [project.chainId]);
-      if (!creation) throw new Error("The Safe creation transaction could not be recovered.");
-      const validation = validateSafeCreationForCurrentPolicy(creation, liveAuthority.source);
-      if (!validation.valid) {
-        throw new Error("The Safe's original creation policy no longer matches its live policy.");
+      if (!liveAuthority.creation) {
+        throw new Error("The Safe creation transaction could not be recovered.");
       }
-      const simulation = await simulateSafeProxyDeployment({
-        client: mainnetClient,
-        creation,
-        expectedSafe: operator,
-        account: address,
-        currentSafe: liveAuthority.source,
+      const deployment = await prepareSafeSameAddressDeployment({
+        sourceClient,
+        destinationClient: mainnetClient,
+        creation: liveAuthority.creation,
+        safe: operator,
+        from: address,
       });
-      if (!simulation.valid) {
-        throw new Error(`The same-address Safe deployment is unavailable (${simulation.reason}).`);
+      if (!deployment.valid) {
+        throw new Error(`The same-address Safe deployment is unavailable (${deployment.reason}).`);
       }
 
       setStatus("Confirm the Ethereum Safe deployment in its owner's wallet…");
       // wallet-action:project-handle
-      const hash = await deployOperatorSafe({
-        chainId: PROJECT_HANDLE_CHAIN_ID,
-        address: simulation.call.target,
-        abi: safeProxyFactoryAbi,
-        functionName: "createProxyWithNonce",
-        args: simulation.call.args,
-      });
-      requireOnchainExecution(hash, "Deploy operator Safe on Ethereum");
-      setStatus("Waiting for the Ethereum Safe deployment to confirm…");
-      const receipt = await waitForReceiptWithRetry(mainnetClient, hash);
+      const receipt = await sendStep(
+        address,
+        {
+          title: "Review Ethereum Safe deployment",
+          description:
+            "Reproduce the operator Safe at its same address on Ethereum so that its exact policy can publish this project's handle.",
+        },
+        {
+          chainId: PROJECT_HANDLE_CHAIN_ID,
+          address: deployment.call.target,
+          abi: deployment.call.abi,
+          functionName: "createProxyWithNonce",
+          args: deployment.call.args,
+        },
+        { label: "Deploy operator Safe" },
+        () => reverifySafeDeployment(deployment.call, address),
+      );
       if (receipt.status !== "success")
         throw new Error("The Safe deployment transaction reverted.");
-      const confirmed = await verifySafeDeploymentAfterReceipt({
+      const confirmed = await readHandleAuthority({
         sourceChainId: project.chainId,
         sourceClient,
         mainnetClient,
@@ -612,12 +577,15 @@ export function ProjectHandleEditor({
       await authorityQuery.refetch();
     } catch (cause) {
       const message = formatWalletError(cause, "Could not deploy the operator Safe on Ethereum.");
-      setError(message);
-      toast(
-        isSafeProposalPendingError(cause)
-          ? { title: "Safe proposal submitted", description: message }
-          : { variant: "destructive", title: "Error", description: message },
-      );
+      if (reviewClosed(cause)) setReview(null);
+      else if (isSafeProposalPendingError(cause)) {
+        setStatus(message);
+        setProposed(true);
+        toast({ title: "Safe proposal submitted", description: message });
+      } else {
+        setError(message);
+        toast({ variant: "destructive", title: "Error", description: message });
+      }
     } finally {
       setBusyAction(null);
     }
@@ -649,18 +617,28 @@ export function ProjectHandleEditor({
 
       setStatus("Step 1 of 2: confirm the ENS juicebox text-record transaction in your wallet…");
       // wallet-action:project-handle
-      const hash = await writeEnsText({
-        chainId: PROJECT_HANDLE_CHAIN_ID,
-        address: fresh.resolver,
-        abi: ensTextResolverAbi,
-        functionName: "setText",
-        args: [namehash(parsed.handle.ensName), PROJECT_HANDLE_TEXT_KEY, expectedRecord],
-      });
-      requireOnchainExecution(hash, "Set ENS project record");
-      setStatus("Step 1 of 2: waiting for the ENS juicebox text record to confirm…");
-      const receipt = await waitForReceiptWithRetry(client, hash);
+      const resolver = fresh.resolver;
+      const node = namehash(parsed.handle.ensName);
+      const receipt = await sendStep(
+        address,
+        {
+          title: "Review ENS project record",
+          description: `Set the ENS ${PROJECT_HANDLE_TEXT_KEY} text record to ${expectedRecord}.`,
+        },
+        {
+          chainId: PROJECT_HANDLE_CHAIN_ID,
+          address: resolver,
+          abi: ensTextResolverAbi,
+          functionName: "setText",
+          args: [node, PROJECT_HANDLE_TEXT_KEY, expectedRecord],
+        },
+        // The bounded simulation's gas, sent exactly: a resolver can't make the write cost more.
+        { label: "Set ENS juicebox record", gas: PROJECT_HANDLE_TEXT_WRITE_SIMULATION_GAS },
+        () => reverifyEnsText(resolver, node, address),
+      );
       if (receipt.status !== "success")
         throw new Error("The ENS text-record transaction reverted.");
+      await invalidateProjectRouteProofs(queryClient);
       const confirmedBlock = await client.getBlockNumber();
       const confirmedResolver = await client.readContract({
         address: ENS_REGISTRY_ADDRESS,
@@ -688,17 +666,20 @@ export function ProjectHandleEditor({
       const refreshed = await setupQuery.refetch();
       setStatus(
         refreshed.data?.verifiedHandle === parsed.handle.handle
-          ? "Both steps are complete. The existing JBProjectHandles reverse claim was preserved."
-          : "Step 1 of 2 complete: ENS points to this project. Continue with the JBProjectHandles reverse claim.",
+          ? "Both steps are complete. The handle was already published and is unchanged."
+          : "Step 1 of 2 complete: ENS points to this project. Continue by publishing the handle.",
       );
     } catch (cause) {
       const message = formatWalletError(cause, "Could not set the ENS project record.");
-      setError(message);
-      toast(
-        isSafeProposalPendingError(cause)
-          ? { title: "Safe proposal submitted", description: message }
-          : { variant: "destructive", title: "Error", description: message },
-      );
+      if (reviewClosed(cause)) setReview(null);
+      else if (isSafeProposalPendingError(cause)) {
+        setStatus(message);
+        setProposed(true);
+        toast({ title: "Safe proposal submitted", description: message });
+      } else {
+        setError(message);
+        toast({ variant: "destructive", title: "Error", description: message });
+      }
     } finally {
       setBusyAction(null);
     }
@@ -717,7 +698,7 @@ export function ProjectHandleEditor({
       }
       const liveCandidate = address;
 
-      const liveAuthority = await readCrossChainHandleAuthority({
+      const liveAuthority = await readHandleAuthority({
         sourceChainId: project.chainId,
         sourceClient: liveProjectClient,
         mainnetClient: getEnsPublicClient(),
@@ -731,26 +712,34 @@ export function ProjectHandleEditor({
         throw new Error(`Set the ENS juicebox record to ${expectedRecord} before publishing.`);
       }
       if (fresh.verifiedHandle === parsed.handle.handle) {
-        setStatus("Step 2 of 2 is already complete: the reverse claim is published.");
+        setStatus("Step 2 of 2 is already complete: the handle is published.");
         setReview(null);
         await setupQuery.refetch();
         return;
       }
 
-      setStatus("Step 2 of 2: confirm the JBProjectHandles transaction in your wallet…");
+      setStatus("Step 2 of 2: confirm the handle transaction in your wallet…");
       // wallet-action:project-handle
-      const hash = await publishHandle({
-        chainId: PROJECT_HANDLE_CHAIN_ID,
-        address: JB_PROJECT_HANDLES_ADDRESS,
-        abi: jbProjectHandlesAbi,
-        functionName: "setEnsNamePartsFor",
-        args: [BigInt(project.chainId), BigInt(project.projectId), parsed.handle.parts],
-      });
-      requireOnchainExecution(hash, "Publish project handle");
-      setStatus("Step 2 of 2: waiting for the JBProjectHandles reverse claim to confirm…");
-      const receipt = await waitForReceiptWithRetry(client, hash);
+      const handle = parsed.handle;
+      const receipt = await sendStep(
+        address,
+        {
+          title: "Review project handle",
+          description: `Publish this handle for ${expectedRecord} under the current revnet operator's authoritative slot.`,
+        },
+        {
+          chainId: PROJECT_HANDLE_CHAIN_ID,
+          address: JB_PROJECT_HANDLES_ADDRESS,
+          abi: jbProjectHandlesAbi,
+          functionName: "setEnsNamePartsFor",
+          args: [BigInt(project.chainId), BigInt(project.projectId), handle.parts],
+        },
+        { label: "Publish project handle" },
+        () => reverifyPublish(handle, address),
+      );
       if (receipt.status !== "success") throw new Error("The project-handle transaction reverted.");
 
+      await invalidateProjectRouteProofs(queryClient);
       const operatorStillCurrent = await isLiveRevnetOperator(
         liveProjectClient,
         project,
@@ -759,7 +748,7 @@ export function ProjectHandleEditor({
       if (!operatorStillCurrent) {
         throw new Error("The project handle confirmed after the revnet operator changed.");
       }
-      const confirmedAuthority = await readCrossChainHandleAuthority({
+      const confirmedAuthority = await readHandleAuthority({
         sourceChainId: project.chainId,
         sourceClient: liveProjectClient,
         mainnetClient: client,
@@ -783,16 +772,48 @@ export function ProjectHandleEditor({
       await Promise.all([setupQuery.refetch(), currentHandleQuery.refetch()]);
     } catch (cause) {
       const message = formatWalletError(cause, "Could not publish the project handle.");
-      setError(message);
-      toast(
-        isSafeProposalPendingError(cause)
-          ? { title: "Safe proposal submitted", description: message }
-          : { variant: "destructive", title: "Error", description: message },
-      );
+      if (reviewClosed(cause)) setReview(null);
+      else if (isSafeProposalPendingError(cause)) {
+        setStatus(message);
+        setProposed(true);
+        toast({ title: "Safe proposal submitted", description: message });
+      } else {
+        setError(message);
+        toast({ variant: "destructive", title: "Error", description: message });
+      }
     } finally {
       setBusyAction(null);
     }
   };
+
+  const handleContext = [
+    ...(review === "deploy-safe"
+      ? [
+          { label: "Safe", value: operator ?? "", mono: true },
+          ...(sourceSafe
+            ? [
+                {
+                  label: "Policy",
+                  value: `${sourceSafe.threshold} of ${sourceSafe.owners.length} signatures`,
+                },
+              ]
+            : []),
+        ]
+      : handleProgress.nextAction === "publish"
+        ? [
+            { label: "Handle", value: `/@${parsed.handle?.handle ?? ""}`, strong: true },
+            { label: "Project", value: `${chainName(project.chainId)} #${project.projectId}` },
+          ]
+        : [
+            { label: "ENS name", value: parsed.handle?.ensName ?? "", strong: true },
+            {
+              label: "Record",
+              value: `${PROJECT_HANDLE_TEXT_KEY}=${expectedRecord}`,
+              mono: true,
+            },
+          ]),
+    { label: "On", value: "Ethereum" },
+  ];
 
   const openEditor = () => {
     setOpen(true);
@@ -809,7 +830,7 @@ export function ProjectHandleEditor({
     <div className="bg-melon-50 p-4">
       <p className="text-sm font-medium">Project handle</p>
       <p className="mt-1 text-xs text-zinc-500">
-        Create or resume the verified ENS route in two explicit Ethereum steps.
+        Link a .eth name to this revnet in two steps on Ethereum.
       </p>
       <Button variant="secondary" size="sm" className="mt-3" onClick={openEditor}>
         Set project handle
@@ -832,8 +853,8 @@ export function ProjectHandleEditor({
           <DialogHeader>
             <DialogTitle>Set project handle</DialogTitle>
             <DialogDescription>
-              First confirm the ENS juicebox text record, then publish the matching JBProjectHandles
-              reverse claim.
+              First set a text record on your .eth name, then publish the handle from the revnet
+              operator.
             </DialogDescription>
           </DialogHeader>
           <div className="min-w-0">
@@ -860,8 +881,9 @@ export function ProjectHandleEditor({
               <SkeletonLines lines={1} className="mt-3" />
             ) : operator && authorityQuery.data && !authorityAllowed ? (
               <p className="mt-3 text-xs text-amber-700">
-                {authorityStatusMessage(authorityQuery.data.status)} Publishing is blocked until the
-                current operator can originate the Ethereum claim.
+                {authorityQuery.data.status === "unproven-creation"
+                  ? authorityStatusMessage(authorityQuery.data.status)
+                  : `${authorityStatusMessage(authorityQuery.data.status)} Publishing is blocked until the current operator can originate the Ethereum claim.`}
               </p>
             ) : operator && authorityQuery.isError ? (
               <p className="mt-3 text-xs text-amber-700">
@@ -871,16 +893,13 @@ export function ProjectHandleEditor({
             ) : null}
 
             {operator && sourceSafe && mainnetSafeMissing ? (
-              <div className="mt-3 border border-amber-200 bg-amber-50 p-3 text-xs text-zinc-700">
+              <div className="mt-3 border border-amber-200 p-3 text-xs text-zinc-700">
                 <p className="font-medium">Prepare the operator Safe on Ethereum</p>
                 <p className="mt-1">
-                  This replays the Safe's original deterministic deployment only when its
-                  initializer, current owners, threshold, singleton, fallback handler, guard,
-                  modules, and EOA-owner policy all remain safe and consistent.
+                  Deploys the operator Safe at the same address on Ethereum. Available only when its
+                  owners, threshold and settings still match its original setup.
                 </p>
-                {safeCreationQuery.isLoading ? (
-                  <SkeletonLines lines={1} className="mt-2" />
-                ) : !safeCreationQuery.data ? (
+                {!safeCreation ? (
                   <p className="mt-2 text-amber-700">
                     The Safe creation record could not be recovered from its source-chain service.
                   </p>
@@ -910,6 +929,7 @@ export function ProjectHandleEditor({
                       onClick={() => {
                         setError(null);
                         setStatus(null);
+                        setProposed(false);
                         setReview("deploy-safe");
                       }}
                     >
@@ -950,7 +970,7 @@ export function ProjectHandleEditor({
                   <dt className="text-zinc-500">ENS name</dt>
                   <dd>{parsed.handle.ensName}</dd>
                   <dt className="text-zinc-500">Required record</dt>
-                  <dd className="font-mono">
+                  <dd className="break-all font-mono">
                     {PROJECT_HANDLE_TEXT_KEY}={expectedRecord}
                   </dd>
                   <dt className="text-zinc-500">ENS controller</dt>
@@ -976,11 +996,11 @@ export function ProjectHandleEditor({
                         first; this app will not install or replace one.
                       </p>
                     ) : null}
-                    <ol className="space-y-3 rounded border border-melon-200 bg-melon-50 p-3">
+                    <ol className="space-y-3 border border-melon-200 p-3">
                       <TxStep
                         number={1}
                         total={2}
-                        title="ENS juicebox text record"
+                        title="Set the ENS text record"
                         status={stepStatus(
                           handleProgress.ensRecordComplete,
                           handleProgress.nextAction === "ens",
@@ -993,19 +1013,15 @@ export function ProjectHandleEditor({
                         </p>
                         {!handleProgress.ensRecordComplete ? (
                           <p className="mt-1 text-zinc-500">
-                            Connect an account or Safe authorized by this resolver; it can differ
-                            from the revnet operator. The registered controller is
-                            {setupQuery.data?.ensController
-                              ? ` (${setupQuery.data.ensController})`
-                              : " unknown"}
-                            ; approved delegates can also submit.
+                            Connect an account or Safe that can edit this name. It can differ from
+                            the revnet operator.
                           </p>
                         ) : null}
                       </TxStep>
                       <TxStep
                         number={2}
                         total={2}
-                        title="JBProjectHandles reverse claim"
+                        title="Publish the handle"
                         status={stepStatus(
                           handleProgress.reverseClaimComplete,
                           handleProgress.nextAction === "publish",
@@ -1013,8 +1029,8 @@ export function ProjectHandleEditor({
                       >
                         <p className="mt-1 text-zinc-500">
                           {handleProgress.reverseClaimComplete
-                            ? "The current operator's reverse claim is confirmed."
-                            : "Publish the matching reverse claim from the current revnet operator."}
+                            ? "The current operator has published the handle."
+                            : "Publish the handle from the current revnet operator."}
                         </p>
                         {!handleProgress.reverseClaimComplete ? (
                           handleProgress.ensRecordComplete ? (
@@ -1053,6 +1069,7 @@ export function ProjectHandleEditor({
                         onClick={() => {
                           setError(null);
                           setStatus(null);
+                          setProposed(false);
                           setReview("step");
                         }}
                       >
@@ -1067,15 +1084,16 @@ export function ProjectHandleEditor({
             ) : null}
 
             {status && !review ? <p className="mt-3 text-xs text-green-700">{status}</p> : null}
-            {error && !review ? <p className="mt-3 text-xs text-red-600">{error}</p> : null}
+            {error && !review ? <ErrorNote message={error} /> : null}
           </div>
         </DialogContent>
       </Dialog>
       {review === "deploy-safe" || (review === "step" && handleProgress.nextAction) ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(next) => {
-            if (!next) setReview(null);
+          onClose={() => {
+            setReview(null);
+            setProposed(false);
           }}
           title={
             review === "deploy-safe"
@@ -1084,7 +1102,6 @@ export function ProjectHandleEditor({
                 ? "Confirm handle"
                 : "Confirm ENS record"
           }
-          chainId={PROJECT_HANDLE_CHAIN_ID as JBChainId}
           steps={[
             review === "deploy-safe"
               ? {
@@ -1094,60 +1111,25 @@ export function ProjectHandleEditor({
               : handleProgress.nextAction === "publish"
                 ? {
                     title: `Publish /@${parsed.handle?.handle ?? ""}`,
-                    detail: "Writes the reverse claim on JBProjectHandles from the operator.",
+                    detail: "Publishes the handle from the operator.",
                   }
                 : {
                     title: `Set ${parsed.handle?.ensName ?? "ENS"} record`,
-                    detail: "Writes the juicebox text record on the name's ENS resolver.",
+                    detail: "Sets the text record on your .eth name.",
                   },
           ]}
           activeIndex={busyAction ? 0 : -1}
-          action={
-            review === "deploy-safe"
-              ? "Deploy operator Safe on Ethereum"
-              : handleProgress.nextAction === "publish"
-                ? `Publish /@${parsed.handle?.handle ?? ""}`
-                : `Set ${parsed.handle?.ensName ?? "ENS"} record`
-          }
-          onConfirm={() =>
+          start={() =>
             void (review === "deploy-safe"
               ? deploySafeOnMainnet()
               : (handleProgress.nextAction === "publish" ? publish : setEnsRecord)())
           }
           busy={Boolean(busyAction)}
           status={status}
+          complete={proposed}
           error={error}
-        >
-          {review === "deploy-safe" ? (
-            <>
-              <SummaryRow label="Safe">
-                <span className="break-all font-mono text-xs">{operator}</span>
-              </SummaryRow>
-              {sourceSafe ? (
-                <SummaryRow label="Policy">
-                  {sourceSafe.threshold} of {sourceSafe.owners.length} signatures
-                </SummaryRow>
-              ) : null}
-            </>
-          ) : handleProgress.nextAction === "publish" ? (
-            <>
-              <SummaryRow label="Handle">/@{parsed.handle?.handle}</SummaryRow>
-              <SummaryRow label="Project">
-                {chainName(project.chainId)} #{project.projectId}
-              </SummaryRow>
-            </>
-          ) : (
-            <>
-              <SummaryRow label="ENS name">{parsed.handle?.ensName}</SummaryRow>
-              <SummaryRow label="Record">
-                <span className="break-all font-mono text-xs">
-                  {PROJECT_HANDLE_TEXT_KEY}={expectedRecord}
-                </span>
-              </SummaryRow>
-            </>
-          )}
-          <SummaryRow label="On">Ethereum</SummaryRow>
-        </TxConfirmDialog>
+          rows={handleContext}
+        />
       ) : null}
     </div>
   );

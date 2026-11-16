@@ -2,15 +2,21 @@
 
 import type { RelayrPostBundleResponse } from "@/lib/nana/types";
 import type { MetadataSourceGuard } from "@/lib/project-metadata-write";
+import { ReviewRefusal } from "@/lib/review-refusal";
+import type { RelayrDiscardReason } from "@bananapus/nana-sdk-core/review/relayr";
+import type { SafeRelayrSession } from "@bananapus/nana-sdk-core/review/safe-relayr";
+import type { ExpectedPayoutReceipt, ExpectedReservedReceipt } from "@bananapus/nana-sdk-core/v6";
 import { useSyncExternalStore } from "react";
 import type { Address, Hex } from "viem";
 import type {
   CallPrecondition,
   ExpectedPayerDeployment,
+  ExpectedSafeExecution,
   RejectedReceiptEvent,
-  ReservedReceiptGuard,
 } from "./multichain-guards";
-import type { ExpectedPayoutReceipt } from "./payout-receipts";
+import type { RouterPendingReceiptGuard } from "./pending-router-calls";
+import type { ReviewedSafeProposal } from "./safe-transactions";
+import type { StoredHold } from "./write-hold";
 
 export type TransactionActivityStatus =
   "submitted" | "pending" | "safe-proposed" | "success" | "failed";
@@ -22,13 +28,17 @@ export type RelayrExpectedTransaction = {
   data: Hex;
   value: string;
   transactionUuid: string;
+  /** Canonical receipt outcome; a reverted permissionless attempt is consumed. */
+  receiptStatus?: "success" | "reverted";
   gas?: string;
   metadataSource?: MetadataSourceGuard;
   preconditions?: CallPrecondition[];
   expectedDeployment?: ExpectedPayerDeployment;
   rejectEvents?: RejectedReceiptEvent[];
-  reservedReceipt?: ReservedReceiptGuard;
+  reservedReceipt?: ExpectedReservedReceipt;
   expectedPayout?: ExpectedPayoutReceipt;
+  expectedRouterPending?: RouterPendingReceiptGuard;
+  expectedSafeExecution?: ExpectedSafeExecution;
 };
 
 export type TransactionActivity = {
@@ -41,14 +51,72 @@ export type TransactionActivity = {
   account?: Address;
   hash?: Hex;
   safeProposalHash?: Hex;
+  /** The Safe a proposal was made to and the calls it was reviewed to run, values as strings. */
+  safeProposal?: ReviewedSafeProposal;
+  /** A direct write's hold, so its screens can show it. */
+  directHold?: StoredHold;
+  /** Its authenticated call became permanently obsolete; keep nonce cancellation guidance. */
+  obsoleteSafeNonce?: number;
+  /**
+   * The app can't confirm this Safe proposal's result: its watch has ended, and it blocks an
+   * identical call until its account dismisses it.
+   */
+  safeResultUnconfirmed?: boolean;
+  /**
+   * The proposal's follower ended and handed it to the SDK's write hold: the hold's state is what
+   * it shows, through reloads, until the hold clears or the user dismisses it or takes the exit.
+   */
+  holdFollows?: true;
+  /** A Safe proposal the SDK's write hold holds (from its send, or moved into it on load). */
+  sdkHeld?: true;
+  /**
+   * The chain proved this proposal executed: the Safe's execution event for its safeTxHash at
+   * the block that used `nonce` (decimal), in transaction `executionHash`. That receipt alone
+   * settles it, with no Safe service; until then it stays held, and nothing dismisses it.
+   */
+  safeExecutionProven?: { safe: Address; nonce: string; executionHash?: Hex };
+  /**
+   * The proposal's own Safe nonce, in decimal: from its authenticated service record, or found
+   * from its hash. Once the Safe uses it, only the canonical chain may release the proposal.
+   */
+  safeProposalNonce?: string;
   executionHash?: Hex;
+  /** When the chain first answered that it holds no receipt for a Safe proposal's `executionHash`. */
+  executionSeenAt?: number;
   bundleUuid?: string;
+  /** Stable SDK session identity while a publication receives its bundle UUID. */
+  relayrSafeSessionId?: string;
+  /** Preserve the SDK's release decision, including cancellation before publication. */
+  relayrSafeState?: SafeRelayrSession["state"];
+  /** Why the SDK proved that this saved Safe execution no longer reserves its nonce. */
+  relayrSafeReleaseReason?: SafeRelayrSession["releaseReason"];
+  /** Retain opaque/incomplete legacy reservations when the SDK saves their recovery state. */
+  relayrSafeReservationKeys?: string[];
+  /** A Safe funding wallet invocation has not produced a known hash yet. */
+  relayrSafeFundingUnknown?: boolean;
+  /** Relayr has reported funding or execution, even if no local payment hash was captured. */
+  relayrSafeFundingObserved?: boolean;
   relayrExpectedTransactions?: RelayrExpectedTransaction[];
   relayrPayment?: { target: Address; data: Hex; value: string };
+  /** Every funding payment the wallet broadcast for this bundle, oldest first. */
+  relayrPayments?: Array<{ hash: Hex; chainId: number; target: Address; data: Hex; value: string }>;
   relayrCallKeys?: string[];
   relayrQuote?: RelayrPostBundleResponse;
-  relayrAuthorizationExpiresAt?: number;
-  relayrPaymentStatus?: "unfunded" | "submitted" | "confirmed" | "reverted";
+  /**
+   * The forwarder nonce each request in `relayrExpectedTransactions` was signed with, in order, in
+   * decimal. Saved only when every request is a forward request.
+   */
+  relayrNonces?: string[];
+  /**
+   * Every request this session published is dead at a canonical finalized block, and why (ruling
+   * R114). Discard ends it; until then a session that may have run still reserves its calls.
+   */
+  relayrDiscardable?: RelayrDiscardReason;
+  /**
+   * "expired": a quote nothing can fund any more, proven onchain, or one a new quote for its calls
+   * replaced at the same forwarder nonces. It no longer reserves its calls.
+   */
+  relayrPaymentStatus?: "unfunded" | "submitted" | "confirmed" | "reverted" | "expired";
   /** A caller-specific receipt/postcondition check must pass before success is trusted. */
   manualVerificationRequired?: boolean;
   chainStates?: Array<{
@@ -70,6 +138,15 @@ let persistedValue: string | null | undefined;
 let storageWriteFailed = false;
 let storageReadFailed = false;
 const listeners = new Set<() => void>();
+
+/** Shared identity for one reviewed direct call and its durable submission evidence. */
+export function contractTransactionKey(
+  account: Address,
+  chainId: number,
+  call: { address: Address; value?: bigint; data: Hex },
+): string {
+  return `${account.toLowerCase()}:${chainId}:${call.address.toLowerCase()}:${call.value ?? 0n}:${call.data}`;
+}
 
 function parseActivities(raw: string | null): TransactionActivity[] {
   const parsed: unknown = JSON.parse(raw ?? "[]");
@@ -168,8 +245,8 @@ export function refreshTransactionActivities(): TransactionActivity[] {
 export function requireTransactionActivityPersistence(): void {
   refreshTransactionActivities();
   if (typeof window === "undefined" || storageWriteFailed || storageReadFailed) {
-    throw new Error(
-      "Transaction recovery storage is unavailable. Restore browser storage before publishing signatures or sending a Relayr payment.",
+    throw new ReviewRefusal(
+      "Transaction recovery storage is unavailable. Restore browser storage before publishing signatures or sending a payment.",
     );
   }
 }
@@ -228,6 +305,24 @@ export function updateTransactionActivity(
   ]);
 }
 
+/** Restore only the exact payment marker whose wallet invocation was refused. */
+export function restoreUnsentPaymentActivity(
+  expected: TransactionActivity,
+  previous: TransactionActivity,
+): void {
+  requireTransactionActivityPersistence();
+  const current = snapshot.find((row) => row.id === expected.id);
+  if (
+    expected.id !== previous.id ||
+    expected.relayrPaymentStatus !== "submitted" ||
+    JSON.stringify(current) !== JSON.stringify(expected)
+  ) {
+    throw new Error("The saved submission changed. Preserve its recovery record.");
+  }
+  emit(snapshot.map((row) => (row.id === expected.id ? structuredClone(previous) : row)));
+  requireTransactionActivityPersistence();
+}
+
 /**
  * Quarantine a mined write whose action-specific verification did not finish.
  * The hash remains an in-flight dedupe lock, and the generic receipt watcher
@@ -253,6 +348,17 @@ export function failTransactionActivityVerification(hash: Hex, message: string):
   });
 }
 
+/** Settle a mined write whose verification proved it failed: nothing changed, so it may be sent again. */
+export function settleTransactionActivityFailure(hash: Hex, message: string): void {
+  const current = transactionActivityForHash(hash);
+  if (!current) return;
+  updateTransactionActivity(current.id, {
+    status: "failed",
+    message,
+    manualVerificationRequired: false,
+  });
+}
+
 export function releaseTransactionActivityVerification(hash: Hex, message: string): void {
   const current = transactionActivityForHash(hash);
   if (!current) return;
@@ -265,8 +371,16 @@ export function releaseTransactionActivityVerification(hash: Hex, message: strin
 
 export function dismissTransactionActivity(id: string): void {
   refreshTransactionActivities();
-  if (snapshot.find((row) => row.id === id)?.manualVerificationRequired) return;
-  emit(snapshot.filter((row) => row.id !== id));
+  const row = snapshot.find((activity) => activity.id === id);
+  // A held entry stays until it is verified, unless the app can never confirm it, or a Relayr
+  // session none of whose requests can run again is discarded.
+  if (row?.manualVerificationRequired && !row.safeResultUnconfirmed && !row.relayrDiscardable)
+    return;
+  // A proven execution is the only evidence of what ran; its receipt settles it first.
+  if (row?.safeExecutionProven && row.status !== "success" && row.status !== "failed") return;
+  // A Safe proposal still followed is held; only one the app can't confirm may be dismissed.
+  if (row?.status === "safe-proposed" && !row.safeResultUnconfirmed) return;
+  emit(snapshot.filter((activity) => activity.id !== id));
 }
 
 export function transactionActivityForHash(hash?: Hex): TransactionActivity | undefined {

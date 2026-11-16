@@ -1,0 +1,120 @@
+{
+  "status": "superseded-do-not-execute",
+  "chainId": 8453,
+  "admin": "0x823b92d6a4b2AED4b15675c7917c9f922ea8ADAD",
+  "configuration": {
+    "boardName": "revnet.money",
+    "strategy": "Buy",
+    "revProjectId": "3",
+    "addToBalance": true,
+    "payerOwner": "0x0000000000000000000000000000000000000000",
+    "payerBeneficiary": "0x0000000000000000000000000000000000000000",
+    "payerMemo": "Markee revnet.money",
+    "payerMetadata": "0x"
+  },
+  "verifiedExistingContracts": {
+    "payerFactory": "0x7321740fd0dcf73dd3e2aa8fc060454abfce9517",
+    "payerImplementation": "0x0de147532f522fe9f4559bd7F34774786424176E",
+    "directory": "0x5AfF29060E023e6FB87BE5596652B33c65Af535B",
+    "revTerminal": "0x130f5dd2bd8805443cf41755253d778a75a67f53",
+    "revStore": "0x7497ae014A60561925B51C0A3B4adE7460B9927C",
+    "revToken": "0x3dD82a891C80Db068e95708E83583d626E2c1Fac",
+    "markeeBuyFactory": "0xFD488A0fE8D4Fa99B4A6016EA9C49a860A553F7c",
+    "markeeBoardImplementation": "0x47aa55A2beA82283EADB40404cB6427C101a7AA7",
+    "markeeMessageImplementation": "0x2a7e19A3966aaF6F508631BA262dB5Ec6216322D"
+  },
+  "observedMarkeeConfig": {
+    "beneficiaryBps": "6200",
+    "minimumBidWei": "1000000000000000",
+    "messageLimitUtf8Bytes": 222,
+    "nameLimitUtf8Bytes": 22,
+    "markeeProjectId": "7",
+    "markeeTerminal": "0x130f5dd2bd8805443cf41755253d778a75a67f53",
+    "factoryAdmin": "0xAf4401E765dFf079aB6021BBb8d46E53E27613DB",
+    "mutableByFactoryAdmin": true
+  },
+  "inventory": {
+    "revBaseProject": "8453:3:6",
+    "indexerEndpoint": "https://bendystraw.up.railway.app/graphql",
+    "indexedRevPayerCount": 0,
+    "matchingBoardNameFound": false,
+    "buyFactoryBoardCount": 47,
+    "limitations": "Zero indexed REV payers is not proof of complete absence. Historical factory log scan was unavailable from checked public endpoints (rate limit/archive access). Recheck inventory before deployment; reuse a compatible payer if one is supplied/found."
+  },
+  "steps": [
+    {
+      "id": "create-payer-if-no-compatible-existing-instance",
+      "from": "0x823b92d6a4b2AED4b15675c7917c9f922ea8ADAD",
+      "to": "0x7321740fd0dcf73dd3e2aa8fc060454abfce9517",
+      "valueWei": "0",
+      "function": "deployProjectPayer(uint256,address,string,bytes,bool,address)",
+      "args": [
+        "3",
+        "0x0000000000000000000000000000000000000000",
+        "Markee revnet.money",
+        "0x",
+        true,
+        "0x0000000000000000000000000000000000000000"
+      ],
+      "calldata": "0xa396f5e90000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000134d61726b6565207265766e65742e6d6f6e6579000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "receiptRequirement": "Require canonical successful receipt; decode DeployProjectPayer from this exact factory, validate all settings/code/DIRECTORY and owner zero before binding step 2."
+    },
+    {
+      "id": "create-buy-board",
+      "from": "0x823b92d6a4b2AED4b15675c7917c9f922ea8ADAD",
+      "to": "0xFD488A0fE8D4Fa99B4A6016EA9C49a860A553F7c",
+      "valueWei": "0",
+      "function": "createLeaderboard(address,string)",
+      "args": [
+        {
+          "useVerifiedAddressFrom": "step-1 DeployProjectPayer.projectPayer or a verified existing compatible payer"
+        },
+        "revnet.money"
+      ],
+      "calldata": "Encode only after the actual payer address is verified; never bind the fork-predicted address automatically.",
+      "receiptRequirement": "Decode LeaderboardCreated; verify board admin equals selected admin, beneficiary equals actual verified payer, factory/implementation and defaults. Save actual board/seed addresses for homepage configuration."
+    }
+  ],
+  "simulation": {
+    "kind": "isolated-local-Base-fork",
+    "forkBlock": "52396129",
+    "evidenceFile": "markee-buy-fork-evidence.json",
+    "bidWei": "1000000000000000",
+    "revBalanceIncreaseWei": "620000000000000",
+    "revSupplyUnchanged": true,
+    "payerEthRemainderWei": "0",
+    "addressesAndReceiptInEvidenceAre": "LOCAL-FORK-ONLY-NOT-LIVE",
+    "runtimeComparison": "Live payer implementation equals pinned runtime with all compiler-declared DIRECTORY/DEPLOYER immutable references patched to verified deployed addresses."
+  },
+  "executionRequirements": [
+    "Keep planning-only until implementation/setup execution is authorized.",
+    "Freshly recheck chain/account/factory implementation/settings/REV terminal and inventory before any live transaction.",
+    "A simulated address is conditional on factory nonce; obtain actual addresses from verified receipts.",
+    "Preserve any submitted/hashless uncertain attempt and recover it before retrying deployment.",
+    "Initial setup requires chosen wallet execution authorization; no new Solidity or recurring admin signing is required for Buy forwarding."
+  ],
+  "frontendNextStep": {
+    "entry": "src/app/page.tsx below HomepageDiscovery",
+    "scope": "native Buy card and dialog; homepage only",
+    "reuse": [
+      "existing dialogs/wallet",
+      "useReviewedWriteContract",
+      "transaction review/activity and recovery",
+      "wagmi Base transport"
+    ],
+    "configRequired": "actual verified Buy board address from setup receipt",
+    "acceptance": [
+      "UTF-8 length limits",
+      "owner-only edit",
+      "stale/racing bids",
+      "wrong account/chain",
+      "moderation/data failure",
+      "ambiguous receipt recovery",
+      "mobile/keyboard",
+      "npm run check"
+    ],
+    "publishGate": "public server HTML includes data-markee-address, then independently complete Verify Embed and verify marketplace; no external verification write performed during planning."
+  },
+  "supersededBy": "markee-rent-setup.json",
+  "supersededReason": "2026-10-12 user chose Rent and direct team.rev.eth beneficiary instead of Buy and REV addToBalance."
+}

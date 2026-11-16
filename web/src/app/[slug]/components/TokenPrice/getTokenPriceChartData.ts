@@ -102,6 +102,8 @@ export async function getTokenPriceChartData(params: {
     getFloorPriceHistory({
       suckerGroupId,
       chainId,
+      projectId: Number(projectId),
+      baseToken: baseToken.address,
       baseTokenDecimals: baseToken.decimals,
       currentCashOutTax,
       projectStart,
@@ -127,7 +129,7 @@ export async function getTokenPriceChartData(params: {
     ? [[] as BaseRatePoint[], 1]
     : await Promise.all([
         baseIsUsd(baseCurrency)
-          ? fetchPayEventRates(chainId, Number(projectId), baseToken.decimals)
+          ? fetchPayEventRates(chainId, Number(projectId), baseToken.address, baseToken.decimals)
           : Promise.resolve([] as BaseRatePoint[]),
         fetchLiveBasePerAccountingToken(
           chainId,

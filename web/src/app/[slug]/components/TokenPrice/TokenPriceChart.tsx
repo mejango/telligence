@@ -16,13 +16,13 @@ import { RangeOption, RangeSelector } from "@/components/ui/range-selector";
 import { formatClock, formatMonthDay, formatMonthYear } from "@/lib/date";
 import { shouldShowCashOutAsymptote } from "@/lib/minimumCashOutPrice";
 import { useJBTokenContext } from "@/lib/nana/project";
-import { formatDecimals } from "@/lib/number";
+import { formatPriceValue } from "@/lib/number";
 import { bucketPoolReserves } from "@/lib/priceSeries";
 import { cachedQuery } from "@/lib/query-persist";
 import { parseTimeRange, TimeRange } from "@/lib/timeRange";
 import { formatTokenSymbol } from "@/lib/utils";
 import { JBChainId } from "@bananapus/nana-sdk-core";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { ChartToggleButton } from "./ChartToggleButton";
@@ -67,7 +67,16 @@ export function TokenPriceChart({
 
   const { data, isLoading } = useQuery(
     cachedQuery({
-      queryKey: ["chartData", projectId, chainId, suckerGroupId, range],
+      queryKey: [
+        "chartData",
+        projectId,
+        chainId,
+        suckerGroupId,
+        range,
+        token,
+        tokenSymbol,
+        tokenDecimals,
+      ],
       queryFn: () =>
         getTokenPriceChartData({
           projectId,
@@ -76,7 +85,21 @@ export function TokenPriceChart({
           suckerGroupId,
           baseToken: { address: token, symbol: tokenSymbol, decimals: tokenDecimals },
         }),
-      placeholderData: keepPreviousData,
+      // Retain the last range while another loads, never another project's or
+      // accounting token's values under the new chart labels.
+      placeholderData: (
+        previousData: Awaited<ReturnType<typeof getTokenPriceChartData>> | undefined,
+        previousQuery: { queryKey: readonly unknown[] } | undefined,
+      ) =>
+        previousQuery?.queryKey[1] === projectId &&
+        previousQuery.queryKey[2] === chainId &&
+        previousQuery.queryKey[3] === suckerGroupId &&
+        previousQuery.queryKey[5] === token &&
+        previousQuery.queryKey[6] === tokenSymbol &&
+        previousQuery.queryKey[7] === tokenDecimals
+          ? previousData
+          : undefined,
+      staleTime: PRICE_REFRESH_MS,
       refetchInterval: PRICE_REFRESH_MS,
       refetchOnWindowFocus: true,
     }),
@@ -303,12 +326,11 @@ export function TokenPriceChart({
           ariaLabel={`${tokenSymbol} price history`}
           description={`Issuance, ${marketPriceView === "smooth" ? "time-weighted pool" : "every post-trade pool"}, and cash out prices for ${tokenSymbol} over the selected ${range} range.${showCashOutAsymptote ? " The dotted line is the cash-out asymptote." : ""}`}
           className="mt-2 aspect-[4/3] sm:aspect-[2/1] lg:aspect-[5/2] w-full"
-          showYTickLabels={false}
-          margin={{ left: 1, right: 20, top: 24, bottom: 36 }}
+          margin={{ left: 72, right: 4, top: 24, bottom: 36 }}
           xDomain={[firstTimestamp ?? 0, lastTimestamp ?? 1]}
           yDomain={[0, maxVisiblePrice > 0 ? maxVisiblePrice * 1.1 : 1]}
           formatXTick={(timestamp) => formatXAxis(timestamp, range)}
-          formatYTick={(value) => formatDecimals(value, 6)}
+          formatYTick={formatPriceValue}
           referenceLines={referenceLines}
           bars={reserveBars}
           tooltip={({ datum, series }) => (
@@ -317,6 +339,7 @@ export function TokenPriceChart({
               series={series}
               baseTokenSymbol={tokenSymbol}
               baseTokenDecimals={tokenDecimals}
+              priceSymbol={axisSymbol}
               range={range}
               poolReserves={showAmm ? (data?.poolReserves ?? []) : []}
               projectTokenSymbol={projectTokenSymbol}

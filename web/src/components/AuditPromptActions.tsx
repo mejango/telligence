@@ -25,6 +25,7 @@ const PROMPTS = [
 
 export function AuditPromptActions() {
   const [copied, setCopied] = useState<string | null>(null);
+  const [blocked, setBlocked] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
@@ -37,26 +38,54 @@ export function AuditPromptActions() {
   return (
     <div className="divide-y divide-teal-100 border-y border-teal-200">
       {PROMPTS.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(item.prompt);
-              setCopied(item.id);
-              if (timer.current) clearTimeout(timer.current);
-              timer.current = setTimeout(() => setCopied(null), 2000);
-            } catch {
-              setCopied(null);
-            }
-          }}
-          className="flex min-h-14 w-full items-center justify-between gap-5 py-3 text-left text-sm hover:text-teal-700"
-        >
-          <span>{item.label}</span>
-          <span className="shrink-0 text-xs text-zinc-500">
-            {copied === item.id ? "Copied" : "Copy"}
-          </span>
-        </button>
+        <div key={item.id}>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(item.prompt);
+                setBlocked(null);
+                setCopied(item.id);
+                if (timer.current) clearTimeout(timer.current);
+                timer.current = setTimeout(() => setCopied(null), 2000);
+              } catch {
+                setCopied(null);
+                setBlocked(item.id);
+              }
+            }}
+            className="flex min-h-14 w-full items-center justify-between gap-5 py-3 text-left text-sm hover:text-teal-700"
+          >
+            <span>{item.label}</span>
+            <span className="shrink-0 text-xs text-zinc-500">
+              {copied === item.id ? "Copied" : "Copy"}
+            </span>
+          </button>
+          {blocked === item.id ? (
+            <p role="status" className="mb-2 text-sm leading-relaxed text-zinc-700">
+              Copy was blocked by your browser. Select and copy the prompt below.
+            </p>
+          ) : null}
+          {/* Always in the page HTML, so a reader without a clipboard still gets the prompt. */}
+          <details className="pb-4 text-sm" open={blocked === item.id ? true : undefined}>
+            <summary className="min-h-11 cursor-pointer py-3 text-melon-900 underline underline-offset-4">
+              Read or manually copy the prompt
+            </summary>
+            <label
+              htmlFor={`audit-prompt-${item.id}`}
+              className="mb-2 block font-semibold text-zinc-900"
+            >
+              {item.label}
+            </label>
+            <textarea
+              id={`audit-prompt-${item.id}`}
+              readOnly
+              value={item.prompt}
+              rows={10}
+              spellCheck={false}
+              className="block w-full border border-melon-700 bg-white p-3 text-sm leading-relaxed text-zinc-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-melon-800"
+            />
+          </details>
+        </div>
       ))}
     </div>
   );

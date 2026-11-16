@@ -2,25 +2,33 @@ import { useToast } from "@/components/ui/use-toast";
 import { useBorrowableAmountFrom } from "@/hooks/useBorrowableAmountFrom";
 import { useProjectBaseToken } from "@/hooks/useProjectBaseToken";
 import {
-  isSafeProposalPendingError,
-  requireOnchainExecution,
-  useWaitForTransactionReceipt,
-  useWriteContract,
-} from "@/hooks/useReviewedWriteContract";
+  failedLine,
+  reviewedCall,
+  ReviewRefusal,
+  SAFE_PROPOSAL_PENDING_LINE,
+  useReviewedAction,
+  type ReviewedAction,
+  type ReviewedActionInput,
+  type ReviewedCall,
+} from "@/hooks/useReviewedAction";
 import { ProjectOperation, SuckerGroupOperation, useBendystrawQuery } from "@/lib/bendystraw";
 import { generateFeeData } from "@/lib/feeHelpers";
+import { legacyIntents } from "@/lib/legacy-intents";
 import {
   buildProtectedBorrowTx,
   buildProtectedReallocateCollateralTx,
+  LOAN_SOURCE_CHANGED,
+  LOAN_SOURCE_UNREADABLE,
   minimumBorrowAmount,
   readFreshBorrowableAmount,
+  readLoanSource,
+  sameLoanSource,
 } from "@/lib/loanTransactions";
 import { useJBChainId, useJBContractContext, useJBTokenContext } from "@/lib/nana/project";
 import { useSuckersUserTokenBalance } from "@/lib/nana/suckers";
 import type { JBChainId } from "@/lib/nana/types";
 import { getTokenConfigForChain, getTokenSymbolFromAddress } from "@/lib/tokenUtils";
 import { formatWalletError } from "@/lib/utils";
-import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
 import {
   getRevnetLoanContract,
   JB_TOKEN_DECIMALS,
@@ -29,24 +37,69 @@ import {
   revLoansAbi,
   RevnetCoreContracts,
 } from "@bananapus/nana-sdk-core";
+import { borrowIntent, loanIntent } from "@bananapus/nana-sdk-core/review";
 import { hasPermissions, JBPermissionIdsV6 } from "@bananapus/nana-sdk-core/v6";
-import { useCallback, useEffect, useState } from "react";
-import { formatUnits, parseUnits } from "viem";
+import {
+  MIN_PREPAID_FEE_PERCENT,
+  REV_PREPAID_FEE_PERCENT,
+} from "@bananapus/nana-sdk-core/v6/loan-math";
+import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { formatUnits, isAddressEqual, parseUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWalletClient } from "wagmi";
 
-// Types
-type BorrowState =
+/** What the loan dialog shows of its send. */
+export type LoanStatus =
   | "idle"
   | "checking"
   | "granting-permission"
-  | "permission-granted"
   | "waiting-signature"
   | "pending"
+  // Proposed to a Safe: nothing is created until the Safe executes it.
+  | "proposed"
   | "success"
-  | "error-permission-denied"
-  | "error-loan-canceled"
   | "error"
-  | "reallocation-pending";
+  | "reallocation-pending"
+  | "safe-unconfirmed";
+
+/**
+ * The loan send outside its runner: the reads before it, then which runner sends it, which
+ * wallet prompt it last opened, and whether its run ended at a Safe proposal the runner follows.
+ * Everything after that is the runner's own phase.
+ */
+type LoanAttempt =
+  | { status: "idle" | "checking" | "error" }
+  | {
+      status: "sending";
+      runner: "borrow" | "reallocation";
+      prompt?: "grant" | "loan";
+      proposed?: true;
+    };
+
+/** The loan's status: the attempt's own until it sends, then its runner's phase. */
+function loanStatus(attempt: LoanAttempt, run: ReviewedAction): LoanStatus {
+  if (attempt.status !== "sending") return attempt.status;
+  switch (run.phase) {
+    case "receipt":
+      return "pending";
+    // A proposed grant waits for its Safe; a proposed loan whose result can't be known is not failed.
+    case "proposed":
+      return run.held?.exit && attempt.prompt !== "grant" ? "safe-unconfirmed" : "proposed";
+    case "done":
+      return "success";
+    // Ended without a send: failed, or closed until the send returns.
+    case "idle":
+      return run.error ? "error" : "checking";
+    default:
+      return attempt.prompt === "grant"
+        ? "granting-permission"
+        : attempt.prompt === "loan"
+          ? "waiting-signature"
+          : attempt.runner === "reallocation"
+            ? "reallocation-pending"
+            : "checking";
+  }
+}
 
 /**
  * A loan row as the loan tables select it (a superset of Bendystraw's LoanRow;
@@ -85,16 +138,19 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
   const [showingWaitingMessage, setShowingWaitingMessage] = useState(false);
 
   // Borrow-related state
-  const [borrowStatus, setBorrowStatus] = useState<BorrowState>("idle");
+  const [attempt, setAttempt] = useState<LoanAttempt>({ status: "idle" });
+  // A send-time read of the loan source that failed or disagreed with the reviewed one.
+  const [sourceNotice, setSourceNotice] = useState<{ key?: string; line: string }>();
   // The burn permission is read live at submission, so a run only learns it is
   // two prompts once the grant starts. Remembering that keeps the finished
   // grant listed instead of vanishing when the loan step begins.
   const [grantsPermission, setGrantsPermission] = useState(false);
-  useEffect(() => {
-    if (borrowStatus === "granting-permission") setGrantsPermission(true);
-    if (borrowStatus === "idle") setGrantsPermission(false);
-  }, [borrowStatus]);
-  const [collateralAmount, setCollateralAmount] = useState("");
+  const [collateralAmount, setCollateralText] = useState("");
+  /** The second argument (an option's name, or "auto") is kept for callers; keys don't read it. */
+  const setCollateralAmount = useCallback(
+    (value: string, _policy?: string) => setCollateralText(value),
+    [],
+  );
   const [selectedChainId, setSelectedChainId] = useState<number | undefined>(undefined);
   const [cashOutChainId, setCashOutChainId] = useState<string>();
   const [prepaidPercent, setPrepaidPercent] = useState("2.5");
@@ -137,15 +193,6 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
     { enabled: !!suckerGroupId, pollInterval: 30000, chainId: Number(chainId) },
   );
 
-  // ===== PHASE 1: TOKEN RESOLUTION FUNCTION =====
-  // Get the correct token configuration for a specific chain
-  const tokenConfigForChain = useCallback(
-    (chainId: string | number) => {
-      return getTokenConfigForChain(suckerGroupData, Number(chainId));
-    },
-    [suckerGroupData],
-  );
-
   const revLoansContractAddress = cashOutChainId
     ? getRevnetLoanContract(6, Number(cashOutChainId) as JBChainId)
     : undefined;
@@ -185,18 +232,106 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
     ? BigInt(selectedBalance.projectId)
     : projectId;
 
+  // ===== PHASE 1: THE LOAN SOURCE, READ ONCHAIN =====
+  // REVLoans prices a loan in its terminal's accounting context for the source token, and an
+  // existing loan fixes its own revnet and token. Those come from the loans contract, never the
+  // indexer: the indexer's token only says which of the revnet's own contexts to prefer. The read
+  // starts when a chain is picked, so it has normally landed before the confirm opens.
+  const indexedTokenConfig = selectedBorrowChainId
+    ? getTokenConfigForChain(suckerGroupData, selectedBorrowChainId)
+    : null;
+  const selectedLoanId = internalSelectedLoan?.id;
+  const preferredToken = indexedTokenConfig?.token;
+  const loanSourceArgs = useMemo(
+    () =>
+      selectedBorrowChainId
+        ? {
+            chainId: selectedBorrowChainId,
+            revnetId: effectiveProjectId,
+            loanId: selectedLoanId != null ? BigInt(selectedLoanId) : undefined,
+            preferredToken,
+          }
+        : undefined,
+    [selectedBorrowChainId, effectiveProjectId, selectedLoanId, preferredToken],
+  );
+  const loanSourceKey = loanSourceArgs
+    ? [
+        loanSourceArgs.chainId,
+        loanSourceArgs.revnetId,
+        loanSourceArgs.loanId,
+        loanSourceArgs.preferredToken,
+      ].join(":")
+    : undefined;
+  const loanSourceQuery = useQuery({
+    queryKey: ["revLoanSource", loanSourceKey],
+    enabled: !!publicClient && !!loanSourceArgs,
+    staleTime: 60_000,
+    retry: 1,
+    retryDelay: 250,
+    // A failed read retries on its own, so the line clears without a click.
+    refetchInterval: (query) => (query.state.status === "error" ? 15_000 : false),
+    queryFn: () => readLoanSource(publicClient!, loanSourceArgs!),
+  });
+  const loanSource = loanSourceQuery.data;
+  const refetchLoanSource = loanSourceQuery.refetch;
+  const reviewedLoanSource = loanSource;
+  const loanSourceUpdatedAt = loanSourceQuery.dataUpdatedAt;
+  useEffect(() => {
+    // A read that lands again ends a send-time failure.
+    if (loanSourceUpdatedAt)
+      setSourceNotice((notice) => (notice?.line === LOAN_SOURCE_UNREADABLE ? undefined : notice));
+  }, [loanSourceUpdatedAt]);
+  const notice = sourceNotice?.key === loanSourceKey ? sourceNotice?.line : undefined;
+  const loanSourceLine = loanSourceQuery.isError ? LOAN_SOURCE_UNREADABLE : (notice ?? null);
+  // Only an unreadable source blocks the send; a changed one is shown and confirmed again.
+  const loanSourceBlocked = loanSourceLine === LOAN_SOURCE_UNREADABLE;
+
+  // Get the correct token configuration for a specific chain: the selected chain's is the
+  // onchain loan source (null while it loads or fails); any other chain's is display only.
+  const indexedSymbol =
+    loanSource && indexedTokenConfig && isAddressEqual(indexedTokenConfig.token, loanSource.token)
+      ? indexedTokenConfig.symbol
+      : undefined;
+  const selectedLoanSourceConfig = useMemo(
+    () =>
+      loanSource
+        ? {
+            token: loanSource.token,
+            decimals: loanSource.decimals,
+            currency: loanSource.currency,
+            symbol: indexedSymbol ?? getTokenSymbolFromAddress(loanSource.token),
+          }
+        : null,
+    [loanSource, indexedSymbol],
+  );
+  const tokenConfigForChain = useCallback(
+    (chainId: string | number) =>
+      Number(chainId) === selectedBorrowChainId
+        ? selectedLoanSourceConfig
+        : getTokenConfigForChain(suckerGroupData, Number(chainId)),
+    [suckerGroupData, selectedBorrowChainId, selectedLoanSourceConfig],
+  );
+
   // V6 project ids are a per-chain namespace: the page's prop is the ROUTE chain's id, and
   // quoting it on the loan's chain prices a different revnet. Per-loan reads key on the
-  // loan row's own id, falling back to the sucker-pair id for the selected chain.
+  // loan's own revnet as the loans contract reports it, falling back to the loan row's id
+  // until that read lands (no quote runs before it), else the sucker-pair id for the chain.
   const loanProjectId =
-    internalSelectedLoan?.projectId != null
+    (internalSelectedLoan ? loanSource?.revnetId : undefined) ??
+    (internalSelectedLoan?.projectId != null
       ? BigInt(internalSelectedLoan.projectId)
-      : effectiveProjectId;
+      : effectiveProjectId);
+
+  // Every quote on the selected chain prices the revnet the loans contract names.
+  const quoteRevnetId = loanSource?.revnetId ?? effectiveProjectId;
 
   // Calculate total fixed fees from contract values (in basis points)
-  const totalFixedFees =
-    (minPrepaidFeePercent ? Number(minPrepaidFeePercent) : 0) +
-    (revPrepaidFeePercent ? Number(revPrepaidFeePercent) : 0);
+  // Until the reads land, the protocol's own constants stand in: a fallback of 0 overstated
+  // "to your wallet after fees" by 3.5%.
+  const totalFixedFees = Number(
+    (minPrepaidFeePercent ?? MIN_PREPAID_FEE_PERCENT) +
+      (revPrepaidFeePercent ?? REV_PREPAID_FEE_PERCENT),
+  );
 
   // Used for estimating how much Native could be borrowed if both
   // the existing loan's collateral and new collateral were combined into one.
@@ -219,7 +354,7 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
     args:
       cashOutChainId && selectedChainTokenConfig
         ? ([
-            effectiveProjectId,
+            quoteRevnetId,
             userProjectTokenBalance,
             BigInt(selectedChainTokenConfig.decimals),
             BigInt(selectedChainTokenConfig.currency),
@@ -227,13 +362,13 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
         : undefined,
   });
 
-  const { data: estimatedBorrowFromInputOnly } = useBorrowableAmountFrom({
+  const { data: estimatedBorrowFromInputOnly, isError: inputQuoteError } = useBorrowableAmountFrom({
     address: revLoansContractAddress,
     chainId: cashOutChainId ? (Number(cashOutChainId) as JBChainId) : undefined,
     args:
       collateralAmount && selectedChainTokenConfig
         ? [
-            effectiveProjectId,
+            quoteRevnetId,
             parseUnits(collateralAmount, projectTokenDecimals),
             BigInt(selectedChainTokenConfig.decimals),
             BigInt(selectedChainTokenConfig.currency),
@@ -274,24 +409,30 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
   });
 
   // Transaction hooks
-  const { writeContractAsync, isPending: isWriteLoading, data: txHash } = useWriteContract();
+  const borrow = useReviewedAction();
+  const reallocation = useReviewedAction();
+  // The runner the attempt sends with.
+  const sender =
+    attempt.status === "sending" && attempt.runner === "reallocation" ? reallocation : borrow;
+  const borrowStatus = loanStatus(attempt, sender);
+  useEffect(() => {
+    if (borrowStatus === "idle") setGrantsPermission(false);
+  }, [borrowStatus]);
+  const signing = (runner: ReviewedAction) => runner.busy && runner.status !== "receipt";
+  // A Safe proposal reads as pending until its Safe executes it, unless its result can't be known.
+  const confirming = (runner: ReviewedAction) =>
+    runner.status === "receipt" || (runner.phase === "proposed" && !runner.held?.exit);
+  const isWriteLoading = signing(borrow);
 
-  const {
-    writeContractAsync: reallocateCollateralAsync,
-    isPending: isReallocating,
-    data: reallocationTxHash,
-  } = useWriteContract();
-  const { writeContractAsync: permissionWriteAsync } = useWriteContract();
+  // Transaction status
+  const isTxLoading = confirming(borrow);
 
-  // Transaction status hooks
-  const { isLoading: isTxLoading, isSuccess } = useWaitForTransactionReceipt({
-    hash: txHash,
-  });
-
-  const { isLoading: isReallocationTxLoading, isSuccess: isReallocationSuccess } =
-    useWaitForTransactionReceipt({
-      hash: reallocationTxHash,
-    });
+  /** One reviewed loan step, sent exactly; a failure throws its line. */
+  const send = async (runner: ReviewedAction, action: ReviewedActionInput) => {
+    const result = await runner.run(action);
+    if (result?.status === "failed") throw new ReviewRefusal(failedLine(result));
+    return result;
+  };
 
   // Additional derived values in native tokens
   const netAvailableToBorrow =
@@ -330,7 +471,7 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
     ? parseUnits(collateralAmount, projectTokenDecimals)
     : 0n;
   const newLoanCollateral = collateralCountToTransfer + collateralCountToAdd;
-  const { data: newLoanBorrowableAmount } = useBorrowableAmountFrom({
+  const { data: newLoanBorrowableAmount, isError: newLoanQuoteError } = useBorrowableAmountFrom({
     address: revLoansContractAddress,
     chainId: cashOutChainId ? (Number(cashOutChainId) as JBChainId) : undefined,
     args:
@@ -344,11 +485,12 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
         : undefined,
   });
 
+  const borrowQuote = internalSelectedLoan ? newLoanBorrowableAmount : estimatedBorrowFromInputOnly;
+  const borrowQuoteError = internalSelectedLoan ? newLoanQuoteError : inputQuoteError;
   const minimumBorrowAmountPreview = (() => {
-    const quote = internalSelectedLoan ? newLoanBorrowableAmount : estimatedBorrowFromInputOnly;
-    if (quote === undefined || quote <= 0n) return undefined;
+    if (borrowQuote === undefined || borrowQuote <= 0n) return undefined;
     try {
-      return minimumBorrowAmount(quote);
+      return minimumBorrowAmount(borrowQuote);
     } catch {
       return undefined;
     }
@@ -397,12 +539,12 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
         setSelectedTab(defaultTab ?? "borrow");
       } else {
         // Clear all form state
-        setCollateralAmount("");
+        setCollateralAmount("", "auto");
         setPrepaidPercent("2.5");
         setGrossBorrowedNative(0);
 
         // Clear all status states
-        setBorrowStatus("idle");
+        setAttempt({ status: "idle" });
 
         // Clear chain selection and loan data
         setCashOutChainId(undefined);
@@ -418,7 +560,7 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
         setShowingWaitingMessage(false);
       }
     },
-    [defaultTab],
+    [defaultTab, setCollateralAmount],
   );
 
   const handleChainSelection = useCallback(
@@ -427,10 +569,10 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
       const collateral = selected ? formatUnits(selected.balance.value, projectTokenDecimals) : "0";
       setSelectedChainId(chainId);
       setCashOutChainId(chainId.toString());
-      setCollateralAmount(collateral);
+      setCollateralAmount(collateral, "auto");
       setInternalSelectedLoan(null);
     },
-    [balances, projectTokenDecimals],
+    [balances, projectTokenDecimals, setCollateralAmount],
   );
 
   const handleLoanSelection = useCallback((_loanId: string, loanData: SelectedLoan) => {
@@ -444,44 +586,33 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
   }, []);
 
   /**
-   * Ensure REVLoans holds BURN_TOKENS for this account+project, granting it if not.
-   *
-   * Shared by BOTH submit paths. The reallocation branch used to skip it entirely, so a
-   * reallocation that ADDS collateral hit a simulation failure with no grant step offered and
-   * no way forward from this UI — the standard borrow path had the step all along.
-   *
-   * Returns true when the caller may proceed. A false return has already set status and
-   * toasted, including the Safe-proposal-pending case.
+   * The BURN_TOKENS grant REVLoans still needs for this account+project, as the first step of the
+   * loan's one review, or null when it already holds it. Both submit paths use it: a reallocation
+   * that ADDS collateral burns tokens exactly as a borrow does.
    */
-  const ensureBurnTokensPermission = useCallback(async (): Promise<boolean> => {
+  const burnPermissionCall = useCallback(async (): Promise<ReviewedCall | null> => {
     if (
       !publicClient ||
       !address ||
       !cashOutChainId ||
       !revLoansContractAddress ||
       !resolvedPermissionsAddress
-    ) {
-      setBorrowStatus("error");
-      return false;
-    }
-
-    // Read permission live at submission time. The indexer can lag a newly
-    // granted permission, and treating an unresolved query as `false`
-    // would prompt an unnecessary approval. Loans need BURN_TOKENS (11),
+    )
+      throw new Error("This network is unavailable. Nothing was submitted.");
+    // Read live at submission: the indexer can lag a new grant. Loans need BURN_TOKENS (11),
     // never the much broader ROOT permission (1).
-    const hasBorrowPermission = await hasPermissions(publicClient, {
+    const held = await hasPermissions(publicClient, {
       chainId: Number(cashOutChainId) as JBChainId,
       operator: revLoansContractAddress,
       account: address,
       projectId: loanProjectId,
       permissionIds: [JBPermissionIdsV6.BURN_TOKENS],
     });
-    if (!hasBorrowPermission) {
-      setBorrowStatus("granting-permission");
-      try {
-        const txHash = await permissionWriteAsync({
-          chainId: cashOutChainId ? (Number(cashOutChainId) as JBChainId) : undefined,
-          account: address,
+    setGrantsPermission(!held);
+    return held
+      ? null
+      : reviewedCall({
+          chainId: Number(cashOutChainId) as JBChainId,
           address: resolvedPermissionsAddress,
           abi: jbPermissionsAbi,
           functionName: "setPermissionsFor",
@@ -494,223 +625,280 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
             },
           ],
         });
-        requireOnchainExecution(txHash, "Borrow permission grant");
-        const permissionReceipt = await waitForReceiptWithRetry(publicClient, txHash);
-        if (permissionReceipt.status !== "success") {
-          throw new Error(`Permission grant ${txHash} reverted onchain.`);
-        }
-        setBorrowStatus("permission-granted");
-      } catch (err) {
-        if (isSafeProposalPendingError(err)) {
-          setBorrowStatus("pending");
-          toast({
-            title: "Safe permission proposal submitted",
-            description: err.message,
-          });
-          return false;
-        }
-        setBorrowStatus("error-permission-denied");
-        toast({
-          variant: "destructive",
-          title: "Permission Denied",
-          description: "Permission was not granted. Please approve to proceed.",
-        });
-        return false;
-      }
-    } else {
-      setBorrowStatus("permission-granted");
-    }
-    return true;
   }, [
     address,
     cashOutChainId,
     loanProjectId,
-    permissionWriteAsync,
     publicClient,
     resolvedPermissionsAddress,
     revLoansContractAddress,
-    toast,
   ]);
 
-  const handleBorrow = useCallback(async () => {
-    // Get token configuration for the selected chain
-    const selectedChainTokenConfig = cashOutChainId ? tokenConfigForChain(cashOutChainId) : null;
-
-    // Validate that we have token configuration for the selected chain
-    if (!selectedChainTokenConfig) {
-      setBorrowStatus("error");
-      toast({
-        variant: "destructive",
-        title: "Configuration Error",
-        description: "Unable to determine token configuration for the selected chain.",
-      });
-      return;
-    }
-
-    if (
-      internalSelectedLoan &&
-      collateralAmount !== undefined &&
-      !isNaN(Number(collateralAmount))
-    ) {
-      // Reallocation path - allow 0 additional capital
-      if (!internalSelectedLoan || !cashOutChainId || !address || !walletClient) {
-        setBorrowStatus("error");
-        return;
-      }
-
-      // collateralCountToAdd: The amount of collateral to add to the new loan (can be 0)
-      // Should be in project token decimals, not base token decimals
-      const collateralCountToAdd = parseUnits(collateralAmount || "0", projectTokenDecimals);
-
-      // feePercent: The fee percent for the new loan
-      const feePercent = BigInt(Math.round(parseFloat(prepaidPercent) * 10));
-
-      // Validate that the reallocation won't result in a borrow amount less than the original
-      if (
-        selectedLoanReallocAmount !== undefined &&
-        selectedLoanReallocAmount < BigInt(internalSelectedLoan.borrowAmount)
-      ) {
-        setBorrowStatus("error");
-        toast({
-          variant: "destructive",
-          title: "Invalid Reallocation",
-          description:
-            "Adding this collateral would result in a borrow amount less than your original loan. Please add more collateral.",
-        });
-        return;
-      }
-
-      // Adding collateral burns project tokens, exactly as the standard borrow path does, so
-      // it needs the same BURN_TOKENS grant. Skipping this left the user at a simulation
-      // failure with no grant step offered.
-      if (collateralCountToAdd > 0n && !(await ensureBurnTokensPermission())) return;
-
-      try {
-        if (!publicClient) {
-          throw new Error("The selected chain is unavailable. Nothing was submitted.");
-        }
-
-        const newLoanCollateralCount = collateralCountToTransfer + collateralCountToAdd;
-        const freshBorrowableAmount = await readFreshBorrowableAmount(publicClient, {
-          chainId: Number(cashOutChainId) as JBChainId,
-          // The loan's chain carries its OWN revnet id — the page's prop is the route chain's.
-          // A mismatch quotes a different revnet's borrowable amount, which then becomes both the
-          // tx's collateral-transfer argument and its slippage floor.
-          revnetId: loanProjectId,
-          collateralCount: newLoanCollateralCount,
-          decimals: BigInt(selectedChainTokenConfig.decimals),
-          currency: BigInt(selectedChainTokenConfig.currency),
-        });
-
-        setBorrowStatus("waiting-signature");
-
-        await reallocateCollateralAsync(
-          buildProtectedReallocateCollateralTx({
-            chainId: Number(cashOutChainId) as JBChainId,
-            loanId: BigInt(internalSelectedLoan.id),
-            collateralCountToTransfer,
-            token: selectedChainTokenConfig.token,
-            quotedBorrowAmount: freshBorrowableAmount,
-            collateralCountToAdd,
-            beneficiary: address,
-            prepaidFeePercent: feePercent,
+  /**
+   * The loan's one run: the grant first when one is needed, then the loan call. Only the loan's
+   * hash is the loan's; a grant that went to a Safe as a proposal ends the run there.
+   * "closed" when the review was closed and nothing was sent.
+   */
+  const sendLoan = useCallback(
+    async (
+      kind: "borrow" | "reallocation",
+      grant: ReviewedCall | null,
+      loan: ReviewedCall,
+      context: ReviewedActionInput["context"],
+    ) => {
+      setAttempt({ status: "sending", runner: kind });
+      const result = await send(kind === "borrow" ? borrow : reallocation, {
+        account: address,
+        context,
+        scope: grant ? loan.intent : undefined,
+        beforeWallet: (_call, step) =>
+          setAttempt({
+            status: "sending",
+            runner: kind,
+            prompt: grant && step === 0 ? "grant" : "loan",
           }),
+        calls: [...(grant ? [grant] : []), grant ? { ...loan, dependsOnPrior: true } : loan],
+      });
+      if (!result) return "closed" as const;
+      if (result.status === "proposed")
+        setAttempt((now) =>
+          now.status === "sending" && now.runner === kind ? { ...now, proposed: true } : now,
         );
-      } catch (err) {
-        setBorrowStatus("error");
+      if (grant && result.status === "proposed" && result.step === 0) {
         toast({
-          variant: "destructive",
-          title: "Reallocation Failed",
-          description: formatWalletError(err),
+          title: "Safe permission proposal submitted",
+          description: SAFE_PROPOSAL_PENDING_LINE,
         });
       }
-    } else {
-      // Standard borrow path
+      return result.status;
+    },
+    [address, borrow, reallocation, toast],
+  );
+
+  const handleBorrow = useCallback(
+    async (context?: ReviewedActionInput["context"]) => {
+      // The loan source is read again from the loans contract at send: the quote, the
+      // minimum and the calldata all use what the chain says now.
+      // Busy from the first read, so the dialog cannot close under the send.
+      setAttempt({ status: "checking" });
+      let selectedChainTokenConfig: Awaited<ReturnType<typeof readLoanSource>>;
       try {
-        setBorrowStatus("checking");
+        if (!publicClient || !loanSourceArgs) throw new Error(LOAN_SOURCE_UNREADABLE);
+        selectedChainTokenConfig = await readLoanSource(publicClient, loanSourceArgs);
+      } catch {
+        setSourceNotice({ key: loanSourceKey, line: LOAN_SOURCE_UNREADABLE });
+        setAttempt({ status: "error" });
+        void refetchLoanSource();
+        return;
+      }
+      // The confirm showed the cached source; if the chain now says otherwise, show the new
+      // terms in place and send nothing until they are confirmed.
+      if (!reviewedLoanSource || !sameLoanSource(reviewedLoanSource, selectedChainTokenConfig)) {
+        setSourceNotice({ key: loanSourceKey, line: LOAN_SOURCE_CHANGED });
+        setAttempt({ status: "error" });
+        void refetchLoanSource();
+        return;
+      }
+      setSourceNotice(undefined);
 
+      if (
+        internalSelectedLoan &&
+        collateralAmount !== undefined &&
+        !isNaN(Number(collateralAmount))
+      ) {
+        // Reallocation path - allow 0 additional capital
+        if (!internalSelectedLoan || !cashOutChainId || !address || !walletClient) {
+          setAttempt({ status: "error" });
+          return;
+        }
+
+        // collateralCountToAdd: The amount of collateral to add to the new loan (can be 0)
+        // Should be in project token decimals, not base token decimals
+        const collateralCountToAdd = parseUnits(collateralAmount || "0", projectTokenDecimals);
+
+        // feePercent: The fee percent for the new loan
+        const feePercent = BigInt(Math.round(parseFloat(prepaidPercent) * 10));
+
+        // Validate that the reallocation won't result in a borrow amount less than the original
         if (
-          !walletClient ||
-          !publicClient ||
-          !address ||
-          !cashOutChainId ||
-          !resolvedPermissionsAddress
+          selectedLoanReallocAmount !== undefined &&
+          selectedLoanReallocAmount < BigInt(internalSelectedLoan.borrowAmount)
         ) {
-          setBorrowStatus("error");
+          setAttempt({ status: "error" });
+          toast({
+            variant: "destructive",
+            title: "Cannot refinance",
+            description: "These tokens cannot back the original debt. Add more tokens.",
+          });
           return;
         }
 
-        const feeBasisPoints = Math.round(parseFloat(prepaidPercent) * 10);
-        if (!(await ensureBurnTokensPermission())) return;
-
-        // collateralBigInt should be in project token decimals, not base token decimals
-        const collateralBigInt = parseUnits(collateralAmount, projectTokenDecimals);
-
-        if (!writeContractAsync) {
-          setBorrowStatus("error");
-          return;
-        }
+        // Busy from here, as the standard path is: the reads before the wallet
+        // prompt are part of the send, and its dialog must not close under them.
+        setAttempt({ status: "checking" });
 
         try {
+          // Adding collateral burns project tokens, exactly as the standard borrow path does, so
+          // it needs the same BURN_TOKENS grant; without it the refinance fails in simulation with
+          // no grant step offered. A permission read that fails ends here, in the error state.
+          const grant = collateralCountToAdd > 0n ? await burnPermissionCall() : null;
+
+          if (!publicClient) {
+            throw new Error("This network is unavailable. Nothing was submitted.");
+          }
+
+          const newLoanCollateralCount = collateralCountToTransfer + collateralCountToAdd;
           const freshBorrowableAmount = await readFreshBorrowableAmount(publicClient, {
             chainId: Number(cashOutChainId) as JBChainId,
-            revnetId: effectiveProjectId,
-            collateralCount: collateralBigInt,
+            // The loan's chain carries its OWN revnet id — the page's prop is the route chain's.
+            // A mismatch quotes a different revnet's borrowable amount, which then becomes both the
+            // tx's collateral-transfer argument and its slippage floor.
+            revnetId: selectedChainTokenConfig.revnetId,
+            collateralCount: newLoanCollateralCount,
             decimals: BigInt(selectedChainTokenConfig.decimals),
             currency: BigInt(selectedChainTokenConfig.currency),
           });
 
-          setBorrowStatus("waiting-signature");
-          await writeContractAsync(
-            buildProtectedBorrowTx({
-              chainId: Number(cashOutChainId) as JBChainId,
-              revnetId: effectiveProjectId,
-              token: selectedChainTokenConfig.token,
-              quotedBorrowAmount: freshBorrowableAmount,
-              collateralCount: collateralBigInt,
-              beneficiary: address as `0x${string}`,
-              prepaidFeePercent: BigInt(feeBasisPoints),
-              holder: address as `0x${string}`,
-            }),
+          // Held by the loan alone: the borrowable amount and the collateral moved follow its capacity.
+          const sent = await sendLoan(
+            "reallocation",
+            grant,
+            reviewedCall(
+              buildProtectedReallocateCollateralTx({
+                chainId: Number(cashOutChainId) as JBChainId,
+                loanId: BigInt(internalSelectedLoan.id),
+                collateralCountToTransfer,
+                token: selectedChainTokenConfig.token,
+                quotedBorrowAmount: freshBorrowableAmount,
+                collateralCountToAdd,
+                beneficiary: address,
+                prepaidFeePercent: feePercent,
+              }),
+              {
+                intent: loanIntent({
+                  chainId: Number(cashOutChainId),
+                  loanId: BigInt(internalSelectedLoan.id),
+                }),
+                legacyIntents: legacyIntents.reallocate(internalSelectedLoan.id),
+              },
+            ),
+            context,
           );
+          if (sent === "closed") setAttempt({ status: "idle" });
+          return sent;
         } catch (err) {
-          setBorrowStatus("error");
+          setAttempt({ status: "error" });
           toast({
             variant: "destructive",
-            title: "Loan not submitted",
+            title: "Refinancing failed",
             description: formatWalletError(err),
           });
-          return;
         }
-      } catch (err) {
-        setBorrowStatus("error");
-        toast({
-          variant: "destructive",
-          title: "Borrow Failed",
-          description: formatWalletError(err),
-        });
+      } else {
+        // Standard borrow path
+        try {
+          setAttempt({ status: "checking" });
+
+          if (
+            !walletClient ||
+            !publicClient ||
+            !address ||
+            !cashOutChainId ||
+            !resolvedPermissionsAddress
+          ) {
+            setAttempt({ status: "error" });
+            return;
+          }
+
+          const feeBasisPoints = Math.round(parseFloat(prepaidPercent) * 10);
+          const grant = await burnPermissionCall();
+
+          // collateralBigInt should be in project token decimals, not base token decimals
+          const collateralBigInt = parseUnits(collateralAmount, projectTokenDecimals);
+
+          try {
+            const freshBorrowableAmount = await readFreshBorrowableAmount(publicClient, {
+              chainId: Number(cashOutChainId) as JBChainId,
+              revnetId: selectedChainTokenConfig.revnetId,
+              collateralCount: collateralBigInt,
+              decimals: BigInt(selectedChainTokenConfig.decimals),
+              currency: BigInt(selectedChainTokenConfig.currency),
+            });
+
+            // Held by the project and holder: the amount and collateral are not part of it.
+            const sent = await sendLoan(
+              "borrow",
+              grant,
+              reviewedCall(
+                buildProtectedBorrowTx({
+                  chainId: Number(cashOutChainId) as JBChainId,
+                  revnetId: effectiveProjectId,
+                  token: selectedChainTokenConfig.token,
+                  quotedBorrowAmount: freshBorrowableAmount,
+                  collateralCount: collateralBigInt,
+                  beneficiary: address as `0x${string}`,
+                  prepaidFeePercent: BigInt(feeBasisPoints),
+                  holder: address as `0x${string}`,
+                }),
+                {
+                  intent: borrowIntent({
+                    chainId: Number(cashOutChainId),
+                    project: effectiveProjectId,
+                    holder: address,
+                  }),
+                  legacyIntents: legacyIntents.borrow({
+                    revnetId: effectiveProjectId,
+                    token: selectedChainTokenConfig.token,
+                    collateral: collateralBigInt,
+                    prepaidFeePercent: feeBasisPoints,
+                  }),
+                },
+              ),
+              context,
+            );
+            if (sent === "closed") setAttempt({ status: "idle" });
+            return sent;
+          } catch (err) {
+            setAttempt({ status: "error" });
+            toast({
+              variant: "destructive",
+              title: "Loan not submitted",
+              description: formatWalletError(err),
+            });
+            return;
+          }
+        } catch (err) {
+          setAttempt({ status: "error" });
+          toast({
+            variant: "destructive",
+            title: "Borrow Failed",
+            description: formatWalletError(err),
+          });
+        }
       }
-    }
-  }, [
-    internalSelectedLoan,
-    collateralAmount,
-    cashOutChainId,
-    address,
-    walletClient,
-    selectedLoanReallocAmount,
-    prepaidPercent,
-    reallocateCollateralAsync,
-    toast,
-    resolvedPermissionsAddress,
-    writeContractAsync,
-    effectiveProjectId,
-    loanProjectId,
-    publicClient,
-    projectTokenDecimals,
-    tokenConfigForChain,
-    collateralCountToTransfer,
-    ensureBurnTokensPermission,
-  ]);
+    },
+    [
+      internalSelectedLoan,
+      collateralAmount,
+      cashOutChainId,
+      address,
+      walletClient,
+      selectedLoanReallocAmount,
+      prepaidPercent,
+      toast,
+      resolvedPermissionsAddress,
+      effectiveProjectId,
+      publicClient,
+      projectTokenDecimals,
+      loanSourceArgs,
+      loanSourceKey,
+      refetchLoanSource,
+      reviewedLoanSource,
+      collateralCountToTransfer,
+      burnPermissionCall,
+      sendLoan,
+    ],
+  );
 
   // ===== EFFECTS =====
   // Sync defaultTab with selectedTab if defaultTab changes
@@ -734,40 +922,35 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
   // Don't auto-select any chain - let user choose manually
   // This prevents pre-selection issues and ensures user has full control
 
-  // Handle reallocation pending status
+  // The Safe ran the permission after its run ended: the loan is still to send, from its button again.
+  const grantSettled =
+    borrow.settledStep === 0 ? "borrow" : reallocation.settledStep === 0 ? "reallocation" : null;
   useEffect(() => {
-    if (isReallocating) {
-      setBorrowStatus("reallocation-pending");
-    }
-  }, [isReallocating]);
+    if (!grantSettled) return;
+    setAttempt((now) =>
+      now.status === "sending" && now.runner === grantSettled ? { status: "idle" } : now,
+    );
+    toast({
+      title: "Safe granted the permission",
+      description: `Review the loan again to ${grantSettled === "borrow" ? "borrow" : "refinance"}.`,
+    });
+  }, [grantSettled, toast]);
 
-  // Transaction status effects
+  // A followed proposal whose runner went idle with no error was released (from Account, say):
+  // nothing is pending, and the loan is sent from its button again. A new run's own idle start
+  // is not this: its attempt has not ended at a proposal.
+  const released =
+    attempt.status === "sending" && !!attempt.proposed && sender.phase === "idle" && !sender.error;
   useEffect(() => {
-    if (!txHash && !reallocationTxHash) return;
+    if (released) setAttempt({ status: "idle" });
+  }, [released]);
 
-    if (isTxLoading || isReallocationTxLoading) {
-      setBorrowStatus("pending");
-    } else if (isSuccess || isReallocationSuccess) {
-      // Success persists until the user closes the dialog — no timed close.
-      setBorrowStatus("success");
-      toast({
-        title: "Success",
-        description: isReallocationSuccess
-          ? "Loan adjusted successfully!"
-          : "Loan created successfully!",
-      });
-    } else {
-      setBorrowStatus("error");
-    }
-  }, [
-    txHash,
-    reallocationTxHash,
-    isTxLoading,
-    isReallocationTxLoading,
-    isSuccess,
-    isReallocationSuccess,
-    toast,
-  ]);
+  // Success persists until the user closes the dialog: no timed close.
+  const adjusted = attempt.status === "sending" && attempt.runner === "reallocation";
+  useEffect(() => {
+    if (borrowStatus === "success")
+      toast({ title: "Success", description: adjusted ? "Loan adjusted." : "Loan opened." });
+  }, [borrowStatus, adjusted, toast]);
 
   // Calculate gross borrowed
   useEffect(() => {
@@ -886,6 +1069,12 @@ export function useBorrowDialog({ projectId, selectedLoan, defaultTab }: UseBorr
     baseToken,
     selectedChainTokenConfig,
     tokenConfigForChain,
+    /** One line when the onchain loan token can't be read; the loan stays off. */
+    borrowQuote,
+    borrowQuoteError,
+    loanSourceLine,
+    loanSourceBlocked,
+    loanSourcePending: !!loanSourceArgs && loanSourceQuery.isPending && !loanSourceQuery.isError,
     // Undefined until the selected chain's token config resolves — consumers
     // must render a loading state, never assume ETH.
     selectedChainTokenSymbol: selectedChainTokenConfig

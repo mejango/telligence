@@ -3,7 +3,15 @@
 import { PortalContainerProvider } from "@getpara/react-component-library";
 import { ParaProvider } from "@getpara/react-sdk-lite";
 import { Network, OnRampAsset, OnRampProvider, OnRampPurchaseType } from "@getpara/web-sdk";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 import { useAccount } from "wagmi";
 import { OnRampFrame, OnRampHandoff } from "./OnRampHandoff";
@@ -164,7 +172,12 @@ function Driver({
   // — ParaProvider renders nothing until Para's API answers.
   const open = sheetOpen || !!handoffUrl;
 
-  useEffect(() => onLive(), [onLive]);
+  // A sign-in in progress stays on the shell until the sheet exists to take over, so the dialog
+  // never closes between them.
+  const awaitingSheet = request.kind === "auth" && requestId > 0 && !sheetOpen;
+  useEffect(() => {
+    if (!awaitingSheet) onLive();
+  }, [awaitingSheet, onLive]);
 
   useEffect(() => {
     onOpenChange(open);
@@ -227,6 +240,7 @@ export default function ParaModalHost({
   onSettled,
   entry,
   onEntryChange,
+  returnFocus,
 }: {
   requestId: number;
   request: ParaRequest;
@@ -234,6 +248,9 @@ export default function ParaModalHost({
   onSettled: () => void;
   entry: string;
   onEntryChange: (value: string) => void;
+  /** The control that asked for this dialog. The placeholder's dialog, replaced by this one,
+   *  took the browser's own memory of it. */
+  returnFocus?: RefObject<HTMLElement | null>;
 }) {
   const paraClient = getParaClient();
 
@@ -300,9 +317,16 @@ export default function ParaModalHost({
     if (open && !host.open) {
       host.showModal();
       // Keep the first open from landing focus (and a focus ring) on the sheet's close button.
-      host.focus({ preventScroll: true });
-    } else if (!open && host.open) host.close();
-  }, [host, open]);
+      (host.querySelector("input") ?? host).focus({ preventScroll: true });
+    } else if (!open && host.open) {
+      host.close();
+      returnFocus?.current?.focus({ preventScroll: true });
+    }
+  }, [host, open, returnFocus]);
+
+  useEffect(() => {
+    host?.setAttribute("aria-label", request.kind === "auth" ? "Sign in" : "Add funds");
+  }, [host, request.kind]);
 
   if (!host) return null;
 

@@ -1,14 +1,23 @@
 "use client";
 
+import { REVNET_ONE_LINER } from "@/lib/one-liner";
 import { useState } from "react";
 
-const REVNET_BUILD_PROMPT = `My product: [describe the users, the value they exchange, and the experience I want].
+const REVNET_BUILD_PROMPT = `I want to build this on a revnet (Juicebox V6): ${REVNET_ONE_LINER} Start at https://revnet.money/skill.md; read https://revnet.money/learn#stages and https://revnet.money/build for the sections the brief needs.
 
-Act as my protocol engineer and product architect. If you are running in Claude Code, first install the Juicebox V6 skills library (https://github.com/mejango/juicebox-skills — run /plugin marketplace add mejango/juicebox-skills, then /plugin install juicebox-v6@juicebox) and use the current skills index to find its revnet deployment, economics, loans, bridging, and transaction guidance for addresses, ABIs, economics, and transaction safety. Then read https://revnet.money/learn and https://revnet.money/build, and inspect the current Revnet V6 implementation at https://github.com/rev-net/revnet-core-v6 and the Juicebox V6 contracts at https://github.com/Bananapus/version-6. Do not substitute an older protocol version.
+My product: [describe the users, the value they exchange, and the experience I want].
 
-Design the smallest safe product architecture that uses a revnet as its open financial backend. Explain the economics committed at launch: stages and start times, issuance and issuance cuts, cash-out tax, reserved-token percentages, and auto-issuance. Separately explain accepted accounting tokens, chain topology, shop item transfer policy, and which settings and recipients the operator can still change.
+Help me design and build the smallest product that achieves this outcome. Start with a short brief: users, success criteria, money and token flows, required networks, operator cash needs, and unresolved decisions. Preserve explicit constraints such as Base-only. Ask only questions that change the design; label unknowns instead of inventing defaults.
 
-Map each user action to exact V6 reads and transactions, including payments, token issuance, cash outs, loans, buyback routing, shops, and multichain settlement where relevant. For every write, identify the contract, function, arguments, units, chain, permissions, approvals, slippage or minimum-output protection, and state that must be re-read immediately before signing. Use current V6 SDK builders where available, verify them against the deployed contracts, and ABI round-trip pure transaction builders. Keep signing explicit and wallet-bound.`;
+Start at https://github.com/mejango/juicebox-skills/blob/main/README.md and load only the skills the brief needs; for commerce or offchain revenue, start with revnet-commerce. If the Juicebox MCP (https://juicebox.center/mcp) is connected, list its capabilities and use its reads and transaction plans; otherwise use the documented source and SDK. Use current V6 sources, check deployments, and keep documented, implemented, and live behavior apart.
+
+Treat the split as the operating model: contributors and customers hold the same token, backed by revenue in a shared balance sheet under its cash out rules. Explain how contributors turn tokens into money (selling, cashing out, borrowing) and what each costs, including liquidity, dilution, collateral, and the effect on backing. A split sets a share of new tokens, not a cash amount. Compare a Juicebox project if the business needs regular payouts to cover expenses.
+
+Explain the stages, issuance cuts, split, auto issuance, accepted tokens, cash out tax, and the operator's remaining powers in plain words. Do not assume a staking adapter or a cross-chain bridge exists.
+
+Propose the smallest end-to-end flow, identifying existing support, custom integration and blocking decisions. Map each chosen user action to V6 reads and transactions. For every write, identify contract, function, arguments, units, chain, permissions, approvals, slippage or minimum-output protection, and state to re-read immediately before signing. Use current V6 SDK builders where supported; encode then decode each request and review the exact transaction before requesting explicit authorization and a wallet signature.
+
+Verify receipts and expected state after execution. Reconcile uncertain submissions before retrying. Keep a concise handoff with decisions, evidence and freshness, unresolved questions, transaction identifiers and the next safe step so another agent can continue without repeating discovery.`;
 
 export function CopyRevnetBuildPrompt() {
   const [status, setStatus] = useState<"idle" | "copying" | "copied" | "failed">("idle");

@@ -1,4 +1,3 @@
-import { REVNET_CASHOUT_FEE_PERCENT } from "@/app/constants";
 import { cashOutProtocolFee } from "@/lib/bridgePrepare";
 export { netLoanProceeds } from "@bananapus/nana-sdk-core/v6/loan-math";
 
@@ -86,27 +85,6 @@ export function generateFeeData({
   data.push({ year: MAX_YEARS, totalCost: maxCostToUnlock });
 
   return data;
-}
-
-export function applyRevFee(tokenAmount: bigint) {
-  return (tokenAmount * BigInt((1 - REVNET_CASHOUT_FEE_PERCENT) * 1000)) / 1000n;
-}
-
-/**
- * Whether a cash-out actually pays the revnet fee.
- *
- * REVOwner is what charges it, so a plain project never does; and REVOwner skips it entirely
- * when the cash-out tax is zero — "Zero-tax ordinary cash-outs do not add the revnet fee
- * hook" (REVOwner.sol:303). Quoting the fee unconditionally under-reports every zero-tax
- * revnet and every non-revnet by 2.5%. Undefined inputs mean "still loading": suppress the
- * fee rather than guess, since a quote that is too HIGH is the safer error for a holder
- * deciding whether to cash out.
- */
-export function revFeeApplies(
-  isRevnet: boolean | undefined,
-  cashOutTaxRate: bigint | undefined,
-): boolean {
-  return isRevnet === true && cashOutTaxRate !== undefined && cashOutTaxRate !== 0n;
 }
 
 /**

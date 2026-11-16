@@ -52,9 +52,9 @@ export function CashOutCurvePreview({
   return (
     <figure className="mt-5 border border-melon-200 bg-melon-25 p-4">
       <div className="mb-2 flex items-baseline justify-between gap-4 text-xs text-zinc-500">
-        <span>Cash-out curve</span>
+        <span>Cash-out preview</span>
         <span className="text-right text-melon-700">
-          {samplePercent}% cashed out → {sampleReturn.toFixed(1)}% returned
+          {samplePercent}% of tokens → {sampleReturn.toFixed(1)}% of balance
         </span>
       </div>
       <svg
@@ -66,7 +66,7 @@ export function CashOutCurvePreview({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={samplePercent}
-        aria-valuetext={`${samplePercent}% cashed out returns ${sampleReturn.toFixed(1)}%`}
+        aria-valuetext={`${samplePercent}% of the token supply returns ${sampleReturn.toFixed(1)}% of balance`}
         onPointerDown={(event) => {
           event.currentTarget.setPointerCapture(event.pointerId);
           updateFromPointer(event);
@@ -147,8 +147,9 @@ export function CashOutCurvePreview({
         </text>
       </svg>
       <figcaption className="mt-1 text-sm text-zinc-600">
-        Cashing out {samplePercent}% of {tokenSymbol} gets {sampleReturn.toFixed(1)}% of the
-        revnet&apos;s {reserveAsset}.
+        Cashing out {samplePercent}% of the total {tokenSymbol} supply gives an estimated{" "}
+        {sampleReturn.toFixed(1)}% of the revnet&apos;s {reserveAsset}. This preview applies the
+        cash-out tax. Check the final quote before confirming a cash-out.
       </figcaption>
     </figure>
   );

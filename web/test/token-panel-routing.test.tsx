@@ -1,6 +1,8 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Address, Hash } from "viem";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectEveryWayOutRefused } from "./support/confirm";
+import { groupGateState } from "./support/group-write-gate";
 
 type TokenState = {
   chainId: number;
@@ -81,14 +83,34 @@ vi.mock("@/components/EtherscanLink", () => ({
   default: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }));
 vi.mock("@/components/ui/use-toast", () => ({ useToast: () => ({ toast: mocks.toast }) }));
-vi.mock("@/hooks/useReviewedWriteContract", () => ({
-  isSafeConnection: () => mocks.safe,
-  submittedViaSafe: () => mocks.safeProposal,
-  requireOnchainExecution: () => {
-    if (mocks.safeProposal)
-      throw new Error("Safe proposal is awaiting Safe approvals and execution.");
-  },
-  useWriteContract: () => ({ writeContractAsync: mocks.writeContractAsync }),
+vi.mock("@/lib/safe-connector", () => ({ useSafeConnection: () => mocks.safe }));
+vi.mock("@/lib/held-rows", () => ({ submittedViaSafe: () => mocks.safeProposal }));
+/**
+ * Core's run as the panel sees it: each chain in order, the wallet switched to it, its write, then
+ * its receipt before the next. A Safe proposal ends the run; a reverted receipt stops it.
+ */
+vi.mock("@/hooks/useReviewedAction", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useReviewedAction")>()),
+  useReviewedAction: () => ({
+    run: async (action: import("@bananapus/nana-sdk-core/review").ReviewedAction) => {
+      const hashes: Hash[] = [];
+      for (const [step, call] of action.calls.entries()) {
+        await action.beforeWallet?.(call, step);
+        await mocks.switchChainAsync({ chainId: call.chainId });
+        const hash = (await mocks.writeContractAsync({ ...call, address: call.to })) as Hash;
+        if (mocks.safeProposal) return { status: "proposed", step, safeTxHash: hash };
+        const receipt = await mocks.waitForReceiptWithRetry({ chain: { id: call.chainId } }, hash);
+        if (receipt.status !== "success")
+          return {
+            status: "failed",
+            error: `Step ${step + 1} reverted on chain ${call.chainId}. Nothing after it was sent.`,
+            failure: new Error("reverted"),
+          };
+        hashes.push(hash);
+      }
+      return { status: "done", hashes, receipts: [] };
+    },
+  }),
 }));
 vi.mock("@/hooks/useReviewedRelayr", () => ({
   useGetRelayrTxQuote: () => ({
@@ -114,6 +136,8 @@ vi.mock("wagmi/actions", () => ({
   }),
 }));
 
+vi.mock("@/lib/nana/groupWriteGate", () => import("./support/group-write-gate"));
+
 import { V6TokenPanel } from "@/app/[slug]/components/v6/owners/V6TokenPanel";
 
 function deferred<T>() {
@@ -122,6 +146,13 @@ function deferred<T>() {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+/** The confirm, which replaces the token editor's content in its dialog. */
+function confirmPanel() {
+  const panel = document.querySelector<HTMLElement>("[data-tx-confirm]");
+  expect(panel).not.toBeNull();
+  return panel!;
 }
 
 async function openConfirmation(
@@ -160,6 +191,7 @@ async function openConfirmation(
 }
 
 beforeEach(() => {
+  groupGateState.reset();
   mocks.chainId = 8453;
   mocks.safe = false;
   mocks.safeProposal = false;
@@ -206,7 +238,7 @@ describe("token panel Relayr funding", () => {
       );
       expect(mocks.writeContractAsync).not.toHaveBeenCalled();
       fireEvent.click(picker);
-      fireEvent.click(screen.getByRole("option", { name: /ETH on Base Sepolia/ }));
+      fireEvent.click(screen.getByRole("option", { name: "Base Sepolia (1 ETH)" }));
       fireEvent.click(confirm);
       await waitFor(() => expect(mocks.sendRelayrTx).toHaveBeenCalledExactlyOnceWith(payments[1]));
       expect(mocks.waitForRelayrBundle).toHaveBeenCalledExactlyOnceWith(QUOTE.bundle_uuid);
@@ -223,7 +255,8 @@ describe("token panel Relayr funding", () => {
     const confirm = screen.getByRole("button", { name: "Pay and submit" });
     expect(picker).toHaveTextContent("Select chain");
     expect(confirm).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Back" })).not.toBeDisabled();
+    // Its way back stays open while the funding choice is missing.
+    expect(within(confirmPanel()).getByRole("button", { name: "Close" })).toBeEnabled();
     expect(mocks.writeContractAsync).not.toHaveBeenCalled();
     expect(mocks.sendRelayrTx).not.toHaveBeenCalled();
     expect(mocks.getRelayrTxQuote.mock.calls[0][0]).toEqual([
@@ -238,12 +271,13 @@ describe("token panel Relayr funding", () => {
     ]);
 
     fireEvent.click(picker);
-    fireEvent.click(screen.getByRole("option", { name: /1\.00000000 ETH on Base/ }));
+    fireEvent.click(screen.getByRole("option", { name: "Base (1 ETH)" }));
     expect(confirm).not.toBeDisabled();
-    expect(confirm).toHaveAttribute("data-target-chain", "8453");
     expect(screen.getByText("Pay 1.00000000 ETH to relay")).toBeInTheDocument();
     fireEvent.click(confirm);
+    // The payment names Base; the Relayr payment switches the wallet to its chain.
     await waitFor(() => expect(mocks.sendRelayrTx).toHaveBeenCalledExactlyOnceWith(PAYMENTS[1]));
+    expect(mocks.sendRelayrTx.mock.calls[0][0].chain).toBe(8453);
     expect(mocks.waitForRelayrBundle).toHaveBeenCalledExactlyOnceWith(QUOTE.bundle_uuid);
     expect(mocks.refetch).not.toHaveBeenCalled();
     expect(mocks.toast).not.toHaveBeenCalled();
@@ -251,7 +285,7 @@ describe("token panel Relayr funding", () => {
     await act(async () => bundle.resolve());
     await waitFor(() => expect(mocks.refetch).toHaveBeenCalledOnce());
     expect(mocks.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ description: expect.stringMatching(/Relayr confirmed.*2 chains/) }),
+      expect.objectContaining({ description: expect.stringMatching(/Confirmed.*2 chains/) }),
     );
   });
 
@@ -262,9 +296,22 @@ describe("token panel Relayr funding", () => {
     });
     await openConfirmation([1, 8453], true);
     const picker = await screen.findByRole("combobox");
-    await waitFor(() => expect(picker).toHaveTextContent("1.00000000 ETH on Base"));
+    await waitFor(() => expect(picker).toHaveTextContent("Base (1 ETH)"));
     const confirm = screen.getByRole("button", { name: "Pay and submit" });
-    expect(confirm).toHaveAttribute("data-target-chain", "8453");
+    fireEvent.click(confirm);
+    // The payment names Base, the chain connected before signing moved the wallet.
+    await waitFor(() => expect(mocks.sendRelayrTx).toHaveBeenCalledExactlyOnceWith(PAYMENTS[1]));
+    expect(mocks.sendRelayrTx.mock.calls[0][0].chain).toBe(8453);
+  });
+
+  it("preselects a lone quote when the connected chain is not quoted", async () => {
+    mocks.chainId = 10;
+    mocks.getRelayrTxQuote.mockResolvedValue({ ...QUOTE, payment_info: [PAYMENTS[1]] });
+    await openConfirmation([1, 8453]);
+    const picker = await screen.findByRole("combobox");
+    await waitFor(() => expect(picker).toHaveTextContent("Base (1 ETH)"));
+    const confirm = screen.getByRole("button", { name: "Pay and submit" });
+    expect(confirm).not.toBeDisabled();
     fireEvent.click(confirm);
     await waitFor(() => expect(mocks.sendRelayrTx).toHaveBeenCalledExactlyOnceWith(PAYMENTS[1]));
   });
@@ -272,14 +319,25 @@ describe("token panel Relayr funding", () => {
   it("allows returning to the editor without funding the quote", async () => {
     await openConfirmation([1, 8453]);
     await screen.findByRole("combobox");
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(within(confirmPanel()).getByRole("button", { name: "Close" }));
     expect(await screen.findByLabelText("Token name")).toBeInTheDocument();
     expect(mocks.sendRelayrTx).not.toHaveBeenCalled();
     expect(mocks.writeContractAsync).not.toHaveBeenCalled();
   });
 });
 
-describe("wallet-action:token-admin — token panel direct routing", () => {
+describe("token panel sucker-group check", () => {
+  it("wallet-action:token-admin will not write to a chain the registry does not list", async () => {
+    groupGateState.unverified = ["11155111:5"];
+    await openConfirmation([1, 11155111], true, true);
+    expect(screen.getByText("A project listed here isn't linked onchain.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save token" })).toBeDisabled();
+    expect(screen.queryByText("Confirm token update")).not.toBeInTheDocument();
+    expect(mocks.writeContractAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("token panel direct routing", () => {
   it.each([
     { label: "one deployment chain", chains: [1], safe: false, deployed: false },
     {
@@ -298,12 +356,7 @@ describe("wallet-action:token-admin — token panel direct routing", () => {
   ])("reviews $label before submitting direct transactions", async ({ chains, safe, deployed }) => {
     mocks.safe = safe;
     await openConfirmation(chains, deployed);
-    const confirm = screen.getByRole("button", { name: deployed ? "Save token" : "Deploy token" });
-    expect(confirm).not.toBeDisabled();
     expect(mocks.getRelayrTxQuote).not.toHaveBeenCalled();
-    expect(mocks.writeContractAsync).not.toHaveBeenCalled();
-
-    fireEvent.click(confirm);
     await waitFor(() => expect(mocks.refetch).toHaveBeenCalledOnce());
     expect(mocks.writeContractAsync.mock.calls.map(([call]) => call.chainId)).toEqual(chains);
     expect(mocks.waitForReceiptWithRetry).toHaveBeenCalledTimes(chains.length);
@@ -341,7 +394,7 @@ describe("wallet-action:token-admin — token panel direct routing", () => {
     expect(mocks.sendRelayrTx).not.toHaveBeenCalled();
   });
 
-  it("waits for each receipt before the next write and switches back to the original chain", async () => {
+  it("wallet-action:token-admin waits for each receipt before the next write and switches back to the original chain", async () => {
     const first = deferred<{ status: string }>();
     const last = deferred<{ status: string }>();
     mocks.waitForReceiptWithRetry
@@ -349,7 +402,6 @@ describe("wallet-action:token-admin — token panel direct routing", () => {
       .mockResolvedValueOnce({ status: "success" })
       .mockReturnValueOnce(last.promise);
     await openConfirmation([1, 11155111, 8453], true);
-    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
 
     await waitFor(() => expect(mocks.waitForReceiptWithRetry).toHaveBeenCalledOnce());
     expect(mocks.writeContractAsync).toHaveBeenCalledOnce();
@@ -360,6 +412,8 @@ describe("wallet-action:token-admin — token panel direct routing", () => {
     );
     expect(mocks.refetch).not.toHaveBeenCalled();
     expect(mocks.toast).not.toHaveBeenCalled();
+    // Held between the writes: no way out while one is in flight.
+    expectEveryWayOutRefused(confirmPanel());
 
     await act(async () => first.resolve({ status: "success" }));
     await waitFor(() => expect(mocks.waitForReceiptWithRetry).toHaveBeenCalledTimes(3));
@@ -377,6 +431,8 @@ describe("wallet-action:token-admin — token panel direct routing", () => {
     await act(async () => last.resolve({ status: "success" }));
     await waitFor(() => expect(mocks.refetch).toHaveBeenCalledOnce());
     expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Token updated" }));
+    // Done: the confirm and the token editor close once every chain confirms.
+    await waitFor(() => expect(document.querySelector("[data-tx-confirm]")).toBeNull());
   });
 
   it("stops on a reverted later receipt without reporting the batch as complete", async () => {
@@ -384,7 +440,6 @@ describe("wallet-action:token-admin — token panel direct routing", () => {
       .mockResolvedValueOnce({ status: "success" })
       .mockResolvedValueOnce({ status: "reverted" });
     await openConfirmation([1, 11155111, 8453], true);
-    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
 
     expect(await screen.findByText(/reverted on/i)).toBeInTheDocument();
     expect(mocks.writeContractAsync).toHaveBeenCalledTimes(2);
@@ -396,12 +451,11 @@ describe("wallet-action:token-admin — token panel direct routing", () => {
     mocks.safe = true;
     mocks.safeProposal = true;
     await openConfirmation([1, 8453], true);
-    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
 
     await waitFor(() => expect(mocks.writeContractAsync).toHaveBeenCalledOnce());
     await waitFor(() =>
       expect(`${document.body.textContent} ${JSON.stringify(mocks.toast.mock.calls)}`).toMatch(
-        /awaiting Safe|Safe proposal|Safe approvals/i,
+        /awaiting Safe|Safe proposal|Safe approvals|waiting in your Safe/i,
       ),
     );
     expect(mocks.waitForReceiptWithRetry).not.toHaveBeenCalled();
@@ -410,5 +464,12 @@ describe("wallet-action:token-admin — token panel direct routing", () => {
     expect(mocks.toast).not.toHaveBeenCalledWith(
       expect.objectContaining({ title: "Token updated" }),
     );
+    // Nothing is left to send from here: Done, not Save token again.
+    const done = await within(confirmPanel()).findByRole("button", { name: "Done" });
+    expect(confirmPanel()).toHaveTextContent("This proposal is waiting in your Safe");
+    expect(within(confirmPanel()).queryByRole("button", { name: "Save token" })).toBeNull();
+    fireEvent.click(done);
+    await waitFor(() => expect(document.querySelector("[data-tx-confirm]")).toBeNull());
+    expect(mocks.writeContractAsync).toHaveBeenCalledOnce();
   });
 });

@@ -1,3 +1,4 @@
+import { ReviewRefusal } from "@/lib/review-refusal";
 import {
   ipfsAssetPath,
   isIpfsCid,
@@ -49,7 +50,7 @@ export async function requireMetadataPermission(
     args: [account, owner, projectId, BigInt(JBPermissionIdsV6.SET_PROJECT_URI), true, true],
   });
   if (!permitted)
-    throw new Error(
+    throw new ReviewRefusal(
       `The connected account cannot update project ${source.projectId}'s metadata on chain ${source.chainId}.`,
     );
 }
@@ -68,7 +69,7 @@ export async function readMetadataDestination(
     args: [BigInt(identity.projectId)],
   });
   if (!isAddress(controller) || controller === zeroAddress)
-    throw new Error(
+    throw new ReviewRefusal(
       `Project ${identity.projectId} has no active controller on chain ${identity.chainId}.`,
     );
   const uri = await client.readContract({
@@ -82,14 +83,17 @@ export async function readMetadataDestination(
   const asset = ipfsAssetPath(uri.trim()) ?? (isIpfsCid(uri.trim()) ? uri.trim() : undefined);
   const url = asset ? ipfsUriToAppUrl(`ipfs://${asset}`) : undefined;
   if (!url)
-    throw new Error(
+    throw new ReviewRefusal(
       `The metadata URI on chain ${identity.chainId} is not a readable content-addressed document. It cannot be safely overwritten.`,
     );
   const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
   if (!response.ok)
-    throw new Error(`Could not load metadata on chain ${identity.chainId} (${response.status}).`);
+    throw new ReviewRefusal(
+      `Could not load metadata on chain ${identity.chainId} (${response.status}).`,
+    );
   const reader = response.body?.getReader();
-  if (!reader) throw new Error(`Metadata on chain ${identity.chainId} has no readable body.`);
+  if (!reader)
+    throw new ReviewRefusal(`Metadata on chain ${identity.chainId} has no readable body.`);
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
@@ -99,7 +103,7 @@ export async function readMetadataDestination(
       total += value.byteLength;
       if (total > 512 * 1024) {
         await reader.cancel();
-        throw new Error("Project metadata exceeds the supported size.");
+        throw new ReviewRefusal("Project metadata exceeds the supported size.");
       }
       chunks.push(value);
     }
@@ -114,7 +118,7 @@ export async function readMetadataDestination(
   }
   const metadata: unknown = JSON.parse(new TextDecoder().decode(bytes));
   if (!isRecord(metadata))
-    throw new Error(`Metadata on chain ${identity.chainId} must be a JSON object.`);
+    throw new ReviewRefusal(`Metadata on chain ${identity.chainId} must be a JSON object.`);
   return { source, metadata };
 }
 
@@ -132,7 +136,7 @@ export async function verifyMetadataSource(
     args: [BigInt(source.projectId)],
   });
   if (controller.toLowerCase() !== source.controller.toLowerCase())
-    throw new Error(
+    throw new ReviewRefusal(
       `The active controller changed on chain ${source.chainId}. Reopen the metadata editor before continuing.`,
     );
   const uri = await client.readContract({
@@ -142,7 +146,7 @@ export async function verifyMetadataSource(
     args: [BigInt(source.projectId)],
   });
   if (uri !== source.uri)
-    throw new Error(
+    throw new ReviewRefusal(
       `The source metadata changed on chain ${source.chainId}. Reopen the metadata editor before continuing.`,
     );
 }

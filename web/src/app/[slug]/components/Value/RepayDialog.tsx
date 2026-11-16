@@ -5,24 +5,36 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SkeletonLines } from "@/components/ui/skeleton";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { SummaryRow, TxProgress } from "@/components/ui/TxProgress";
 import { useToast } from "@/components/ui/use-toast";
 import {
-  isSafeProposalPendingError,
-  requireOnchainExecution,
-  useWaitForTransactionReceipt,
-  useWriteContract,
-} from "@/hooks/useReviewedWriteContract";
+  failedLine,
+  reviewedCall,
+  ReviewRefusal,
+  SAFE_PROPOSAL_PENDING_LINE,
+  SAFE_PROPOSAL_UNCONFIRMED_LINE,
+  useReviewedAction,
+  type ReviewedCall,
+} from "@/hooks/useReviewedAction";
 import { ProjectOperation, SuckerGroupOperation, useBendystrawQuery } from "@/lib/bendystraw";
+import { erc20ApproveAbi } from "@/lib/erc20-approve";
+import { legacyIntents } from "@/lib/legacy-intents";
 import { repayCeilingFor, repayPrincipalFor } from "@/lib/loanFees";
+import {
+  LOAN_SOURCE_CHANGED,
+  LOAN_SOURCE_UNREADABLE,
+  readLoanSource,
+  sameLoanSource,
+} from "@/lib/loanTransactions";
 import { useJBChainId, useJBTokenContext } from "@/lib/nana/project";
 import type { JBChainId } from "@/lib/nana/types";
 import { getTokenConfigForChain, getTokenSymbolFromAddress, isNativeToken } from "@/lib/tokenUtils";
 import { formatTokenSymbol, formatWalletError } from "@/lib/utils";
-import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
 import { getRevnetLoanContract, revLoansAbi } from "@bananapus/nana-sdk-core";
+import { approvalIntent, loanIntent, writeIntentKey } from "@bananapus/nana-sdk-core/review";
+import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Address, erc20Abi, formatUnits, parseUnits } from "viem";
+import { Address, erc20Abi, formatUnits, isAddressEqual, parseUnits } from "viem";
 import {
   useAccount,
   usePublicClient,
@@ -31,12 +43,25 @@ import {
   useWalletClient,
 } from "wagmi";
 
-const REPAY_STATUS_TEXT: Record<string, string> = {
+type RepayStatus =
+  | "idle"
+  | "approving"
+  | "waiting-signature"
+  | "pending"
+  // Proposed to a Safe: nothing is repaid until the Safe executes it.
+  | "proposed"
+  | "success"
+  | "error"
+  | "safe-unconfirmed";
+
+const REPAY_STATUS_TEXT: Record<Exclude<RepayStatus, "idle">, string> = {
   "waiting-signature": "Waiting for wallet confirmation...",
-  approving: "Approving token allowance...",
+  approving: "Approving token use...",
   pending: "Repayment pending...",
-  success: "Repayment successful!",
-  error: "Something went wrong during repayment.",
+  proposed: SAFE_PROPOSAL_PENDING_LINE,
+  success: "Repayment confirmed.",
+  error: "Repayment failed.",
+  "safe-unconfirmed": SAFE_PROPOSAL_UNCONFIRMED_LINE,
 };
 
 export function RepayDialog({
@@ -61,7 +86,7 @@ export function RepayDialog({
 }) {
   // ===== STATE =====
   const [collateralToReturn, setCollateralToReturn] = useState("");
-  const [repayStatus, setRepayStatus] = useState("idle");
+  const [repayStatus, setRepayStatus] = useState<RepayStatus>("idle");
   const [repayTxHash, setRepayTxHash] = useState<`0x${string}` | undefined>();
   const [collateralError, setCollateralError] = useState<string>("");
   const [review, setReview] = useState<"approve" | "repay" | null>(null);
@@ -73,11 +98,15 @@ export function RepayDialog({
   const tokenSymbol = formatTokenSymbol(token);
   const projectTokenDecimals = token?.data?.decimals ?? 18;
   const currentChainId = useJBChainId();
-  const publicClient = usePublicClient();
+  // Reads and receipt waits use the loan's chain, whichever chain the wallet is on; only the
+  // write itself switches the wallet.
+  const publicClient = usePublicClient({ chainId });
   const { data: walletClient } = useWalletClient();
 
   // Check allowance for non-ETH base tokens before simulation
   const [allowanceChecked, setAllowanceChecked] = useState(false);
+  // Bumped after an approval lands, so the allowance is read again.
+  const [allowanceRead, setAllowanceRead] = useState(0);
   const [hasSufficientAllowance, setHasSufficientAllowance] = useState(true);
   const [allowanceError, setAllowanceError] = useState<string>("");
 
@@ -128,11 +157,52 @@ export function RepayDialog({
     { enabled: !!suckerGroupId, pollInterval: 10000, chainId: Number(currentChainId) },
   );
 
-  // Token configuration for this loan's chain. Null means LOADING/unknown —
-  // never assume ETH: gate submission and show skeletons until it resolves.
-  const chainTokenConfig = useMemo(
+  // The loan's revnet, token, decimals and currency, as the loans contract reports them
+  // (`revnetIdOfLoanWith`, `loanOf(...).sourceToken`, the terminal's accounting context). Read on
+  // every open and again at send; the indexer only names the symbol. Null means loading or
+  // unreadable: never assume ETH or 18 decimals.
+  const loanSourceQuery = useQuery({
+    queryKey: ["revLoanSource", "repay", chainId, loanId],
+    enabled: open && !!publicClient,
+    staleTime: 0,
+    retry: 1,
+    retryDelay: 250,
+    // A failed read retries on its own, so the line clears without a click.
+    refetchInterval: (query) => (query.state.status === "error" ? 15_000 : false),
+    queryFn: () =>
+      readLoanSource(publicClient!, { chainId, revnetId: loanProjectId, loanId: BigInt(loanId) }),
+  });
+  const loanSource = loanSourceQuery.isError ? undefined : loanSourceQuery.data;
+  const refetchLoanSource = loanSourceQuery.refetch;
+  // A send-time read that failed or disagreed with the reviewed one.
+  const [sourceNotice, setSourceNotice] = useState<string>();
+  const loanSourceUpdatedAt = loanSourceQuery.dataUpdatedAt;
+  useEffect(() => {
+    // A read that lands again ends a send-time failure.
+    if (loanSourceUpdatedAt)
+      setSourceNotice((notice) => (notice === LOAN_SOURCE_UNREADABLE ? undefined : notice));
+  }, [loanSourceUpdatedAt]);
+  const loanSourceLine = loanSourceQuery.isError ? LOAN_SOURCE_UNREADABLE : (sourceNotice ?? null);
+
+  const indexedTokenConfig = useMemo(
     () => getTokenConfigForChain(suckerGroupData, chainId),
     [suckerGroupData, chainId],
+  );
+  const indexedSymbol =
+    loanSource && indexedTokenConfig && isAddressEqual(indexedTokenConfig.token, loanSource.token)
+      ? indexedTokenConfig.symbol
+      : undefined;
+  const chainTokenConfig = useMemo(
+    () =>
+      loanSource
+        ? {
+            token: loanSource.token,
+            decimals: loanSource.decimals,
+            currency: loanSource.currency,
+            symbol: indexedSymbol,
+          }
+        : null,
+    [loanSource, indexedSymbol],
   );
   // Native-vs-ERC-20 is decided by the accounting token ADDRESS; symbols are
   // display-only. Undefined while the config is unresolved.
@@ -140,15 +210,15 @@ export function RepayDialog({
   const baseTokenSymbol = chainTokenConfig
     ? (chainTokenConfig.symbol ?? getTokenSymbolFromAddress(chainTokenConfig.token))
     : undefined;
-  const baseTokenDecimals = chainTokenConfig?.decimals ?? 18;
 
   // Repay loan hook
-  const { writeContractAsync: repayLoanAsync, isPending: isRepaying } = useWriteContract();
+  const repay = useReviewedAction();
+  const isRepaying = repay.busy && repay.status !== "receipt";
 
-  // Transaction status tracking
-  const { isLoading: isRepayTxLoading, isSuccess: isRepaySuccess } = useWaitForTransactionReceipt({
-    hash: repayTxHash,
-  });
+  // Transaction status tracking: the repayment's own transaction, once sent.
+  const isRepayTxLoading = !!repayTxHash && repay.status === "receipt";
+  const isRepaySuccess = !!repayTxHash && repay.status === "done";
+  const isRepayUnconfirmed = repay.phase === "proposed" && !!repay.held?.exit;
 
   // ===== HELPER FUNCTIONS =====
   const formatCollateralAmount = useCallback(
@@ -194,16 +264,16 @@ export function RepayDialog({
     address: getRevnetLoanContract(6, chainId),
     chainId,
     args:
-      loanData && collateralToReturnWei !== undefined && chainTokenConfig
+      loanData && collateralToReturnWei !== undefined && loanSource
         ? [
-            loanProjectId,
+            loanSource.revnetId,
             loanData.collateral - collateralToReturnWei,
-            BigInt(chainTokenConfig.decimals),
-            BigInt(chainTokenConfig.currency),
+            BigInt(loanSource.decimals),
+            BigInt(loanSource.currency),
           ]
         : undefined,
     query: {
-      enabled: !!loanData && collateralToReturnWei !== undefined && !!chainTokenConfig,
+      enabled: !!loanData && collateralToReturnWei !== undefined && !!loanSource,
     },
   });
 
@@ -345,14 +415,14 @@ export function RepayDialog({
         if (finalRepayAmount === undefined || BigInt(allowance) < finalRepayAmount) {
           setHasSufficientAllowance(false);
           setAllowanceError(
-            "To calculate your repayment cost, we need permission for this loan. You will not be charged until you confirm repayment.",
+            "Allow the loan contract to use your tokens so it can check this repayment. Approval does not repay the loan.",
           );
         } else {
           setHasSufficientAllowance(true);
           setAllowanceError("");
         }
       } catch (error) {
-        setAllowanceError("Error checking allowance. Please try again.");
+        setAllowanceError("Could not check token permission. Try again.");
         setHasSufficientAllowance(false);
       } finally {
         setAllowanceChecked(true);
@@ -362,7 +432,15 @@ export function RepayDialog({
     checkAllowance();
     // `finalRepayAmount` is a dependency: it resolves asynchronously with the source-fee read, and the
     // allowance must be judged against the amount the contract will actually pull, not the principal.
-  }, [loanData, userAddress, publicClient, chainTokenConfig, chainId, finalRepayAmount]);
+  }, [
+    loanData,
+    userAddress,
+    publicClient,
+    chainTokenConfig,
+    chainId,
+    finalRepayAmount,
+    allowanceRead,
+  ]);
 
   // ===== EFFECTS =====
 
@@ -381,7 +459,7 @@ export function RepayDialog({
         `Cannot return more than ${formatCollateralAmount(loanData.collateral)} ${tokenSymbol}`,
       );
     } else if (inputCollateral <= 0) {
-      setCollateralError("Collateral amount must be greater than 0");
+      setCollateralError("Enter a token amount greater than 0");
     } else {
       setCollateralError("");
     }
@@ -396,10 +474,13 @@ export function RepayDialog({
       setRepayStatus("success");
       toast({
         title: "Success",
-        description: "Loan repayment completed successfully!",
+        description: "Repayment confirmed.",
       });
+    } else if (isRepayUnconfirmed) {
+      // Its Safe proposal's result can't be confirmed, which is not a failure.
+      setRepayStatus("safe-unconfirmed");
     }
-  }, [isRepayTxLoading, isRepaySuccess, toast]);
+  }, [isRepayTxLoading, isRepaySuccess, isRepayUnconfirmed, toast]);
 
   // Initialize form when dialog opens
   useEffect(() => {
@@ -417,10 +498,129 @@ export function RepayDialog({
   }, [open, loanData, projectTokenDecimals]);
 
   useEffect(() => {
-    if (repayStatus === "pending" || repayStatus === "success") setReview(null);
+    if (repayStatus === "pending" || repayStatus === "proposed" || repayStatus === "success")
+      setReview(null);
   }, [repayStatus]);
 
+  // What the review shows first; read when the repayment runs, after every value is set.
+  const repayContext = () =>
+    finalRepayAmount === undefined || !loanData
+      ? []
+      : [
+          ...(review === "repay"
+            ? [
+                { label: "Returns", value: `${collateralToReturn} ${tokenSymbol}`, strong: true },
+                { label: "On", value: chainDisplayName(chainId) },
+                {
+                  label: "Pays now",
+                  value:
+                    amountToPayNow !== undefined
+                      ? `${formatUnits(amountToPayNow, baseTokenDecimals)} ${baseTokenSymbol}`
+                      : "Set when you repay",
+                  ...(feeForThisRepay !== undefined && feeForThisRepay > 0n
+                    ? {
+                        note: `Includes ${formatUnits(feeForThisRepay, baseTokenDecimals)} ${baseTokenSymbol} repayment fee`,
+                      }
+                    : {}),
+                },
+                ...(repayPrincipal !== undefined && loanData.amount - repayPrincipal > 0n
+                  ? [
+                      {
+                        label: "Debt left in a new loan",
+                        value: `${formatUnits(loanData.amount - repayPrincipal, baseTokenDecimals)} ${baseTokenSymbol}`,
+                      },
+                    ]
+                  : []),
+              ]
+            : [{ label: "On", value: chainDisplayName(chainId) }]),
+          {
+            label: "Authorizes up to",
+            value: `${formatUnits(finalRepayAmount, baseTokenDecimals)} ${baseTokenSymbol}`,
+            note: "The unused part is refunded",
+          },
+        ];
+
   // ===== EVENT HANDLERS =====
+  /**
+   * Runs the reviewed steps of a repayment; a step that went to the Safe ends it there. A failed
+   * run throws its line.
+   */
+  const runRepay = async (calls: ReviewedCall[]) => {
+    const result = await repay.run({
+      account: userAddress as Address,
+      context: repayContext(),
+      ...(calls.length > 1
+        ? {
+            title: "Repay loan",
+            scope: writeIntentKey("repay", {
+              loan: loanIntent({ chainId, loanId: BigInt(loanId) }),
+            }),
+          }
+        : {}),
+      beforeWallet: (call) =>
+        setRepayStatus(call.functionName === "approve" ? "approving" : "waiting-signature"),
+      onSubmitted: (call, _step, hash) => {
+        if (call.functionName === "repayLoan") setRepayTxHash(hash);
+      },
+      calls,
+    });
+    if (!result) {
+      setRepayStatus("idle");
+      setReview(null);
+    }
+    if (result?.status === "failed") throw new ReviewRefusal(failedLine(result));
+    if (result?.status === "proposed") {
+      setRepayStatus("proposed");
+      toast({ title: "Safe proposal submitted", description: SAFE_PROPOSAL_PENDING_LINE });
+    }
+    return result;
+  };
+
+  /** The approval of exactly what this repayment can pull, held by the loan it repays. */
+  const approvalCall = (token: Address, amount: bigint) => {
+    const spender = getRevnetLoanContract(6, chainId) as Address;
+    return reviewedCall(
+      {
+        chainId,
+        address: token,
+        abi: erc20ApproveAbi,
+        functionName: "approve",
+        args: [spender, amount],
+      },
+      {
+        intent: approvalIntent(loanIntent({ chainId, loanId: BigInt(loanId) }), {
+          step: "repay",
+          token,
+          spender,
+        }),
+      },
+    );
+  };
+
+  /**
+   * Reads the loan source again before a write: true only when the chain still says what the
+   * confirm showed. Otherwise the line says why, in place, and nothing is sent.
+   */
+  const confirmLoanSource = async () => {
+    try {
+      const fresh = await readLoanSource(publicClient!, {
+        chainId,
+        revnetId: loanProjectId,
+        loanId: BigInt(loanId),
+      });
+      if (loanSource && sameLoanSource(loanSource, fresh)) {
+        setSourceNotice(undefined);
+        return true;
+      }
+      setSourceNotice(LOAN_SOURCE_CHANGED);
+    } catch {
+      setSourceNotice(LOAN_SOURCE_UNREADABLE);
+    }
+    setRepayStatus("error");
+    void refetchLoanSource();
+    return false;
+  };
+
   const handleApproveAllowance = async () => {
     if (
       !loanData ||
@@ -436,38 +636,24 @@ export function RepayDialog({
 
     try {
       setRepayStatus("approving");
+      if (!(await confirmLoanSource())) return;
       const baseTokenAddress = chainTokenConfig.token;
-      const revLoansContractAddress = getRevnetLoanContract(6, chainId);
 
-      const approveHash = await repayLoanAsync({
-        chainId,
-        address: baseTokenAddress,
-        abi: erc20Abi,
-        functionName: "approve",
-        // Approve exactly what this repayment can pull, not the whole loan.
-        args: [revLoansContractAddress as Address, finalRepayAmount],
-      });
-
-      requireOnchainExecution(approveHash, "Token approval");
-      const approvalReceipt = await waitForReceiptWithRetry(publicClient, approveHash);
-      if (approvalReceipt.status !== "success") {
-        throw new Error(`Token approval ${approveHash} reverted onchain.`);
-      }
+      // Held by the loan it repays: the accrued amount grows between attempts.
+      // Approve exactly what this repayment can pull, not the whole loan.
+      const approved = await runRepay([approvalCall(baseTokenAddress, finalRepayAmount)]);
+      if (approved?.status !== "done") return;
 
       // Reset allowance check to trigger re-check
       setAllowanceChecked(false);
+      setAllowanceRead((read) => read + 1);
       setRepayStatus("idle");
 
       toast({
         title: "Approval Successful",
-        description: "Token allowance approved. You can now proceed with repayment.",
+        description: "Token use approved. You can now repay.",
       });
     } catch (error: any) {
-      if (isSafeProposalPendingError(error)) {
-        setRepayStatus("pending");
-        toast({ title: "Safe approval proposal submitted", description: error.message });
-        return;
-      }
       setRepayStatus("error");
       toast({
         variant: "destructive",
@@ -481,7 +667,6 @@ export function RepayDialog({
     if (
       !loanData ||
       !userAddress ||
-      !repayLoanAsync ||
       !publicClient ||
       !walletClient ||
       !chainTokenConfig ||
@@ -490,13 +675,14 @@ export function RepayDialog({
       toast({
         variant: "destructive",
         title: "Error",
-        description: "Missing required data for repayment",
+        description: "Loan details are missing. Reload and try again.",
       });
       return;
     }
 
     try {
       setRepayStatus("waiting-signature");
+      if (!(await confirmLoanSource())) return;
 
       const loanIdBigInt = BigInt(loanId);
       // Same value the simulation and the allowance check used — all three move together, or
@@ -507,74 +693,58 @@ export function RepayDialog({
         loanData.collateral,
       );
 
-      // Check allowance for ERC-20-based projects
+      // An ERC-20 repayment approves exactly what it can pull first, in the same review.
+      const calls: ReviewedCall[] = [];
       if (!isNativeToken(chainTokenConfig.token)) {
-        const baseTokenAddress = chainTokenConfig.token;
-        const revLoansContractAddress = getRevnetLoanContract(6, chainId);
-
+        const baseTokenAddress = chainTokenConfig.token as Address;
         const allowance = await publicClient.readContract({
           address: baseTokenAddress,
           abi: erc20Abi,
           functionName: "allowance",
-          args: [userAddress as Address, revLoansContractAddress as Address],
+          args: [userAddress as Address, getRevnetLoanContract(6, chainId) as Address],
         });
-
-        if (BigInt(allowance) < maxRepayBorrowAmount) {
-          setRepayStatus("approving");
-
-          if (!walletClient) {
-            throw new Error("Wallet client not available");
-          }
-
-          const approveHash = await repayLoanAsync({
-            chainId,
-            address: baseTokenAddress,
-            abi: erc20Abi,
-            functionName: "approve",
-            args: [revLoansContractAddress as Address, maxRepayBorrowAmount],
-          });
-
-          requireOnchainExecution(approveHash, "Token approval");
-          const approvalReceipt = await waitForReceiptWithRetry(publicClient, approveHash);
-          if (approvalReceipt.status !== "success") {
-            throw new Error(`Token approval ${approveHash} reverted onchain.`);
-          }
-          setRepayStatus("waiting-signature");
-        }
+        if (BigInt(allowance) < maxRepayBorrowAmount)
+          calls.push(approvalCall(baseTokenAddress, maxRepayBorrowAmount));
       }
 
-      const txHash = await repayLoanAsync({
-        abi: revLoansAbi,
-        functionName: "repayLoan",
-        address: getRevnetLoanContract(6, chainId),
-        chainId,
-        args: [
-          loanIdBigInt,
-          maxRepayBorrowAmount,
-          collateralCountToReturn,
-          userAddress as Address,
+      // Held by the loan and the collateral the user returns: the repay ceiling accrues.
+      // Held by the loan alone: the collateral returned and the ceiling paid change between
+      // attempts (accrual, a reopen's fresh default).
+      calls.push(
+        reviewedCall(
           {
-            sigDeadline: 0n,
-            amount: 0n,
-            expiration: 0,
-            nonce: 0,
-            signature:
-              "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`,
+            abi: revLoansAbi,
+            functionName: "repayLoan",
+            address: getRevnetLoanContract(6, chainId),
+            chainId,
+            args: [
+              loanIdBigInt,
+              maxRepayBorrowAmount,
+              collateralCountToReturn,
+              userAddress as Address,
+              {
+                sigDeadline: 0n,
+                amount: 0n,
+                expiration: 0,
+                nonce: 0,
+                signature:
+                  "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`,
+              },
+            ],
+            // Repay cost accrues continuously, so a quoted exact value can be stale by send time
+            // and underfund the repay. Send the ceiling (principal + accrued source fee + buffer);
+            // the contract refunds the excess.
+            value: isNativeToken(chainTokenConfig.token) ? maxRepayBorrowAmount : 0n,
           },
-        ],
-        // Repay cost accrues continuously, so a quoted exact value can be stale by send time and
-        // underfund the repay. Send the ceiling (principal + accrued source fee + buffer); the
-        // contract refunds the excess.
-        value: isNativeToken(chainTokenConfig.token) ? maxRepayBorrowAmount : 0n,
-      });
-
-      setRepayTxHash(txHash);
+          {
+            intent: loanIntent({ chainId, loanId: BigInt(loanId) }),
+            legacyIntents: legacyIntents.repay(loanId),
+            dependsOnPrior: calls.length > 0,
+          },
+        ),
+      );
+      await runRepay(calls);
     } catch (error: any) {
-      if (isSafeProposalPendingError(error)) {
-        setRepayStatus("pending");
-        toast({ title: "Safe approval proposal submitted", description: error.message });
-        return;
-      }
       setRepayStatus("error");
       toast({
         variant: "destructive",
@@ -603,7 +773,7 @@ export function RepayDialog({
                 portion < 0.000001 ? "0" : portion.toFixed(6).replace(/\.?0+$/, ""),
               );
             }}
-            className="h-8 px-3 text-xs text-zinc-700 border border-zinc-300 rounded-md bg-white hover:bg-zinc-100"
+            className="h-10 px-3 text-sm text-zinc-700 border border-zinc-300 bg-white hover:bg-zinc-100"
           >
             {pct}%
           </button>
@@ -614,7 +784,7 @@ export function RepayDialog({
             const maxCollateralDisplay = formatUnits(loanData.collateral, projectTokenDecimals);
             setCollateralToReturn(maxCollateralDisplay);
           }}
-          className="h-8 px-3 text-xs text-zinc-700 border border-zinc-300 rounded-md bg-white hover:bg-zinc-100"
+          className="h-10 px-3 text-sm text-zinc-700 border border-zinc-300 bg-white hover:bg-zinc-100"
         >
           Max
         </button>
@@ -622,7 +792,7 @@ export function RepayDialog({
     );
   };
 
-  const statusText = REPAY_STATUS_TEXT[repayStatus];
+  const statusText = repayStatus === "idle" ? undefined : REPAY_STATUS_TEXT[repayStatus];
   const renderStatusMessage = () =>
     statusText ? <p className="text-sm text-zinc-600 mt-2">{statusText}</p> : null;
   const signing = isRepaying || repayStatus === "waiting-signature" || repayStatus === "approving";
@@ -631,6 +801,19 @@ export function RepayDialog({
   // An unresolved token config is a LOADING state: without it the loan's base
   // token is unknown, so amounts, allowance, and value attachment can't be
   // rendered or submitted safely.
+  if (!chainTokenConfig && loanSourceLine) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Repay loan</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-zinc-600">{loanSourceLine}</p>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   if (isLoadingLoan || !chainTokenConfig || (!allowanceChecked && isNativeBase === false)) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -651,6 +834,9 @@ export function RepayDialog({
     );
   }
 
+  // The loan's own decimals, as the loans contract reports them.
+  const baseTokenDecimals = chainTokenConfig.decimals;
+
   if (!loanData) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -659,7 +845,7 @@ export function RepayDialog({
             <DialogTitle>Repay loan</DialogTitle>
           </DialogHeader>
           <div className="text-sm text-zinc-700 space-y-4">
-            <p>Loan not found or no longer exists.</p>
+            <p>Loan not found. It may have been closed or replaced.</p>
           </div>
         </DialogContent>
       </Dialog>
@@ -674,124 +860,104 @@ export function RepayDialog({
           <DialogTitle>Repay loan</DialogTitle>
         </DialogHeader>
         <div className="text-sm text-zinc-700 space-y-4">
-          <div className="grid grid-cols-7 gap-2">
-            <div className="col-span-4">
-              <Label
-                htmlFor="collateral-to-return"
-                className="block text-zinc-700 text-sm font-bold mb-1"
-              >
-                How much {tokenSymbol} collateral do you want back?
-              </Label>
-              <Input
-                id="collateral-to-return"
-                type="number"
-                step="0.000001"
-                value={collateralToReturn}
-                onChange={(e) => {
-                  const value = e.target.value;
+          <div>
+            <Label
+              htmlFor="collateral-to-return"
+              className="block text-zinc-700 text-sm font-bold mb-1"
+            >
+              How much {tokenSymbol} do you want to recover?
+            </Label>
+            <Input
+              id="collateral-to-return"
+              type="number"
+              step="0.000001"
+              value={collateralToReturn}
+              onChange={(e) => {
+                const value = e.target.value;
 
-                  // Allow empty input for clearing
-                  if (value === "") {
-                    setCollateralToReturn("");
-                    return;
-                  }
+                // Allow empty input for clearing
+                if (value === "") {
+                  setCollateralToReturn("");
+                  return;
+                }
 
-                  // Limit decimal places to 8 digits
-                  const decimalIndex = value.indexOf(".");
-                  if (decimalIndex !== -1 && value.length - decimalIndex - 1 > 8) {
-                    return; // Don't update if too many decimal places
-                  }
+                // Limit decimal places to 8 digits
+                const decimalIndex = value.indexOf(".");
+                if (decimalIndex !== -1 && value.length - decimalIndex - 1 > 8) {
+                  return; // Don't update if too many decimal places
+                }
 
-                  const numValue = Number(value);
-                  const maxValue = loanData
-                    ? Number(formatUnits(loanData.collateral, projectTokenDecimals))
-                    : 0;
+                const numValue = Number(value);
+                const maxValue = loanData
+                  ? Number(formatUnits(loanData.collateral, projectTokenDecimals))
+                  : 0;
 
-                  // Only validate max if it's a valid number
-                  if (!isNaN(numValue)) {
-                    // Prevent entering more than available collateral
-                    if (numValue > maxValue) {
-                      setCollateralToReturn(maxValue.toFixed(6));
-                    } else {
-                      setCollateralToReturn(value);
-                    }
+                // Only validate max if it's a valid number
+                if (!isNaN(numValue)) {
+                  // Prevent entering more than available collateral
+                  if (numValue > maxValue) {
+                    setCollateralToReturn(maxValue.toFixed(6));
                   } else {
-                    // Allow partial input (like just a decimal point)
                     setCollateralToReturn(value);
                   }
-                }}
-                placeholder="Enter collateral amount to return"
-                className={collateralError ? "border-red-500" : ""}
-              />
-              {collateralError && <p className="text-xs text-red-500 mt-1">{collateralError}</p>}
+                } else {
+                  // Allow partial input (like just a decimal point)
+                  setCollateralToReturn(value);
+                }
+              }}
+              placeholder="Enter tokens to recover"
+              className={collateralError ? "border-red-500" : ""}
+            />
+            {collateralError && <p className="text-xs text-red-500 mt-1">{collateralError}</p>}
 
-              {renderPercentageButtons()}
-            </div>
+            {renderPercentageButtons()}
           </div>
 
           <div className="mt-4">
-            <Label className="block text-zinc-700 text-sm font-bold mb-1">
-              Repayment Breakdown
-            </Label>
+            <Label className="block text-zinc-700 text-sm font-bold mb-1">Repayment details</Label>
             {loanData && (
-              <div className="bg-melon-25 border border-melon-300 p-4">
-                <div className="text-sm text-zinc-600">
-                  <table className="w-full">
-                    <tbody className="space-y-1">
-                      <tr>
-                        <td className="pr-4">Original amount borrowed:</td>
-                        <td className="font-semibold text-right">
-                          {formatUnits(loanData.amount, baseTokenDecimals)} {baseTokenSymbol}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="pr-4">
-                          Amount of collateral you want back (
-                          {(
-                            (Number(collateralToReturn) /
-                              Number(formatUnits(loanData.collateral, projectTokenDecimals))) *
-                            100
-                          ).toFixed(1)}
-                          %):
-                        </td>
-                        <td className="font-semibold text-right">
-                          {collateralToReturn} {tokenSymbol}
-                        </td>
-                      </tr>
-                      {!isSimulating &&
-                        !simulationError &&
-                        amountToPayNow !== undefined &&
-                        repayPrincipal !== undefined && (
-                          <>
-                            <tr>
-                              <td className="pr-4">Amount to pay now:</td>
-                              <td className="font-semibold text-right">
-                                {formatUnits(amountToPayNow, baseTokenDecimals)} {baseTokenSymbol}
-                                {feeForThisRepay !== undefined && feeForThisRepay > 0n ? (
-                                  <span className="block text-xs font-normal text-zinc-500">
-                                    includes {formatUnits(feeForThisRepay, baseTokenDecimals)}{" "}
-                                    {baseTokenSymbol} source fee
-                                  </span>
-                                ) : null}
-                              </td>
-                            </tr>
-                            <tr>
-                              <td className="pr-4">Amount rolled into new loan id:</td>
-                              <td className="font-semibold text-right">
-                                {formatUnits(loanData.amount - repayPrincipal, baseTokenDecimals)}{" "}
-                                {baseTokenSymbol}
-                              </td>
-                            </tr>
-                          </>
-                        )}
-                    </tbody>
-                  </table>
+              <div className="border border-melon-300 p-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <SummaryRow label="Originally borrowed">
+                    {formatUnits(loanData.amount, baseTokenDecimals)} {baseTokenSymbol}
+                  </SummaryRow>
+                  <SummaryRow
+                    label={`Tokens to recover (${(
+                      (Number(collateralToReturn) /
+                        Number(formatUnits(loanData.collateral, projectTokenDecimals))) *
+                      100
+                    ).toFixed(1)}%)`}
+                  >
+                    {collateralToReturn} {tokenSymbol}
+                  </SummaryRow>
+                  {!isSimulating &&
+                    !simulationError &&
+                    amountToPayNow !== undefined &&
+                    repayPrincipal !== undefined && (
+                      <>
+                        <SummaryRow label="Pay now">
+                          {formatUnits(amountToPayNow, baseTokenDecimals)} {baseTokenSymbol}
+                          {feeForThisRepay !== undefined && feeForThisRepay > 0n ? (
+                            <span className="block text-xs text-zinc-500">
+                              includes {formatUnits(feeForThisRepay, baseTokenDecimals)}{" "}
+                              {baseTokenSymbol} repayment fee
+                            </span>
+                          ) : null}
+                        </SummaryRow>
+                        <SummaryRow label="Debt left in a new loan">
+                          {formatUnits(loanData.amount - repayPrincipal, baseTokenDecimals)}{" "}
+                          {baseTokenSymbol}
+                        </SummaryRow>
+                      </>
+                    )}
                 </div>
                 {isSimulating && (
-                  <p className="text-sm text-zinc-500 mt-2">Calculating exact amounts...</p>
+                  <p className="text-sm text-zinc-500 mt-2">Checking repayment amounts...</p>
                 )}
                 {simulationError && shouldRunSimulation && (
-                  <p className="text-sm text-red-500 mt-2">Error: {simulationError.message}</p>
+                  <p className="text-sm text-red-500 mt-2">
+                    Couldn&apos;t check this repayment. {formatWalletError(simulationError)}
+                  </p>
                 )}
                 {!isSimulating &&
                   !simulationError &&
@@ -799,26 +965,24 @@ export function RepayDialog({
                   !hasSufficientAllowance &&
                   isNativeBase === false && (
                     <p className="text-sm text-red-500 mt-2">
-                      Please approve token allowance to see exact repayment amounts
+                      Approve token use to check the repayment amount
                     </p>
                   )}
                 {!isSimulating &&
                   !simulationError &&
                   amountToPayNow === undefined &&
                   (hasSufficientAllowance || isNativeBase) && (
-                    <p className="text-sm text-zinc-500 mt-2">
-                      Contract will calculate exact amounts
-                    </p>
+                    <p className="text-sm text-zinc-500 mt-2">The amount is set when you repay</p>
                   )}
               </div>
             )}
           </div>
           {/* Allowance Error Display */}
           {allowanceChecked && !hasSufficientAllowance && isNativeBase === false && (
-            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+            <div className="mt-4 p-4 border border-red-200">
               <div className="flex items-start gap-3">
                 <div className="flex-1">
-                  <p className="text-sm text-red-700 font-medium mb-2">Token Approval Required</p>
+                  <p className="text-sm text-red-700 font-medium mb-2">Token approval needed</p>
                   <p className="text-sm text-red-600 mb-3">{allowanceError}</p>
                   <ButtonWithWallet
                     targetChainId={chainId as JBChainId}
@@ -842,10 +1006,14 @@ export function RepayDialog({
               <ButtonWithWallet
                 targetChainId={chainId as JBChainId}
                 loading={
-                  isRepaying || repayStatus === "waiting-signature" || repayStatus === "pending"
+                  isRepaying ||
+                  repayStatus === "waiting-signature" ||
+                  repayStatus === "pending" ||
+                  repayStatus === "proposed"
                 }
                 onClick={() => setReview("repay")}
                 disabled={
+                  loanSourceLine === LOAN_SOURCE_UNREADABLE ||
                   !finalRepayAmount ||
                   Number(finalRepayAmount) <= 0 ||
                   !collateralToReturn ||
@@ -862,74 +1030,44 @@ export function RepayDialog({
               </ButtonWithWallet>
             )}
             {renderStatusMessage()}
+            {loanSourceLine && !review ? (
+              <p className="text-sm text-zinc-600 mt-2">{loanSourceLine}</p>
+            ) : null}
           </div>
         </div>
         {review && finalRepayAmount !== undefined ? (
-          <TxConfirmDialog
+          <TxProgress
             open
-            onOpenChange={(next) => {
-              if (!next) setReview(null);
-            }}
+            onClose={() => setReview(null)}
             title={review === "approve" ? "Confirm approval" : "Confirm repayment"}
-            chainId={chainId}
             steps={
               review === "approve"
                 ? [
                     {
                       title: `Approve ${baseTokenSymbol}`,
-                      detail: "REVLoans can pull at most this amount; the surplus is refunded.",
+                      detail:
+                        "The loan contract can use up to this amount. Any unused payment is returned.",
                     },
                   ]
                 : [
                     {
                       title: "Repay the loan",
-                      detail: "Pays what is owed and returns the collateral to your wallet.",
+                      detail:
+                        "Repays the amount shown and creates the tokens again in your wallet.",
                     },
                   ]
             }
             activeIndex={signing ? 0 : -1}
-            action={review === "approve" ? `Approve ${baseTokenSymbol}` : "Repay loan"}
-            onConfirm={() => {
+            start={() => {
               if (review === "approve")
                 void handleApproveAllowance().finally(() => setReview(null));
               else void handleRepay();
             }}
             busy={signing}
-            status={signing ? statusText : null}
-            error={repayStatus === "error" ? statusText : null}
-          >
-            {review === "repay" ? (
-              <>
-                <SummaryRow label="Returns">
-                  {collateralToReturn} {tokenSymbol}
-                </SummaryRow>
-                <SummaryRow label="On">{chainDisplayName(chainId)}</SummaryRow>
-                <SummaryRow label="Pays now">
-                  {amountToPayNow !== undefined
-                    ? `${formatUnits(amountToPayNow, baseTokenDecimals)} ${baseTokenSymbol}`
-                    : "Calculated by the contract"}
-                  {feeForThisRepay !== undefined && feeForThisRepay > 0n ? (
-                    <span className="block text-xs text-zinc-500">
-                      Includes {formatUnits(feeForThisRepay, baseTokenDecimals)} {baseTokenSymbol}{" "}
-                      source fee
-                    </span>
-                  ) : null}
-                </SummaryRow>
-                {repayPrincipal !== undefined && loanData.amount - repayPrincipal > 0n ? (
-                  <SummaryRow label="Rolled into a new loan">
-                    {formatUnits(loanData.amount - repayPrincipal, baseTokenDecimals)}{" "}
-                    {baseTokenSymbol}
-                  </SummaryRow>
-                ) : null}
-              </>
-            ) : (
-              <SummaryRow label="On">{chainDisplayName(chainId)}</SummaryRow>
-            )}
-            <SummaryRow label="Authorizes up to">
-              {formatUnits(finalRepayAmount, baseTokenDecimals)} {baseTokenSymbol}
-              <span className="block text-xs text-zinc-500">The unused part is refunded</span>
-            </SummaryRow>
-          </TxConfirmDialog>
+            status={signing || repayStatus === "safe-unconfirmed" ? statusText : null}
+            error={loanSourceLine ?? (repayStatus === "error" ? statusText : null)}
+            rows={repayContext()}
+          />
         ) : null}
       </DialogContent>
     </Dialog>

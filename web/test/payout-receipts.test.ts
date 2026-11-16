@@ -1,10 +1,12 @@
-import { type ExpectedPayoutReceipt, verifyPayoutReceipt } from "@/lib/payout-receipts";
+import { verifyActionReceipt } from "@/lib/multichain-guards";
 import { jbMultiTerminalAbi } from "@bananapus/nana-sdk-core";
+import type { ExpectedPayoutReceipt } from "@bananapus/nana-sdk-core/v6";
 import {
   type AbiEvent,
   type Address,
   encodeAbiParameters,
   encodeEventTopics,
+  type PublicClient,
   type TransactionReceipt,
   zeroAddress,
 } from "viem";
@@ -23,8 +25,8 @@ const split = {
   lockedUntil: 100,
   hook,
 };
+// As the payouts card journals it: JSON-safe, with the reviewed splits in order.
 const expected: ExpectedPayoutReceipt = {
-  kind: "payout",
   terminal,
   token,
   owner,
@@ -107,46 +109,61 @@ function receipt(
   };
 }
 
-describe("wallet-action:payouts — recipient completion evidence", () => {
-  it("accepts exact reviewed hook, project and owner recipients with the full standard fee", () => {
-    expect(() => verifyPayoutReceipt(receipt(), expected)).not.toThrow();
+/** What the batch and Relayr verifiers run on a payout's receipt. */
+function verify(result: { logs: TransactionReceipt["logs"] }, review = expected) {
+  return verifyActionReceipt(
+    {} as PublicClient,
+    result as TransactionReceipt,
+    terminal,
+    undefined,
+    [],
+    undefined,
+    review,
+  );
+}
+
+describe("recipient completion evidence", () => {
+  it("wallet-action:payouts accepts exact reviewed hook, project and owner recipients with the full standard fee", async () => {
+    await expect(verify(receipt())).resolves.toBeUndefined();
   });
 
-  it("accepts feeless recipients and fee rounding at the one-unit boundary", () => {
-    expect(() =>
-      verifyPayoutReceipt(
+  it("accepts feeless recipients and fee rounding at the one-unit boundary", async () => {
+    await expect(
+      verify(
         receipt({
           first: { netAmount: 2_500n },
           second: { netAmount: 5_000n },
           payout: { netLeftoverPayoutAmount: 2_500n, fee: 0n },
         }),
-        expected,
       ),
-    ).not.toThrow();
-    const tinyExpected = { ...expected, amount: "4", minimum: "4" };
-    expect(() =>
-      verifyPayoutReceipt(
+    ).resolves.toBeUndefined();
+    await expect(
+      verify(
         receipt({
           first: { amount: 1n, netAmount: 1n },
           second: { amount: 2n, netAmount: 2n },
           payout: { amount: 4n, amountPaidOut: 4n, fee: 0n, netLeftoverPayoutAmount: 1n },
         }),
-        tinyExpected,
+        { ...expected, amount: "4", minimum: "4" },
       ),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
-  it("rejects a hook short-pull even though the outer receipt succeeded and emitted no failure event", () => {
-    expect(() => verifyPayoutReceipt(receipt({ first: { netAmount: 2_437n } }), expected)).toThrow(
+  it("rejects a hook that took only part of its share, though the receipt succeeded", async () => {
+    await expect(verify(receipt({ first: { netAmount: 2_437n } }))).rejects.toThrow(
       "do not send these payouts again",
+    );
+    // Its net is its gross, or its gross less the 2.5% fee: nothing in between.
+    await expect(verify(receipt({ first: { netAmount: 2_450n } }))).rejects.toThrow(
+      "received 2,450 of its 2,500",
     );
   });
 
-  it("rejects partial owner delivery and excessive fee claims", () => {
-    expect(() =>
-      verifyPayoutReceipt(receipt({ payout: { netLeftoverPayoutAmount: 2_437n } }), expected),
-    ).toThrow();
-    expect(() => verifyPayoutReceipt(receipt({ payout: { fee: 251n } }), expected)).toThrow();
+  it("rejects partial owner delivery and excessive fee claims", async () => {
+    await expect(
+      verify(receipt({ payout: { netLeftoverPayoutAmount: 2_437n } })),
+    ).rejects.toThrow();
+    await expect(verify(receipt({ payout: { fee: 251n } }))).rejects.toThrow();
   });
 
   it.each([
@@ -157,8 +174,8 @@ describe("wallet-action:payouts — recipient completion evidence", () => {
     { amount: 10_001n },
     { amountPaidOut: 9_899n },
     { caller: hook },
-  ])("rejects payout identity, ruleset, receiver or amount drift case %#", (change) => {
-    expect(() => verifyPayoutReceipt(receipt({ payout: change }), expected)).toThrow();
+  ])("rejects payout identity, ruleset, receiver or amount drift case %#", async (change) => {
+    await expect(verify(receipt({ payout: change }))).rejects.toThrow();
   });
 
   it.each([
@@ -168,45 +185,43 @@ describe("wallet-action:payouts — recipient completion evidence", () => {
     { preferAddToBalance: true },
     { lockedUntil: 101 },
     { hook: zeroAddress },
-  ])("rejects changed split settings case %#", (change) => {
-    expect(() =>
-      verifyPayoutReceipt(receipt({ first: { split: { ...split, ...change } } }), expected),
-    ).toThrow();
+  ])("rejects changed split settings case %#", async (change) => {
+    await expect(verify(receipt({ first: { split: { ...split, ...change } } }))).rejects.toThrow();
   });
 
-  it("rejects missing, duplicate, out-of-order and forged-emitter split events", () => {
+  it("rejects a receipt missing a split's event, and duplicate, reordered or forged ones", async () => {
     const valid = receipt();
-    expect(() => verifyPayoutReceipt({ logs: valid.logs.slice(1) }, expected)).toThrow();
-    expect(() => verifyPayoutReceipt({ logs: [...valid.logs, valid.logs[0]] }, expected)).toThrow();
-    expect(() =>
-      verifyPayoutReceipt({ logs: [valid.logs[1], valid.logs[0], valid.logs[2]] }, expected),
-    ).toThrow();
-    expect(() =>
-      verifyPayoutReceipt(
-        { logs: [{ ...valid.logs[0], address: hook }, ...valid.logs.slice(1)] },
-        expected,
+    await expect(verify({ logs: valid.logs.slice(1) })).rejects.toThrow(
+      "the receipt pays 1 splits, not the reviewed 2",
+    );
+    await expect(verify({ logs: [...valid.logs, valid.logs[0]] })).rejects.toThrow();
+    await expect(verify({ logs: [valid.logs[1], valid.logs[0], valid.logs[2]] })).rejects.toThrow();
+    await expect(
+      verify({ logs: [{ ...valid.logs[0], address: hook }, ...valid.logs.slice(1)] }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects missing or duplicate terminal completion events", async () => {
+    const valid = receipt();
+    await expect(verify({ logs: valid.logs.slice(0, 2) })).rejects.toThrow();
+    await expect(verify({ logs: [...valid.logs, valid.logs[2]] })).rejects.toThrow();
+  });
+
+  it("uses sequential remainder rounding for gross split allocations", async () => {
+    await expect(
+      verify(
+        receipt({
+          first: { amount: 2_500n },
+          second: { amount: 5_002n, netAmount: 4_877n },
+          payout: { amount: 10_003n, amountPaidOut: 10_003n, netLeftoverPayoutAmount: 2_439n },
+        }),
+        { ...expected, amount: "10003", minimum: "10003" },
       ),
-    ).toThrow();
+    ).resolves.toBeUndefined();
+    await expect(verify(receipt({ first: { amount: 2_501n } }))).rejects.toThrow();
   });
 
-  it("rejects missing or duplicate terminal completion events", () => {
-    const valid = receipt();
-    expect(() => verifyPayoutReceipt({ logs: valid.logs.slice(0, 2) }, expected)).toThrow();
-    expect(() => verifyPayoutReceipt({ logs: [...valid.logs, valid.logs[2]] }, expected)).toThrow();
-  });
-
-  it("uses sequential remainder rounding for gross split allocations", () => {
-    const odd = { ...expected, amount: "10003", minimum: "10003" };
-    const valid = receipt({
-      first: { amount: 2_500n },
-      second: { amount: 5_002n, netAmount: 4_877n },
-      payout: { amount: 10_003n, amountPaidOut: 10_003n, netLeftoverPayoutAmount: 2_439n },
-    });
-    expect(() => verifyPayoutReceipt(valid, odd)).not.toThrow();
-    expect(() => verifyPayoutReceipt(receipt({ first: { amount: 2_501n } }), expected)).toThrow();
-  });
-
-  it("rejects both explicit recipient failure events", () => {
+  it("rejects both explicit recipient failure events", async () => {
     const reverted = log("PayoutReverted", {
       projectId: 42n,
       split,
@@ -224,17 +239,23 @@ describe("wallet-action:payouts — recipient completion evidence", () => {
       caller,
     });
     for (const failed of [reverted, transferReverted]) {
-      expect(() => verifyPayoutReceipt({ logs: [...receipt().logs, failed] }, expected)).toThrow();
+      await expect(verify({ logs: [...receipt().logs, failed] })).rejects.toThrow(
+        "a recipient failed",
+      );
     }
   });
 
-  it("ignores unrelated projects and other emitters without accepting them as missing evidence", () => {
+  it("refuses a terminal log its ABI cannot read rather than skipping it", async () => {
+    const unreadable = { ...receipt().logs[0], data: "0x" as const };
+    await expect(verify({ logs: [...receipt().logs, unreadable] })).rejects.toThrow(
+      "that its ABI cannot read",
+    );
+  });
+
+  it("ignores unrelated projects and other emitters without accepting them as missing evidence", async () => {
     const unrelated = log("SendPayouts", { ...payout, projectId: 99n });
-    expect(() =>
-      verifyPayoutReceipt(
-        { logs: [...receipt().logs, unrelated, log("SendPayouts", payout, hook)] },
-        expected,
-      ),
-    ).not.toThrow();
+    await expect(
+      verify({ logs: [...receipt().logs, unrelated, log("SendPayouts", payout, hook)] }),
+    ).resolves.toBeUndefined();
   });
 });

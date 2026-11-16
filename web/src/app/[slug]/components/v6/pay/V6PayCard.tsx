@@ -1,86 +1,97 @@
 "use client";
 
+import dynamic from "next/dynamic";
+
+import { chainDisplayName, chainSortIndex } from "@/app/constants";
 import { useOnRamp } from "@/components/GetFunds";
 import { ImageWithFallback } from "@/components/IpfsImage";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAllowance } from "@/hooks/useAllowance";
-import { useReviewedPermit2Signature } from "@/hooks/useReviewedPermit2Signature";
-import {
-  isSafeProposalPendingError,
-  requireOnchainExecution,
-  submittedViaSafe,
-  useWaitForTransactionReceipt,
-  useWriteContract,
-} from "@/hooks/useReviewedWriteContract";
+import { useOpenedOnce } from "@/hooks/useOpenedOnce";
+import { signPayAuthorization, useReviewedAction } from "@/hooks/useReviewedAction";
+import { useSecondsUntil } from "@/hooks/useSecondsUntil";
 import { useTokenBalances } from "@/hooks/useTokenBalances";
+import { ProjectPayNoticeOperation } from "@/lib/bendystraw";
+import { queryBendystrawFromBrowser } from "@/lib/bendystraw/client";
+import { erc20ApproveAbi } from "@/lib/erc20-approve";
+import { legacyIntents } from "@/lib/legacy-intents";
+import { useJBChainId, useJBProjectMetadataContext, useJBTokenContext } from "@/lib/nana/project";
 import {
-  addPermit2SignatureToDirectPaySwap,
-  buildDirectPaySwapTx,
-  PERMIT2_ADDRESS,
-  permit2Abi,
-  type Permit2SignatureAuthorization,
-  permit2SignatureNeedsOnchainFallback,
-  quoteDirectPaySwap,
-  UNIVERSAL_ROUTER_BY_CHAIN,
-} from "@/lib/directPaySwap";
-import { useJBTokenContext } from "@/lib/nana/project";
-import { useSuckers } from "@/lib/nana/suckers";
+  hasSuckerPair,
+  isPairCheckPending,
+  unverifiedPairLine,
+  useSuckers,
+} from "@/lib/nana/suckers";
 import { resolveBestV6PayRoute } from "@/lib/paymentTerminal";
-import { minReturnedTokens } from "@/lib/quote";
+import { ACCOUNT_CHANGED, failedLine, revertedStep, reviewedCall } from "@/lib/reviewed-call";
+import { isSafeConnection } from "@/lib/safe-connector";
 import { Token } from "@/lib/token";
 import { formatTokenSymbol, formatWalletError } from "@/lib/utils";
 import {
   formatPayAmount,
   formatStartCountdown,
   isNativePayToken,
+  MEMO_MAX_LENGTH,
   payTokenKey,
   V6PayMode,
 } from "@/lib/v6/pay";
-import {
-  isTransactionReceiptUnavailableError,
-  waitForReceiptWithRetry,
-} from "@/lib/waitForReceipt";
+import { heldLineOf } from "@/lib/write-hold";
 import { useParaAuth } from "@/providers/ParaAuthContext";
 import {
-  JB_CHAINS,
   JBChainId,
-  jbContractAddress,
   JBCoreContracts,
   jbMultiTerminalAbi,
+  jbPricesAbi,
   jbRouterTerminalRegistryAbi,
+  jbV6ContractAddress,
 } from "@bananapus/nana-sdk-core";
+import { approvalIntent, payIntent } from "@bananapus/nana-sdk-core/review";
 import {
-  build721PayMetadata,
+  addPermit2PayMetadata,
   buildPayTx,
+  decodePayFailure,
   effectiveTierPrice,
-  previewPay,
+  PAY_DEFAULT_SLIPPAGE_BPS,
+  PAY_QUOTE_FAILED_MESSAGE,
+  PAY_SWAP_QUOTE_FAILED_MESSAGE,
+  payNoticeView,
+  payRetrySlippageBps,
+  PaySwapQuoteFailedError,
+  PERMIT2_ADDRESS,
+  permit2PayAuthorizationReusable,
+  planErc20PayAuthorization,
+  prepareUserPay,
   resolvePaymentTerminal,
+  type SignedPermit2PayAuthorization,
+  type UserPayTiers,
 } from "@bananapus/nana-sdk-core/v6";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   Address,
   encodeFunctionData,
-  erc20Abi,
   formatUnits,
-  Hex,
+  type Hex,
+  maxUint256,
   parseUnits,
   PublicClient,
   zeroAddress,
 } from "viem";
-import { useAccount, usePublicClient } from "wagmi";
+import { useAccount, useConfig, usePublicClient } from "wagmi";
 import { useSelectedSucker } from "../../PayCard/SelectedSuckerContext";
-import { readPoolSnapshot } from "../owners/market/lib";
 import { useShopCart } from "../ShopCartContext";
+import { MemoCount } from "./MemoCount";
 import {
   buyableAsset,
   defaultsToDollars,
   payButtonAction,
   payPanelLayoutClasses,
-  paySettlementLabel,
+  pickedTokenIndex,
+  tokensForDollars,
 } from "./payCardLayout";
+import { PAY_FLOW_START, payFlow, payFlowView } from "./payFlow";
+import { PayNoticeNote } from "./PayNoticeNote";
 import { TextSelect } from "./TextSelect";
 import {
   BASE_CURRENCY_ETH,
@@ -90,13 +101,14 @@ import {
   usePayShopRoutes,
 } from "./usePayShop";
 import { usePaySurface } from "./usePaySurface";
-import {
-  PreparedV6Pay,
-  type PreparedV6TransactionAction,
-  V6PayConfirmDialog,
-  V6PayPhase,
-} from "./V6PayConfirmDialog";
+import type { PreparedV6Pay } from "./V6PayConfirmDialog";
 import { V6PayShopStrip } from "./V6PayShopStrip";
+
+const loadPayConfirm = () => import("./V6PayConfirmDialog");
+const V6PayConfirmDialog = dynamic(
+  () => loadPayConfirm().then((module) => module.V6PayConfirmDialog),
+  { ssr: false },
+);
 
 function payChainName(chainId: JBChainId): string {
   const compactNames: Partial<Record<JBChainId, string>> = {
@@ -104,7 +116,7 @@ function payChainName(chainId: JBChainId): string {
     84532: "Base Sep",
     421614: "Arb Sep",
   };
-  return compactNames[chainId] ?? JB_CHAINS[chainId]?.name ?? String(chainId);
+  return compactNames[chainId] ?? chainDisplayName(chainId);
 }
 
 /**
@@ -117,32 +129,89 @@ function payChainName(chainId: JBChainId): string {
 /** Sentinel for the token menu's buy entry; never a token index. */
 const BUY_OPTION = "buy";
 
+const SAFE_APPROVAL_DONE = "Your Safe approved the token. Review the payment again to send it.";
+
 export function V6PayCard() {
   const { selectedSucker, setSelectedSucker } = useSelectedSucker();
   const chainId = selectedSucker.peerChainId;
   const projectId = selectedSucker.projectId;
 
-  const { data: suckers } = useSuckers();
+  const suckerQuery = useSuckers();
+  const { data: suckers, verifiedPairs } = suckerQuery;
+  // The picker lists indexer-seeded chains for speed, but a payment is built for the
+  // selected pair, so only a pair the on-chain sucker registry lists can be paid.
+  const pairVerified = hasSuckerPair(verifiedPairs, selectedSucker);
+  const pairPending = !pairVerified && isPairCheckPending(suckerQuery);
+  const pairLine = pairVerified ? null : unverifiedPairLine(suckerQuery, chainDisplayName(chainId));
   const chainOptions = useMemo(
     () => (suckers && suckers.length > 0 ? suckers : [selectedSucker]),
     [suckers, selectedSucker],
   );
 
   const { address, isConnected } = useAccount();
+  const wagmiConfig = useConfig();
   const publicClient = usePublicClient({ chainId });
   // Every wallet action confirms through the one transaction safety check —
   // the same shell every multi-step flow uses. The confirm dialog only shows
   // the intent summary and the step queue.
-  const { writeContractAsync } = useWriteContract({
-    transactionReview: {
-      title: "Review the payment",
-      confirmLabel: "Agree & send",
-    },
-  });
-  const { signPermit2Async } = useReviewedPermit2Signature();
-  const { ensureAllowance, getApprovalReceipt } = useAllowance(chainId);
+  // The latest render's inputs and settled quote, read across the awaits of a
+  // send (the write hook's review and final simulation included): a
+  // preparation is sent only while it still matches both.
+  const currentPayRef = useRef<CurrentPay>({ identity: "", quoteTerminal: null });
+  const pay = useReviewedAction();
+  /** A signed pay authorization, kept while its payment retries. */
+  const signedAuthorization = useRef<SignedPermit2PayAuthorization | null>(null);
 
   const projectToken = useJBTokenContext().token.data;
+  const { metadata: projectMetadata, fullMetadataLoading } = useJBProjectMetadataContext();
+  const pageChainId = useJBChainId();
+  // Each chain keeps its own project file, so the notice is read per chain: the page's chain from
+  // its full file, the others from the indexer.
+  const noticeChainsKey = JSON.stringify(
+    chainOptions.map((s) => [s.peerChainId, Number(s.projectId)]),
+  );
+  const noticeRead = useQuery({
+    queryKey: ["payNotices", noticeChainsKey],
+    staleTime: 60_000,
+    queryFn: async () =>
+      Object.fromEntries(
+        await Promise.all(
+          (JSON.parse(noticeChainsKey) as [number, number][]).map(async ([cid, pid]) => {
+            const notice = await queryBendystrawFromBrowser(
+              ProjectPayNoticeOperation,
+              { chainId: cid, projectId: pid, version: 6 },
+              cid,
+            )
+              .then((data) => (data.project ? (data.project.payDisclosure ?? "").trim() : null))
+              .catch(() => null);
+            return [cid, notice] as const;
+          }),
+        ),
+      ) as Record<number, string | null>,
+  });
+  const pageFile = projectMetadata?.data as { payDisclosure?: unknown } | undefined;
+  const byChainOrder = (a: number, b: number) => chainSortIndex(a) - chainSortIndex(b);
+  const noticeView = payNoticeView(
+    chainId,
+    {
+      ...noticeRead.data,
+      // The page chain's full file is the source once it is read; a failed read falls to the indexer.
+      ...(pageChainId !== undefined && pageFile && !projectMetadata.error
+        ? {
+            [pageChainId]:
+              typeof pageFile.payDisclosure === "string" ? pageFile.payDisclosure.trim() : "",
+          }
+        : {}),
+    },
+    byChainOrder,
+  );
+  // Still reading is not a failed read.
+  if (noticeRead.isFetching || fullMetadataLoading) noticeView.failed = false;
+  const projectNotice = noticeView.notice;
+  const retryNotice = () => {
+    void noticeRead.refetch();
+    void projectMetadata.refetch?.();
+  };
   const projectTokenLabel = projectToken?.symbol
     ? formatTokenSymbol(projectToken.symbol)
     : "tokens";
@@ -153,7 +222,8 @@ export function V6PayCard() {
   const [amount, setAmount] = useState("");
   const [debouncedAmount, setDebouncedAmount] = useState("");
   const [memo, setMemo] = useState("");
-  const [showRouteComparison, setShowRouteComparison] = useState(false);
+  /** A tolerance the payer loosened after a shortfall, for the payment it was set on. */
+  const [payerSlippage, setPayerSlippage] = useState<{ bps: number; payment: string } | null>(null);
   const [tokenIndex, setTokenIndex] = useState(0);
   // True once the user explicitly picks a pay token. Until then the selection
   // auto-defaults to the project's accounting token (list[0]) so an ETH/USDC
@@ -162,10 +232,16 @@ export function V6PayCard() {
   /** "$" is picked in the token menu: the payer has dollars, not the token this project takes.
    *  Nothing is bought until they press Pay — the amount is theirs to type first. */
   const [payWithDollars, setPayWithDollars] = useState(false);
+  /** The payer pressed Try again on a failed quote; a background refetch is not a retry. */
+  // The quote the payer asked to read again; another amount's quote shows its own state.
+  const [retriedQuote, setRetriedQuote] = useState<unknown>(null);
   const [buyExplainerOpen, setBuyExplainerOpen] = useState(false);
   // The (address+route) identity of the user's pick, so a background refetch or
   // chain switch remaps the index to the same token rather than clobbering it.
   const selectedKeyRef = useRef<string | null>(null);
+  const selectedSymbolRef = useRef("");
+  /** A picked token the current chain does not accept, until the payer moves on. */
+  const [droppedToken, setDroppedToken] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedAmount(amount), 400);
@@ -173,7 +249,12 @@ export function V6PayCard() {
   }, [amount]);
 
   // ---- Payment surface: accepted tokens + live ruleset gates ----
-  const { data: surface, isError: surfaceError } = usePaySurface(chainId, projectId);
+  const {
+    data: surface,
+    isError: surfaceError,
+    isFetching: surfaceFetching,
+    refetch: refetchSurface,
+  } = usePaySurface(chainId, projectId);
   const tokens = useMemo(() => surface?.tokens ?? [], [surface]);
   const selected = tokens.length > 0 ? tokens[Math.min(tokenIndex, tokens.length - 1)] : undefined;
   const decimals = selected?.decimals ?? 18;
@@ -187,10 +268,17 @@ export function V6PayCard() {
       return;
     }
     const key = selectedKeyRef.current;
-    const idx = key ? tokens.findIndex((t) => payTokenKey(t) === key) : -1;
+    const idx = key ? pickedTokenIndex(tokens, key, selectedSymbolRef.current, payTokenKey) : -1;
     if (idx >= 0) {
       if (idx !== tokenIndex) setTokenIndex(idx);
+      selectedKeyRef.current = payTokenKey(tokens[idx]);
     } else {
+      // The digits typed were for the dropped token.
+      if (key) {
+        setDroppedToken(selectedSymbolRef.current);
+        setAmount("");
+        setDebouncedAmount("");
+      }
       selectedKeyRef.current = null;
       setTokenTouched(false);
       setTokenIndex(0);
@@ -200,13 +288,8 @@ export function V6PayCard() {
 
   // ---- Ruleset start countdown ----
   const startsAt = surface?.rulesetStart ?? 0;
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-  useEffect(() => {
-    if (!startsAt || startsAt <= now) return;
-    const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
-    return () => clearInterval(t);
-  }, [startsAt, now]);
-  const notStarted = startsAt > now;
+  const untilStart = useSecondsUntil(startsAt) ?? 0;
+  const notStarted = untilStart > 0;
 
   const amountRaw = useMemo(() => {
     try {
@@ -242,6 +325,37 @@ export function V6PayCard() {
     [cart.items, chainId, shop],
   );
   const cartCount = chainCartItems.reduce((sum, i) => sum + i.quantity, 0);
+  // Dollars are what the amount means only while nothing in a cart sets it in tokens.
+  const amountIsDollars = payWithDollars && cartCount === 0;
+  const otherChainCart = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const item of cart.items) {
+      if (item.chainId !== Number(chainId))
+        counts.set(item.chainId, (counts.get(item.chainId) ?? 0) + item.quantity);
+    }
+    return chainOptions.flatMap((option) => {
+      const count = counts.get(Number(option.peerChainId));
+      return count ? [{ chainId: option.peerChainId, count }] : [];
+    })[0];
+  }, [cart.items, chainId, chainOptions]);
+
+  // The digits on screen stop meaning what they meant when their unit changes or the cart that
+  // set them empties. A cart that remains sets its own total below.
+  const previousCartCount = useRef(cartCount);
+  useEffect(() => {
+    const hadItems = previousCartCount.current > 0;
+    previousCartCount.current = cartCount;
+    if (hadItems && cartCount === 0) {
+      setAmount("");
+      setDebouncedAmount("");
+    }
+  }, [cartCount]);
+  useEffect(() => {
+    if (cartCount > 0) return;
+    setAmount("");
+    setDebouncedAmount("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payWithDollars]);
 
   // Clamp stale cart quantities against live per-chain supply; drop dead tiers.
   useEffect(() => {
@@ -291,6 +405,7 @@ export function V6PayCard() {
     if (!preferred) return;
     setTokenIndex(preferred.index);
     selectedKeyRef.current = payTokenKey(preferred.token);
+    selectedSymbolRef.current = preferred.token.symbol;
     setTokenTouched(true);
   }, [cartCount, shopRoutesLoading, shopMatchesToken, supportedShopTokenIndexes, tokens, shop]);
 
@@ -358,16 +473,34 @@ export function V6PayCard() {
   );
   // Metadata ids key off the hook's METADATA_ID_TARGET (the shared
   // implementation), never the clone — else the payment mints ZERO NFTs.
-  const metadata: Hex | undefined =
+  const tiers: UserPayTiers | undefined =
     shop && tierIds.length > 0 && shopMatchesToken
-      ? build721PayMetadata({ metadataIdTarget: shop.idTarget, tierIdsToMint: tierIds })
+      ? { metadataIdTarget: shop.idTarget, tierIdsToMint: tierIds }
       : undefined;
+  const tiersKey = tiers ? `${tiers.metadataIdTarget}:${tiers.tierIdsToMint.join(",")}` : "";
+
+  // The tolerance prepareUserPay floors its quote by: the SDK default, or the
+  // one the payer loosened after this same payment fell short.
+  const paymentInputs = [
+    chainId,
+    projectId,
+    selected ? payTokenKey(selected) : "",
+    amountRaw,
+    tiersKey,
+    address ?? "",
+  ].join("|");
+  const slippageBps = payerSlippage?.payment === paymentInputs ? payerSlippage.bps : undefined;
+  // A tolerance ends with the payment it was set on, even if the same inputs come back.
+  useEffect(() => {
+    if (payerSlippage && payerSlippage.payment !== paymentInputs) setPayerSlippage(null);
+  }, [payerSlippage, paymentInputs]);
 
   // ---- Debounced live preview via the best route (multi vs router) ----
   const {
     data: preview,
     isFetching: previewLoading,
     isError: previewError,
+    error: previewFailure,
     isPlaceholderData: previewIsPrevious,
     isStale: previewIsStale,
     refetch: refetchPreview,
@@ -375,19 +508,31 @@ export function V6PayCard() {
     queryKey: [
       "v6PayPreview",
       chainId,
+      surface?.terminals?.join(",") ?? null,
       projectId.toString(),
       selected ? payTokenKey(selected) : "",
       amountRaw.toString(),
-      metadata ?? "0x",
+      tiersKey,
       address ?? zeroAddress,
+      slippageBps ?? null,
     ],
-    enabled: !!publicClient && !!selected && mode === "pay" && (amountRaw > 0n || cartCount > 0),
-    placeholderData: (previous) => previous,
+    enabled:
+      !!publicClient &&
+      !!selected &&
+      mode === "pay" &&
+      !amountIsDollars &&
+      (amountRaw > 0n || cartCount > 0),
+    // A different amount's quote is a dimmed hint; another token's or chain's is no hint at all.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === chainId &&
+      previousQuery?.queryKey[4] === (selected ? payTokenKey(selected) : "")
+        ? previous
+        : undefined,
     retry: false,
     queryFn: async () => {
       const client = publicClient as PublicClient;
       const beneficiary = address ?? zeroAddress;
-      if (metadata) {
+      if (tiers) {
         // Item checkout goes to the directly resolved terminal so the 721 hook
         // sees the tier metadata.
         const resolved = await resolvePaymentTerminal(client, {
@@ -395,58 +540,42 @@ export function V6PayCard() {
           projectId,
           token: selected!.token,
         });
-        const p = await previewPay(client, {
+        const p = await prepareUserPay(client, {
           chainId,
           terminal: resolved.address,
           projectId,
           token: selected!.token,
           amount: amountRaw,
           beneficiary,
-          metadata,
+          tiers,
+          ...(slippageBps !== undefined ? { slippageBps: BigInt(slippageBps) } : {}),
         });
         return {
-          ...p,
+          ...p.preview,
+          metadata: p.metadata,
+          minReturned: p.minReturnedTokens,
+          quoteFailed: !!p.quoteFailed,
           terminal: resolved.address,
           routeType: resolved.isRouter ? "swap" : "multi",
         } as const;
       }
       const route = await resolveBestV6PayRoute({
+        attachedTerminals: surface?.terminals,
         client,
         chainId,
         projectId,
         token: selected!.token,
         amount: amountRaw,
         beneficiary,
+        ...(slippageBps !== undefined ? { slippageBps: BigInt(slippageBps) } : {}),
+        ...(address ? { simulateFrom: address } : {}),
       });
       if (!route) throw new Error("No pay route with a live quote");
-      const directSwap = await readPoolSnapshot(chainId, projectId)
-        .then(({ pool }) =>
-          pool
-            ? quoteDirectPaySwap({
-                client,
-                chainId,
-                poolKey: pool.key,
-                pairIsCurrency0: pool.pairIsC0,
-                paymentToken: selected!.token,
-                amount: amountRaw,
-                payPreview: route.preview,
-              })
-            : null,
-        )
-        .catch(() => null);
-      if (directSwap) {
-        return {
-          beneficiaryTokenCount: directSwap.beneficiaryTokenCount,
-          reservedTokenCount: directSwap.reservedTokenCount,
-          issuanceTokenCount: route.preview.beneficiaryTokenCount,
-          terminal: UNIVERSAL_ROUTER_BY_CHAIN[chainId]!,
-          routeType: "swap",
-          directSwap,
-        } as const;
-      }
       return {
-        beneficiaryTokenCount: route.preview.beneficiaryTokenCount,
-        reservedTokenCount: route.preview.reservedTokenCount,
+        ...route.preview,
+        metadata: route.metadata,
+        minReturned: route.minReturnedTokens,
+        quoteFailed: !!route.quoteFailed,
         terminal: route.address,
         routeType: route.type,
       } as const;
@@ -457,7 +586,52 @@ export function V6PayCard() {
   // unavailable preview blocks — never send blind.
   const previewReady =
     mode === "addbalance" || (!!preview && !previewError && !previewLoading && !previewIsPrevious);
-  const routeIsRouter = preview?.routeType === "swap";
+  // The preview is an estimate; the minimum is what the terminal enforces.
+  const previewIsEstimate = !!preview && preview.minReturned < preview.beneficiaryTokenCount;
+
+  // ---- What typed dollars would buy ----
+  // Display only, and kept out of the query above: nothing sends this quote. Paying with dollars
+  // buys the token first, and the payment after that gets its own quote and review.
+  const { data: tokensPerDollar, isLoading: dollarPriceLoading } = useQuery({
+    queryKey: ["v6PayTokensPerDollar", chainId, projectId.toString(), selected?.currency],
+    enabled: !!publicClient && !!selected && amountIsDollars && mode === "pay" && amountRaw > 0n,
+    staleTime: 60_000,
+    retry: 1,
+    queryFn: () =>
+      (publicClient as PublicClient).readContract({
+        address: jbV6ContractAddress[JBCoreContracts.JBPrices][chainId],
+        abi: jbPricesAbi,
+        functionName: "pricePerUnitOf",
+        args: [projectId, BigInt(selected!.currency), BigInt(BASE_CURRENCY_USD), BigInt(decimals)],
+      }),
+  });
+  const dollarsInToken =
+    amountIsDollars && tokensPerDollar ? tokensForDollars(debouncedAmount, tokensPerDollar) : 0n;
+  const { data: dollarQuote, isFetching: dollarQuoteLoading } = useQuery({
+    queryKey: [
+      "v6PayDollarQuote",
+      chainId,
+      surface?.terminals?.join(",") ?? null,
+      projectId.toString(),
+      selected ? payTokenKey(selected) : "",
+      dollarsInToken.toString(),
+      address ?? zeroAddress,
+    ],
+    enabled: !!publicClient && !!selected && mode === "pay" && dollarsInToken > 0n,
+    retry: false,
+    queryFn: async () => {
+      const route = await resolveBestV6PayRoute({
+        attachedTerminals: surface?.terminals,
+        client: publicClient as PublicClient,
+        chainId,
+        projectId,
+        token: selected!.token,
+        amount: dollarsInToken,
+        beneficiary: address ?? zeroAddress,
+      });
+      return route?.preview ?? null;
+    },
+  });
 
   // ---- Wallet balance ----
   // Every accepted token, not only the selected one: whether this wallet can pay AT ALL is what
@@ -472,27 +646,27 @@ export function V6PayCard() {
       })),
     [tokens],
   );
-  const { balances } = useTokenBalances(balanceToken, chainId);
+  const { balances, isLoading: balancesLoading } = useTokenBalances(balanceToken, chainId);
   const buyableLabel = buyableAsset({
     accepted: tokens.map((token) => token.symbol),
     preferred: selected?.symbol,
   });
   const holdsNothing = defaultsToDollars({
     isConnected,
-    balances: balanceToken.map((token) => balances.get(token.address) ?? 0n),
+    balances: balanceToken.map((token) => balances.get(token.address)),
   });
-  const walletBalance = selected ? (balances.get(selected.token) ?? 0n) : 0n;
+  // Undefined while unread or when the read failed: never a zero balance.
+  const walletBalance = selected ? balances.get(selected.token) : undefined;
   const insufficientBalance =
-    isConnected && !!selected && amountRaw > 0n && amountRaw > walletBalance;
+    isConnected &&
+    !!selected &&
+    walletBalance !== undefined &&
+    amountRaw > 0n &&
+    amountRaw > walletBalance;
 
   // A wallet with nothing in it cannot pay in any of these tokens, so the menu opens on "$"
   // rather than on a token the payer would have to go and acquire first. Their own choice wins
   // the moment they make one.
-  useEffect(() => {
-    if (tokenTouched) return;
-    setPayWithDollars(holdsNothing);
-  }, [holdsNothing, tokenTouched]);
-
   // Offered from inside the token menu: buying the token is a way of getting
   // one, so it belongs where the token is chosen.
   const { requestSignIn } = useParaAuth();
@@ -505,57 +679,97 @@ export function V6PayCard() {
     decimals: selected?.decimals,
   });
 
+  // Never dollars where they cannot buy anything: Pay would open a purchase that does nothing.
+  useEffect(() => {
+    if (selected && !onRamp.supported) setPayWithDollars(false);
+    else if (!tokenTouched) setPayWithDollars(holdsNothing);
+  }, [holdsNothing, tokenTouched, onRamp.supported, selected]);
+
   // Add-to-balance has no on-chain minimum-output field, so a router swap
   // can't be bounded — refuse it; only direct tokens top up.
   const addBalanceViaRouter = mode === "addbalance" && !!selected?.viaRouter;
 
   // ---- Confirm + send flow ----
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [prepared, setPrepared] = useState<PreparedV6Pay | null>(null);
-  const [phase, setPhase] = useState<V6PayPhase>("preparing");
-  const [txHash, setTxHash] = useState<`0x${string}` | undefined>(undefined);
-  const [txError, setTxError] = useState<string | null>(null);
-  const safeReceipt = useWaitForTransactionReceipt({
-    hash: txHash,
-    chainId: prepared?.chainId,
-  });
+  const [flow, dispatch] = useReducer(payFlow, PAY_FLOW_START);
+  const confirmOpen = flow.open;
+  const confirmMounted = useOpenedOnce(confirmOpen);
+  const {
+    phase,
+    prepared,
+    error: txError,
+    retrySlippageBps,
+    revertedOnchain,
+    txHash,
+  } = payFlowView(flow);
+  /** The Safe proposal awaited is the token approval, not the payment itself. */
+  const proposedApproval = flow.phase === "safe-proposed" && flow.approval;
 
   const busy =
     phase === "safe-proposed" ||
     (confirmOpen &&
-      (phase === "approving-token" ||
-        phase === "approving-router" ||
+      (phase === "authorizing" ||
+        phase === "approving-token" ||
         phase === "simulating" ||
         phase === "signing" ||
         phase === "pending"));
 
   const creditOnlyCheckout = mode === "pay" && cartCount > 0 && cartAmountDue === 0n;
 
+  // Everything a preparation is built from. If any of it changes, the reviewed
+  // payment is no longer the one on screen.
+  const payIdentity = [
+    mode,
+    pairVerified,
+    chainId,
+    projectId,
+    selected ? payTokenKey(selected) : "",
+    amountRaw,
+    address ?? "",
+    tiersKey,
+    memo.trim(),
+    slippageBps ?? "",
+    // A notice that arrives or changes after the review opened is reviewed again.
+    projectNotice,
+  ].join("|");
+  const quoteSettled = !!preview && !previewIsPrevious && !previewError && !previewLoading;
+  const preparationChanged =
+    !!prepared &&
+    (prepared.identity !== payIdentity ||
+      (prepared.mode === "pay" &&
+        (previewError || (quoteSettled && preview.terminal !== prepared.terminal))));
+
+  // Set before the review dialog's effects run, so a review it opens checks this render's quote.
+  useLayoutEffect(() => {
+    currentPayRef.current = {
+      identity: payIdentity,
+      quoteTerminal: quoteSettled ? preview.terminal : null,
+    };
+  });
+
   const openConfirm = () => {
     if (phase === "safe-proposed") return;
     if (!selected) return;
     if (amountRaw <= 0n && !creditOnlyCheckout) return;
+    if (!pairVerified) return;
     if (notStarted || surfaceError || addBalanceViaRouter || insufficientBalance) return;
     if (mode === "pay" && (surface?.pausePay || !previewReady)) return;
     if (cartCount > 0 && (shopRoutesLoading || shopCreditsLoading || !shopMatchesToken)) return;
 
-    setTxError(null);
-    setTxHash(undefined);
-    setPrepared(null);
-    setPhase("preparing");
-    setConfirmOpen(true);
+    dispatch({ type: "open" });
   };
 
-  // Preparing runs as an effect so the confirm dialog can open BEFORE a wallet
-  // is connected (connect/switch-chain prompts live inside the dialog, old
-  // PayDialog style) and re-prepares after an in-dialog connect or chain
-  // switch. The card's quote is reused unless it is stale.
+  // Preparing runs as an effect once the confirm is open, so the confirm is on
+  // screen while the payment is prepared. The card's quote is reused unless it
+  // is stale.
   useEffect(() => {
     if (!confirmOpen || phase !== "preparing") return;
     if (!address || !publicClient || !selected) return;
     let cancelled = false;
     const client = publicClient as PublicClient;
     (async () => {
+      if (!pairVerified) {
+        throw new Error("Couldn't confirm this chain belongs to this project. Nothing was sent.");
+      }
       const cartRows = chainCartItems.map((item) => ({
         tierId: Number(item.tierId),
         quantity: item.quantity,
@@ -564,175 +778,61 @@ export function V6PayCard() {
 
       let next: PreparedV6Pay;
       if (mode === "pay") {
-        if (metadata && selected.viaRouter) {
+        if (tiers && selected.viaRouter) {
           throw new Error("Item checkout requires a directly accepted token.");
         }
         // The card's live quote is the quote. Only a stale, missing, or
         // previous-amount quote is refetched here (fail closed either way).
+        // A failed refetch keeps the old data, so only a successful one counts.
         const quote =
-          preview && !previewIsPrevious && !previewError && !previewLoading && !previewIsStale
+          quoteSettled && !previewIsStale
             ? preview
-            : (await refetchPreview()).data;
+            : await refetchPreview().then((result) =>
+                result.isSuccess && !result.isPlaceholderData ? result.data : undefined,
+              );
         if (cancelled) return;
         if (!quote) {
-          throw new Error(
-            "Couldn't verify what this payment returns — not sending without a live quote.",
-          );
+          throw new Error("Couldn't verify what this payment returns. Nothing was sent.");
         }
-        let terminal: Address = quote.terminal;
-        let routeType: "multi" | "swap" = quote.routeType;
-        const freshPreview = quote;
-        const directSwap = "directSwap" in quote ? quote.directSwap : null;
-
-        // The direct swap quote already carries its 1% slippage floor. Terminal
-        // payments derive the same floor from their fresh preview.
-        const minReturned = directSwap
-          ? directSwap.beneficiaryTokenCount
-          : minReturnedTokens(freshPreview.beneficiaryTokenCount, 100n);
-        const request = directSwap
-          ? buildDirectPaySwapTx({
-              chainId,
-              quote: directSwap,
-              amount: amountRaw,
-              recipient: address,
-              deadline: BigInt(Math.floor(Date.now() / 1000) + 1_800),
-            })
-          : buildPayTx({
-              chainId,
-              terminal,
-              projectId,
-              token: selected.token,
-              amount: amountRaw,
-              beneficiary: address,
-              minReturnedTokens: minReturned,
-              memo: memo.trim() || undefined,
-              metadata,
-            });
-        terminal = request.address;
-        routeType = directSwap ? "swap" : routeType;
-        const abi = directSwap
-          ? request.abi
-          : routeType === "swap"
-            ? jbRouterTerminalRegistryAbi
-            : jbMultiTerminalAbi;
-        const approvalSpender = directSwap ? PERMIT2_ADDRESS : terminal;
-        const router = UNIVERSAL_ROUTER_BY_CHAIN[chainId];
-        const permit2State =
-          directSwap && router && !isNativePayToken(selected.token)
-            ? await client.readContract({
-                address: PERMIT2_ADDRESS,
-                abi: permit2Abi,
-                functionName: "allowance",
-                args: [address, selected.token, router],
-              })
-            : null;
-        const permit2Approval =
-          !!directSwap &&
-          !!router &&
-          !isNativePayToken(selected.token) &&
-          (!permit2State ||
-            permit2State[0] < amountRaw ||
-            Number(permit2State[1]) <= Math.floor(Date.now() / 1000) + 1_800);
-        const tokenApprovalNeeded = await needsApproval(
-          client,
-          selected.token,
-          address,
-          approvalSpender,
-          amountRaw,
-        );
-        const tokenApproval = tokenApprovalNeeded
-          ? {
-              kind: "token-approval" as const,
-              label: `Approve ${selected.symbol} access`,
-              request: {
-                address: selected.token,
-                abi: erc20Abi,
-                functionName: "approve",
-                args: [approvalSpender, amountRaw] as const,
-                value: 0n,
-              },
-              calldata: encodeFunctionData({
-                abi: erc20Abi,
-                functionName: "approve",
-                args: [approvalSpender, amountRaw],
-              }),
-            }
-          : null;
-        const now = Math.floor(Date.now() / 1000);
-        const walletBytecode = permit2Approval
-          ? await client.getBytecode({ address }).catch(() => "0x01" as Hex)
-          : undefined;
-        const routerAuthorization: Permit2SignatureAuthorization | null =
-          permit2Approval && router
-            ? {
-                chainId,
-                token: selected.token,
-                spender: router,
-                amount: amountRaw,
-                expiration: now + 1_800,
-                nonce: Number(permit2State?.[2] ?? 0),
-                sigDeadline: BigInt(now + 1_800),
-              }
-            : null;
-        const routerSignature =
-          routerAuthorization && !walletBytecode
-            ? {
-                kind: "router-signature" as const,
-                label: "Sign the swap authorization",
-                authorization: routerAuthorization,
-              }
-            : null;
-        const routerApproval =
-          routerAuthorization && !routerSignature
-            ? {
-                kind: "router-approval" as const,
-                label: "Authorize the Uniswap swap router",
-                request: {
-                  address: PERMIT2_ADDRESS,
-                  abi: permit2Abi,
-                  functionName: "approve",
-                  args: [
-                    selected.token,
-                    routerAuthorization.spender,
-                    amountRaw,
-                    now + 30 * 24 * 60 * 60,
-                  ] as const,
-                  value: 0n,
-                },
-                calldata: encodeFunctionData({
-                  abi: permit2Abi,
-                  functionName: "approve",
-                  args: [
-                    selected.token,
-                    routerAuthorization.spender,
-                    amountRaw,
-                    now + 30 * 24 * 60 * 60,
-                  ],
-                }),
-              }
-            : null;
+        // The quote's metadata and minimum are what the terminal is paid with.
+        const request = buildPayTx({
+          chainId,
+          terminal: quote.terminal,
+          projectId,
+          token: selected.token,
+          amount: amountRaw,
+          beneficiary: address,
+          minReturnedTokens: quote.minReturned,
+          memo: memo.trim() || undefined,
+          metadata: quote.metadata,
+        });
+        const terminal = request.address;
+        const abi = quote.routeType === "swap" ? jbRouterTerminalRegistryAbi : jbMultiTerminalAbi;
+        const authorization = await payAuthorizationOf(client, {
+          chainId,
+          owner: address,
+          token: selected,
+          entry: terminal,
+          amount: amountRaw,
+          isSafe: isSafeConnection(wagmiConfig),
+        });
         next = {
+          identity: payIdentity,
+          account: address,
+          projectNotice,
           mode,
           chainId,
           token: selected,
           amount: amountRaw,
           memo: memo.trim(),
           terminal,
-          viaRouterRoute: routeType === "swap",
-          directSwapRoute: !!directSwap,
-          swapInputRoute: directSwap?.inputRoute ?? null,
-          expectedTokens: directSwap
-            ? directSwap.beneficiaryTokenCount
-            : freshPreview.beneficiaryTokenCount,
-          reservedTokens: directSwap ? 0n : freshPreview.reservedTokenCount,
-          minReturned,
-          needsApproval: tokenApprovalNeeded,
-          needsPermit2Approval: permit2Approval,
+          expectedTokens: quote.beneficiaryTokenCount,
+          reservedTokens: quote.reservedTokenCount,
+          minReturned: quote.minReturned,
+          quoteFailed: quote.quoteFailed,
+          needsApproval: !!authorization.tokenApproval,
           tokenApprovalComplete: false,
-          routerAuthorizationComplete: false,
-          tokenApproval,
-          routerApproval,
-          routerSignature,
+          ...authorization,
           cartRows,
           request: {
             address: request.address,
@@ -751,53 +851,34 @@ export function V6PayCard() {
         if (selected.viaRouter) {
           throw new Error("Add to balance only supports tokens the project accepts directly.");
         }
-        const terminal = jbContractAddress[6][JBCoreContracts.JBMultiTerminal][chainId];
+        const terminal = jbV6ContractAddress[JBCoreContracts.JBMultiTerminal][chainId];
         const args = [projectId, selected.token, amountRaw, false, memo.trim(), "0x"] as const;
         const value = isNativePayToken(selected.token) ? amountRaw : 0n;
-        const tokenApprovalNeeded = await needsApproval(
-          client,
-          selected.token,
-          address,
-          terminal,
-          amountRaw,
-        );
+        const authorization = await payAuthorizationOf(client, {
+          chainId,
+          owner: address,
+          token: selected,
+          entry: terminal,
+          amount: amountRaw,
+          isSafe: isSafeConnection(wagmiConfig),
+        });
         next = {
+          identity: payIdentity,
+          account: address,
+          projectNotice,
           mode,
           chainId,
           token: selected,
           amount: amountRaw,
           memo: memo.trim(),
           terminal,
-          viaRouterRoute: false,
-          directSwapRoute: false,
-          swapInputRoute: null,
           expectedTokens: null,
           reservedTokens: null,
           minReturned: 0n,
-          needsApproval: tokenApprovalNeeded,
-          needsPermit2Approval: false,
+          quoteFailed: false,
+          needsApproval: !!authorization.tokenApproval,
           tokenApprovalComplete: false,
-          routerAuthorizationComplete: false,
-          tokenApproval: tokenApprovalNeeded
-            ? {
-                kind: "token-approval",
-                label: `Approve ${selected.symbol} access`,
-                request: {
-                  address: selected.token,
-                  abi: erc20Abi,
-                  functionName: "approve",
-                  args: [terminal, amountRaw],
-                  value: 0n,
-                },
-                calldata: encodeFunctionData({
-                  abi: erc20Abi,
-                  functionName: "approve",
-                  args: [terminal, amountRaw],
-                }),
-              }
-            : null,
-          routerApproval: null,
-          routerSignature: null,
+          ...authorization,
           cartRows: [],
           request: {
             address: terminal,
@@ -814,230 +895,228 @@ export function V6PayCard() {
         };
       }
       if (cancelled) return;
-      setPrepared(next);
-      setPhase("ready");
+      dispatch({ type: "prepared", prepared: next });
     })().catch((err) => {
       if (cancelled) return;
-      setPhase("ready");
-      setTxError(formatWalletError(err, "Couldn't prepare the transaction. Please try again."));
+      dispatch({
+        type: "failed",
+        error: formatWalletError(err, "Couldn't prepare the transaction. Please try again."),
+      });
     });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [confirmOpen, phase, address, publicClient, chainId, selected, amountRaw, metadata, mode]);
+  }, [confirmOpen, phase, address, publicClient, chainId, selected, amountRaw, tiers, mode]);
+
+  // A changed input or route rebuilds the payment for review again.
+  useEffect(() => {
+    if (!confirmOpen || phase !== "ready" || !prepared || !preparationChanged) return;
+    dispatch({
+      type: "prepare",
+      notice:
+        prepared.account.toLowerCase() !== address?.toLowerCase()
+          ? ACCOUNT_CHANGED
+          : PAYMENT_CHANGED,
+    });
+  }, [confirmOpen, phase, prepared, preparationChanged, address]);
+
+  /** Prepare the payment again with the tolerance the payer chose, and review it from the start. */
+  const reviewWithSlippage = (bps: number) => {
+    setPayerSlippage({ bps, payment: paymentInputs });
+    dispatch({ type: "prepare" });
+  };
 
   const confirm = async () => {
     if (!publicClient || !address) return;
-    if (!prepared) {
-      // Preparing failed — retry with a fresh quote.
-      setTxError(null);
-      setPhase("preparing");
+    if (retrySlippageBps !== null) {
+      reviewWithSlippage(retrySlippageBps);
       return;
     }
-    setTxError(null);
+    if (revertedOnchain) {
+      // A fresh quote, reviewed and simulated at the latest block; only that simulation's
+      // failure is a reason.
+      void refetchPreview();
+      dispatch({ type: "prepare" });
+      return;
+    }
+    if (!prepared) {
+      // Preparing failed — retry with a fresh quote.
+      dispatch({ type: "prepare" });
+      return;
+    }
+    if (prepared.account.toLowerCase() !== address.toLowerCase()) {
+      // The plan pays its tokens to the account it was built for. Build it
+      // again for this one, and let the payer review that before it sends.
+      dispatch({ type: "prepare", notice: ACCOUNT_CHANGED });
+      return;
+    }
+    // Held by the project and beneficiary alone: one payment to a project at a time, whatever
+    // the cart, token, route, amount or memo.
+    const intent = payIntent({
+      chainId: prepared.chainId,
+      project: projectId,
+      beneficiary: prepared.account,
+    });
+    const approval =
+      prepared.tokenApproval && !prepared.tokenApprovalComplete ? prepared.tokenApproval : null;
     try {
-      // Keep the newest prerequisite block. Base RPC providers are load
-      // balanced: a receipt can be visible on one backend while `latest` on a
-      // sibling still predates that approval, producing a false
-      // Permit2.AllowanceExpired during the immediate swap simulation.
-      let approvalBlock: bigint | undefined;
-      let paymentRequest = prepared.request;
-      if (prepared.tokenApproval && !prepared.tokenApprovalComplete) {
-        // Direct ERC-20 swaps approve canonical Permit2; terminal routes approve
-        // the resolved terminal.
-        setPhase("approving-token");
-        await nextUiPaint();
-        const approvalHash = await ensureAllowance(
-          prepared.token.token,
-          prepared.directSwapRoute ? PERMIT2_ADDRESS : prepared.request.address,
-          prepared.amount,
-        );
-        const approvalReceipt = getApprovalReceipt(approvalHash);
-        if (approvalReceipt?.blockNumber !== undefined) {
-          approvalBlock = approvalReceipt.blockNumber;
-        }
-        setPrepared((current) => (current ? { ...current, tokenApprovalComplete: true } : current));
-      }
-      let routerApproval = prepared.routerApproval;
-      if (
-        prepared.routerSignature &&
-        !prepared.routerAuthorizationComplete &&
-        !isNativePayToken(prepared.token.token)
-      ) {
-        setPhase("approving-router");
-        await nextUiPaint();
+      requireCurrent(prepared, currentPayRef.current);
+      let request = prepared.request;
+      if (prepared.authorization) {
+        // The free signature comes first: declining it sends nothing and leaves no approval behind.
+        dispatch({ type: "send", phase: "authorizing" });
+        let signed: SignedPermit2PayAuthorization;
         try {
-          const signature = await signPermit2Async({
-            expectedAccount: address,
-            authorization: prepared.routerSignature.authorization,
+          const plan = await planErc20PayAuthorization(publicClient as PublicClient, {
+            chainId: prepared.chainId,
+            owner: prepared.account,
+            token: prepared.token.token,
+            entry: prepared.request.address,
+            amount: prepared.amount,
+            isSafe: isSafeConnection(wagmiConfig),
           });
-          const signedRequest = addPermit2SignatureToDirectPaySwap(
-            prepared.request as ReturnType<typeof buildDirectPaySwapTx>,
-            prepared.routerSignature.authorization,
-            signature,
-          );
-          paymentRequest = {
-            address: signedRequest.address,
-            abi: signedRequest.abi,
-            functionName: signedRequest.functionName,
-            args: signedRequest.args,
-            value: signedRequest.value,
-          };
-          setPrepared((current) =>
-            current
-              ? {
-                  ...current,
-                  routerAuthorizationComplete: true,
-                  request: paymentRequest,
-                  calldata: encodeFunctionData({
-                    abi: paymentRequest.abi,
-                    functionName: paymentRequest.functionName,
-                    args: paymentRequest.args,
-                  }),
-                }
-              : current,
-          );
-        } catch (reason) {
-          if (!permit2SignatureNeedsOnchainFallback(reason)) throw reason;
-          const authorization = prepared.routerSignature.authorization;
-          const expiration = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
-          routerApproval = {
-            kind: "router-approval",
-            label: "Authorize the Uniswap swap router",
-            request: {
-              address: PERMIT2_ADDRESS,
-              abi: permit2Abi,
-              functionName: "approve",
-              args: [authorization.token, authorization.spender, authorization.amount, expiration],
-              value: 0n,
-            },
-            calldata: encodeFunctionData({
-              abi: permit2Abi,
-              functionName: "approve",
-              args: [authorization.token, authorization.spender, authorization.amount, expiration],
-            }),
-          } satisfies PreparedV6TransactionAction;
-          setPrepared((current) =>
-            current
-              ? {
-                  ...current,
-                  tokenApprovalComplete: true,
-                  routerAuthorizationComplete: false,
-                  routerSignature: null,
-                  routerApproval,
-                }
-              : current,
-          );
-          setPhase("ready");
-          setTxError(
-            "This wallet cannot sign Permit2 authorizations. Review the onchain fallback, then confirm again.",
-          );
-          await nextUiPaint();
+          // The wallet or its approvals changed since the review was built: build it again.
+          if (plan.kind !== "permit2" || plan.needsTokenApproval !== !!approval) {
+            dispatch({ type: "prepare", notice: PAYMENT_CHANGED });
+            return;
+          }
+          const kept = signedAuthorization.current;
+          signed = permit2PayAuthorizationReusable(kept, plan.authorization, prepared.account)
+            ? kept
+            : {
+                owner: prepared.account,
+                authorization: plan.authorization,
+                signature: await signPayAuthorization(
+                  wagmiConfig,
+                  plan.authorization,
+                  prepared.account,
+                ),
+              };
+          signedAuthorization.current = signed;
+        } catch (err) {
+          dispatch({ type: "failed", error: formatWalletError(err) });
           return;
         }
-      }
-      if (
-        routerApproval &&
-        !prepared.routerAuthorizationComplete &&
-        !isNativePayToken(prepared.token.token)
-      ) {
-        const router = routerApproval.request.args[1] as Address;
-        setPhase("approving-router");
-        await nextUiPaint();
-        const approvalHash = await writeContractAsync({
-          chainId: prepared.chainId,
-          ...routerApproval.request,
+        requireCurrent(prepared, currentPayRef.current);
+        // The payment carries the signed allowance in its metadata, its last argument.
+        const args = [...prepared.request.args];
+        args[args.length - 1] = addPermit2PayMetadata({
+          metadata: args.at(-1) as Hex | undefined,
+          ...signed,
         });
-        requireOnchainExecution(approvalHash, "Swap authorization");
-        const approvalReceipt = await waitForReceiptWithRetry(
-          publicClient as PublicClient,
-          approvalHash,
-        );
-        if (approvalReceipt.status !== "success") {
-          throw new Error(`Swap authorization ${approvalHash} reverted onchain.`);
-        }
-        const [approvedAmount, approvedExpiration] = await publicClient.readContract({
-          address: PERMIT2_ADDRESS,
-          abi: permit2Abi,
-          functionName: "allowance",
-          args: [address, prepared.token.token, router],
-          blockNumber: approvalReceipt.blockNumber,
-        });
-        if (
-          approvedAmount < prepared.amount ||
-          approvedExpiration <= BigInt(Math.floor(Date.now() / 1000) + 1_800)
-        ) {
-          throw new Error("Swap authorization confirmed but did not grant the reviewed amount.");
-        }
-        if (approvalBlock === undefined || approvalReceipt.blockNumber > approvalBlock) {
-          approvalBlock = approvalReceipt.blockNumber;
-        }
-        setPrepared((current) =>
-          current
-            ? {
-                ...current,
-                routerAuthorizationComplete: true,
-              }
-            : current,
-        );
+        request = { ...prepared.request, args };
       }
-      setPhase("simulating");
-      await nextUiPaint();
-      await publicClient.simulateContract({
-        address: paymentRequest.address,
-        abi: paymentRequest.abi,
-        functionName: paymentRequest.functionName,
-        args: paymentRequest.args as unknown[],
-        value: paymentRequest.value,
-        account: address,
-        blockNumber: approvalBlock,
-      } as unknown as Parameters<typeof publicClient.simulateContract>[0]);
-      setPhase("signing");
-      const hash = await writeContractAsync({
-        chainId: prepared.chainId,
-        address: paymentRequest.address,
-        abi: paymentRequest.abi,
-        functionName: paymentRequest.functionName,
-        args: paymentRequest.args as unknown[],
-        value: paymentRequest.value,
-      } as unknown as Parameters<typeof writeContractAsync>[0]);
-      setTxHash(hash);
-      setPhase("pending");
-      if (submittedViaSafe(hash)) {
-        setPhase("safe-proposed");
+      // In flight from here: the confirm holds, and a changed payment is caught by the write gate.
+      dispatch({ type: "send", phase: approval ? "approving-token" : "simulating" });
+      // The review's rows load with the confirm that called this, never with the card.
+      const { payContext } = await loadPayConfirm();
+      let paymentSubmitted = false;
+      const result = await pay.run({
+        account: prepared.account,
+        title: "Review the payment",
+        confirmLabel: "Agree & send",
+        context: payContext(prepared, projectTokenLabel),
+        calls: [
+          ...(approval
+            ? [
+                reviewedCall(
+                  { chainId: prepared.chainId, ...approval.request },
+                  // Core holds a Safe batch under its first call's key: the whole batch is the
+                  // payment, held by the payment's own key, so paying again another way waits on it.
+                  isSafeConnection(wagmiConfig)
+                    ? { intent, legacyIntents: legacyIntents.pay(projectId, prepared.account) }
+                    : {
+                        intent: approvalIntent(intent, {
+                          step: "erc20",
+                          token: prepared.token.token,
+                          spender: approval.request.args[0] as Address,
+                        }),
+                      },
+                ),
+              ]
+            : []),
+          reviewedCall(
+            {
+              chainId: prepared.chainId,
+              ...request,
+              args: request.args as readonly unknown[],
+            },
+            {
+              intent,
+              legacyIntents: legacyIntents.pay(projectId, prepared.account),
+              dependsOnPrior: !!approval,
+            },
+          ),
+        ],
+        scope: approval ? intent : undefined,
+        // A Safe takes the approval and the payment as one proposal, signed once and run together.
+        batch: true,
+        // Sent only while it is still the payment on screen.
+        assertWriteState: () => requireCurrent(prepared, currentPayRef.current),
+        beforeWallet: async (_call, step) => {
+          // The payment step opens only after the approval's receipt succeeded.
+          if (approval && step === 1) dispatch({ type: "approved" });
+          dispatch({ type: "send", phase: approval && step === 0 ? "approving-token" : "signing" });
+          await nextUiPaint();
+        },
+        onSubmitted: (_call, step, hash) => {
+          if (approval && step === 0) return;
+          // A Safe batch submits every step at once; a lone approval proposal never reaches the payment.
+          paymentSubmitted = true;
+          dispatch({ type: "submitted", hash });
+        },
+      });
+      if (!result) {
+        // Closing the review closes the payment; the card keeps its inputs.
+        dispatch({ type: "closed" });
         return;
       }
-      requireOnchainExecution(hash, prepared.mode === "pay" ? "Payment" : "Balance addition");
-      const receipt = await waitForReceiptWithRetry(publicClient as PublicClient, hash);
-      if (receipt.status !== "success") {
-        throw new Error(`Transaction ${hash} reverted onchain.`);
+      if (result.status === "proposed") {
+        dispatch({
+          type: "proposed",
+          hash: result.safeTxHash,
+          approval: !!approval && result.step === 0 && !paymentSubmitted,
+        });
+        return;
       }
-      setPhase("success");
+      if (result.status === "done") {
+        dispatch({ type: "done" });
+        return;
+      }
+      const { failure } = result;
+      if (failure instanceof PaymentChangedError) throw failure;
+      if (revertedStep(failure) === (approval ? 1 : 0)) {
+        // A receipt carries no reason, and replaying it can't establish one.
+        dispatch({ type: "failed", error: PAYMENT_REVERTED, recovery: { kind: "reverted" } });
+        return;
+      }
+      // The revert's own reason, when known, and a looser minimum when that is the fix.
+      const decoded = decodePayFailure(failure);
+      // A failed quote's minimum is the mint rate, not a market price a looser tolerance widens.
+      // The tolerance is the failed attempt's, never a loosened one not yet sent.
+      const retry =
+        prepared.mode === "pay" && !prepared.quoteFailed
+          ? payRetrySlippageBps(
+              decoded,
+              slippageBps === undefined ? PAY_DEFAULT_SLIPPAGE_BPS : BigInt(slippageBps),
+            )
+          : null;
+      dispatch({
+        type: "failed",
+        error: decoded?.message ?? failedLine(result),
+        recovery: retry === null ? null : { kind: "slippage", bps: Number(retry) },
+      });
     } catch (err) {
-      if (isSafeProposalPendingError(err)) {
-        setPhase("safe-proposed");
-        setTxHash(err.hash);
-        return;
-      }
-      if (isTransactionReceiptUnavailableError(err)) {
-        setPhase("pending");
-        setTxHash(err.hash);
-        setTxError(err.message);
-        return;
-      }
-      setPhase("ready");
-      const message = formatWalletError(err);
-      setTxError(message);
+      if (!(err instanceof PaymentChangedError)) throw err;
+      // Stop before the wallet and rebuild what is on screen for review.
+      dispatch({ type: "prepare", notice: PAYMENT_CHANGED });
     }
   };
 
   const resetAfterSuccess = () => {
-    setConfirmOpen(false);
-    setPrepared(null);
-    setPhase("preparing");
-    setTxHash(undefined);
-    setTxError(null);
+    dispatch({ type: "reset" });
+    setPayerSlippage(null);
     setAmount("");
     setDebouncedAmount("");
     setMemo("");
@@ -1046,45 +1125,44 @@ export function V6PayCard() {
 
   useEffect(() => {
     if (phase !== "safe-proposed") return;
-    if (safeReceipt.isSuccess) {
-      setPhase("success");
-      setTxError(null);
+    if ((pay.status === "done" || pay.settledStep === 0) && proposedApproval) {
+      // The Safe ran the approval: the payment is still to send, from a fresh review.
+      dispatch({ type: "prepare", notice: SAFE_APPROVAL_DONE });
+    } else if (pay.status === "done") {
+      dispatch({ type: "done" });
+      setPayerSlippage(null);
       setAmount("");
       setDebouncedAmount("");
       setMemo("");
       for (const item of chainCartItems) cart.remove(item.tierId, item.chainId);
-    } else if (safeReceipt.isError) {
-      setPhase("ready");
-      setTxError(
-        safeReceipt.error instanceof Error
-          ? safeReceipt.error.message
-          : "The Safe proposal executed but failed onchain.",
-      );
+    } else if (pay.error) {
+      dispatch({ type: "failed", error: pay.error });
+    } else if (pay.held?.exit) {
+      // Its result can't be confirmed: the payment is no longer awaiting the Safe here.
+      dispatch({ type: "failed", error: heldLineOf(pay.held) ?? null });
     }
   }, [
     cart,
     chainCartItems,
     phase,
+    proposedApproval,
     prepared?.mode,
-    safeReceipt.error,
-    safeReceipt.isError,
-    safeReceipt.isSuccess,
+    pay.error,
+    pay.held,
+    pay.status,
+    pay.settledStep,
   ]);
 
-  // Chain switching lives in the confirm dialog (old PayDialog style). The
-  // token selection re-maps to the same token on the new chain via the
-  // key-remap effect; an open confirm re-prepares from a fresh quote.
+  // The card's chain picker. The token selection re-maps to the same token on
+  // the new chain via the key-remap effect; an open confirm re-prepares from a
+  // fresh quote.
   const switchChain = (value: string) => {
     if (busy) return;
     const next = chainOptions.find((s) => Number(s.peerChainId) === Number(value));
     if (!next) return;
+    setDroppedToken(null);
     setSelectedSucker(next);
-    if (confirmOpen) {
-      setPrepared(null);
-      setTxError(null);
-      setTxHash(undefined);
-      setPhase("preparing");
-    }
+    if (confirmOpen) dispatch({ type: "prepare" });
   };
 
   // Signed out, this button signs in, so the checks that describe a payment
@@ -1092,11 +1170,14 @@ export function V6PayCard() {
   // with nothing explaining why.
   const payDisabled =
     busy ||
+    // The payment notice is in the full metadata file: no review opens before it is read.
+    fullMetadataLoading ||
     notStarted ||
     surfaceError ||
     // Paying in dollars is a purchase, not a send: it needs an amount and nothing else. The
     // checks below are about a token this payer does not hold yet.
     (isConnected && payWithDollars && amountRaw <= 0n) ||
+    (isConnected && !pairVerified) ||
     (isConnected &&
       !payWithDollars &&
       (!selected ||
@@ -1107,6 +1188,25 @@ export function V6PayCard() {
         (amountRaw <= 0n && !creditOnlyCheckout) ||
         (mode === "pay" && !previewReady)));
 
+  // The confirm discloses a failed quote itself; the card's line is for a payment not yet sent
+  // that nothing else already blocks.
+  const showQuoteFailed =
+    mode === "pay" &&
+    (amountRaw > 0n || cartCount > 0) &&
+    !previewError &&
+    !!preview?.quoteFailed &&
+    // Only the quote for what is typed now: not the last amount's, nor one still being debounced.
+    amount === debouncedAmount &&
+    !previewIsPrevious &&
+    !confirmOpen &&
+    !busy &&
+    !notStarted &&
+    !surfaceError &&
+    !surface?.pausePay &&
+    // Buying ETH with dollars comes first; this payment's quote is not what Pay does yet.
+    !payWithDollars &&
+    !insufficientBalance;
+
   const hasShopStrip = Boolean(shop && shop.tiers.length > 0 && mode === "pay");
   const payPanelLayout = payPanelLayoutClasses({
     mode,
@@ -1114,10 +1214,22 @@ export function V6PayCard() {
   });
   const showPayReceipt =
     mode === "pay" &&
-    (cartCount > 0 ||
-      (amountRaw > 0n &&
-        !previewError &&
-        (previewLoading || (!!preview && preview.beneficiaryTokenCount > 0n))));
+    (amountIsDollars
+      ? dollarPriceLoading ||
+        dollarQuoteLoading ||
+        (dollarsInToken > 0n && !!dollarQuote && dollarQuote.beneficiaryTokenCount > 0n)
+      : cartCount > 0 ||
+        (amountRaw > 0n &&
+          !previewError &&
+          (previewLoading || (!!preview && preview.beneficiaryTokenCount > 0n))));
+  // What the receipt reads, and whether it still answers what is typed.
+  const receipt = amountIsDollars ? dollarQuote : preview;
+  const receiptPending =
+    amount !== debouncedAmount ||
+    (amountIsDollars
+      ? dollarPriceLoading || dollarQuoteLoading
+      : previewLoading || previewIsPrevious);
+  const receiptPendingClass = receiptPending ? "opacity-40" : "";
 
   return (
     <div>
@@ -1143,8 +1255,8 @@ export function V6PayCard() {
               ) : cartCount > 0 && supportedShopTokenIndexes.length === 0 ? (
                 <p className="mb-2 text-xs text-red-600">
                   {shopRouteCheckFailed
-                    ? "Couldn't check which payment tokens have a price feed for these items. Try again in a moment."
-                    : "No directly accepted payment token has a verified price feed for these items."}
+                    ? "Couldn't read the prices needed to pay for these items. Try again in a moment."
+                    : "None of the accepted payment tokens has a verified price for these items."}
                 </p>
               ) : cartCount > 0 && !shopMatchesToken ? (
                 <p className="mb-2 text-xs text-zinc-500">
@@ -1154,7 +1266,7 @@ export function V6PayCard() {
             </div>
           ) : null}
 
-          <div className="flex justify-center items-center flex-col">
+          <div className="flex justify-center items-center flex-col [&>*:last-child]:border-b-0">
             {/* Pay block: mode dropdown in the label spot, big amount input, token selector at right */}
             <div
               className={`grid w-full grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto] content-center bg-zinc-100 px-4 ${payPanelLayout} ${
@@ -1203,10 +1315,10 @@ export function V6PayCard() {
                 inputMode="decimal"
                 // Dollars are shown with their sign and stored without it: everything
                 // downstream — the preview, the amount sent to the provider — parses a number.
-                value={payWithDollars && amount ? `$${amount}` : amount}
+                value={amountIsDollars && amount ? `$${amount}` : amount}
                 onChange={(e) => setAmount(e.target.value.replace(/^\$/, ""))}
                 disabled={busy}
-                placeholder={payWithDollars ? "$0.00" : "0.00"}
+                placeholder={amountIsDollars ? "$0.00" : "0.00"}
                 aria-label="Amount"
                 className="col-start-1 row-start-2 min-h-11 border-0 bg-transparent pl-0 pr-3 pt-1 pb-0 text-zinc-900 text-2xl w-full placeholder:text-zinc-400 focus:ring-0 focus:outline-none sm:leading-6 disabled:opacity-60"
               />
@@ -1219,9 +1331,15 @@ export function V6PayCard() {
                   }
                   onChange={(value) => {
                     setTokenTouched(true);
+                    setDroppedToken(null);
                     if (value === BUY_OPTION) {
                       // Selecting dollars buys nothing yet. The payer types what they want to
                       // spend first, and Pay explains the swap they are about to make.
+                      // The token being bought stays picked, or the token effect undoes this.
+                      if (selected) {
+                        selectedKeyRef.current = payTokenKey(selected);
+                        selectedSymbolRef.current = selected.symbol;
+                      }
                       setPayWithDollars(true);
                       return;
                     }
@@ -1229,7 +1347,10 @@ export function V6PayCard() {
                     const i = Number(value);
                     setTokenIndex(i);
                     const picked = tokens[i];
-                    if (picked) selectedKeyRef.current = payTokenKey(picked);
+                    if (picked) {
+                      selectedKeyRef.current = payTokenKey(picked);
+                      selectedSymbolRef.current = picked.symbol;
+                    }
                     setTokenTouched(true);
                   }}
                   disabled={busy}
@@ -1265,10 +1386,15 @@ export function V6PayCard() {
 
                   Not while paying by card: that is a balance in a token this payer is not
                   spending, on a row that is about to buy some. */}
-              {selected && isConnected && !payWithDollars ? (
+              {selected &&
+              isConnected &&
+              !payWithDollars &&
+              (walletBalance !== undefined || !balancesLoading) ? (
                 <div className="col-start-2 row-start-3 -mt-0.5 flex flex-col items-end justify-self-end pb-1.5 pr-[18px]">
                   <span className="whitespace-nowrap text-xs text-zinc-600">
-                    Balance: {formatPayAmount(walletBalance, selected.decimals)}
+                    {walletBalance === undefined
+                      ? "Balance unavailable"
+                      : `Balance: ${formatPayAmount(walletBalance, selected.decimals)}`}
                   </span>
                 </div>
               ) : null}
@@ -1277,73 +1403,36 @@ export function V6PayCard() {
             {/* Receipt — hidden while idle; item checkouts expand into a detailed cart. */}
             {showPayReceipt ? (
               <div className="w-full border-b border-zinc-200 bg-zinc-100 px-4 py-2.5">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm text-zinc-500">
-                    {routeIsRouter ? "You get at least" : "You get"}
-                  </p>
-                  {preview && !previewLoading && !previewIsPrevious ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowRouteComparison((current) => !current)}
-                      aria-expanded={showRouteComparison}
-                      title={
-                        routeIsRouter
-                          ? "Compare the selected swap with project issuance."
-                          : "This payment issues tokens from the project."
-                      }
-                      className="shrink-0 border border-melon-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-zinc-700 hover:bg-melon-50"
-                    >
-                      {paySettlementLabel(preview.routeType)}
-                    </button>
-                  ) : null}
-                </div>
-                {preview && preview.beneficiaryTokenCount > 0n ? (
+                <p className="text-sm text-zinc-500">
+                  {previewIsEstimate || amountIsDollars ? "You get about" : "You get"}
+                </p>
+                {receipt && receipt.beneficiaryTokenCount > 0n ? (
                   <p
                     aria-live="polite"
-                    aria-busy={previewLoading}
-                    className={`text-xl font-semibold transition-colors ${
-                      previewLoading || previewIsPrevious ? "text-zinc-400" : "text-zinc-900"
-                    }`}
+                    aria-busy={receiptPending}
+                    className={`text-xl font-semibold text-zinc-900 transition-opacity ${receiptPendingClass}`}
                   >
-                    {formatPayAmount(preview.beneficiaryTokenCount, 18)} {projectTokenLabel}
+                    {formatPayAmount(receipt.beneficiaryTokenCount, 18)} {projectTokenLabel}
                   </p>
-                ) : amountRaw > 0n && previewLoading ? (
+                ) : amountRaw > 0n && receiptPending ? (
                   <Skeleton
                     className="mt-1 h-5 w-24"
                     role="status"
                     aria-label="Calculating token return"
                   />
                 ) : null}
-
-                {showRouteComparison && preview?.routeType === "swap" ? (
-                  "issuanceTokenCount" in preview ? (
-                    <div className="mt-2 grid grid-cols-2 gap-2 border-t border-zinc-200 pt-2 text-xs">
-                      <div>
-                        <p className="text-zinc-500">Swap</p>
-                        <p className="font-medium text-zinc-900">
-                          {formatPayAmount(preview.beneficiaryTokenCount, 18)} {projectTokenLabel}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-zinc-500">Issuance</p>
-                        <p className="font-medium text-zinc-900">
-                          {formatPayAmount(preview.issuanceTokenCount ?? 0n, 18)}{" "}
-                          {projectTokenLabel}
-                        </p>
-                      </div>
-                      <p className="col-span-2 text-zinc-500">
-                        The better guaranteed return is selected automatically.
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="mt-2 border-t border-zinc-200 pt-2 text-xs text-zinc-500">
-                      This payment settles through the project&apos;s configured swap route.
-                    </p>
-                  )
+                {amountIsDollars ? (
+                  <p className={`text-xs text-zinc-500 ${receiptPendingClass}`}>
+                    Before card or bank fees
+                  </p>
+                ) : previewIsEstimate ? (
+                  <p className={`text-xs text-zinc-500 ${receiptPendingClass}`}>
+                    At least {formatPayAmount(preview.minReturned, 18)} {projectTokenLabel}
+                  </p>
                 ) : null}
 
                 {cartCount > 0 && shop ? (
-                  <div className="mt-3 rounded-md border border-zinc-200 bg-white p-3 text-sm">
+                  <div className="mt-3 border border-zinc-200 bg-white p-3 text-sm">
                     <div className="space-y-3">
                       {chainCartItems.map((item) => {
                         const tier = shop.tiers.find(
@@ -1450,28 +1539,87 @@ export function V6PayCard() {
                   </div>
                 ) : null}
 
-                {preview && preview.reservedTokenCount > 0n ? (
-                  <p className="mt-1.5 text-xs font-medium text-zinc-500">
-                    Splits get {formatPayAmount(preview.reservedTokenCount, 18)} {projectTokenLabel}
+                {receipt && receipt.reservedTokenCount > 0n ? (
+                  <p className={`mt-1.5 text-xs font-medium text-zinc-500 ${receiptPendingClass}`}>
+                    Other recipients get {formatPayAmount(receipt.reservedTokenCount, 18)}{" "}
+                    {projectTokenLabel}
                   </p>
                 ) : null}
               </div>
             ) : mode === "addbalance" ? (
               <p className="w-full border-b border-zinc-200 bg-zinc-100 px-4 py-2 text-xs text-zinc-600">
-                Adds to the project balance — you get no {projectTokenLabel}.
+                Adds to the project balance. You get no {projectTokenLabel}.
               </p>
             ) : null}
 
-            {mode === "pay" && previewError && (amountRaw > 0n || cartCount > 0) ? (
+            {mode === "pay" &&
+            !amountIsDollars &&
+            previewFailure instanceof PaySwapQuoteFailedError &&
+            (amountRaw > 0n || cartCount > 0) ? (
+              <p className="w-full border-b border-zinc-200 bg-zinc-100 px-4 py-2 text-xs text-zinc-600">
+                {retriedQuote === previewFailure ? (
+                  <span role="status">Refreshing…</span>
+                ) : (
+                  <>
+                    {PAY_SWAP_QUOTE_FAILED_MESSAGE}{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const retried = previewFailure;
+                        setRetriedQuote(retried);
+                        void refetchPreview().finally(() =>
+                          setRetriedQuote((current: unknown) =>
+                            current === retried ? null : current,
+                          ),
+                        );
+                      }}
+                      className="font-medium underline underline-offset-2"
+                    >
+                      Retry
+                    </button>
+                  </>
+                )}
+              </p>
+            ) : mode === "pay" &&
+              !amountIsDollars &&
+              previewError &&
+              (amountRaw > 0n || cartCount > 0) ? (
               <p className="w-full border-b border-zinc-200 bg-zinc-100 px-4 py-2 text-xs text-red-600">
-                Couldn&apos;t verify what this payment returns — paying is disabled until the
-                preview works.
+                Couldn&apos;t check what you will receive. Try again once the preview loads.
+              </p>
+            ) : null}
+
+            {showQuoteFailed ? (
+              <p className="w-full border-b border-zinc-200 bg-zinc-100 px-4 py-2 text-xs text-zinc-600">
+                {retriedQuote === preview ? (
+                  <span role="status">Refreshing…</span>
+                ) : (
+                  <>
+                    {PAY_QUOTE_FAILED_MESSAGE}{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const retried = preview;
+                        setRetriedQuote(retried);
+                        // A later retry of another amount keeps its own progress.
+                        void refetchPreview().finally(() =>
+                          setRetriedQuote((current: unknown) =>
+                            current === retried ? null : current,
+                          ),
+                        );
+                      }}
+                      className="font-medium underline underline-offset-2"
+                    >
+                      Try again
+                    </button>
+                  </>
+                )}
               </p>
             ) : null}
 
             {notStarted ? (
               <p className="w-full border-b border-zinc-200 bg-zinc-100 px-4 py-2 text-xs text-zinc-500">
-                Starts in {formatStartCountdown(startsAt - now)}.
+                Starts in {formatStartCountdown(untilStart)}.
               </p>
             ) : null}
           </div>
@@ -1483,16 +1631,24 @@ export function V6PayCard() {
             <textarea
               rows={1}
               value={memo}
-              onChange={(e) => setMemo(e.target.value.slice(0, 256))}
+              onChange={(e) => setMemo(e.target.value.slice(0, MEMO_MAX_LENGTH))}
+              maxLength={MEMO_MAX_LENGTH}
               disabled={busy}
               placeholder="Add a note"
               className="flex min-h-14 w-full border border-melon-600 bg-white px-3 py-1.5 text-md ring-offset-white placeholder:text-zinc-500 focus:border-melon-600 focus:ring-0 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <MemoCount
+              length={memo.length}
+              className="pointer-events-none absolute bottom-1 right-5 bg-white px-1"
             />
           </div>
           <div className="relative flex h-14 w-[150px] shrink-0 items-start border-y border-r border-melon-600">
             <Button
               disabled={payDisabled}
-              loading={busy}
+              loading={busy || (isConnected && pairPending)}
+              // Load the confirmation dialog on intent, so Pay opens it without waiting.
+              onPointerEnter={() => void loadPayConfirm()}
+              onFocus={() => void loadPayConfirm()}
               onClick={
                 {
                   signIn: requestSignIn,
@@ -1513,21 +1669,59 @@ export function V6PayCard() {
           buying it is the very thing the button now offers. */}
       {insufficientBalance && selected && !payWithDollars ? (
         <p className="mt-2 text-xs text-red-600">
-          You don&apos;t have enough {selected.symbol} on {JB_CHAINS[chainId]?.name}.
+          You don&apos;t have enough {selected.symbol} on {chainDisplayName(chainId)}.
         </p>
       ) : null}
-      {surfaceError ? (
+      {pairLine ? <p className="mt-2 text-sm text-zinc-600">{pairLine}</p> : null}
+      {droppedToken ? (
+        <p className="mt-2 text-sm text-zinc-600" role="status">
+          {droppedToken} isn&apos;t accepted on {chainDisplayName(chainId)}.
+        </p>
+      ) : null}
+      {otherChainCart && mode === "pay" ? (
+        <p className="mt-2 text-sm text-zinc-600" role="status">
+          {otherChainCart.count} item{otherChainCart.count === 1 ? "" : "s"} in your{" "}
+          {chainDisplayName(otherChainCart.chainId)} cart.{" "}
+          <button
+            type="button"
+            className="underline disabled:opacity-50"
+            disabled={busy}
+            onClick={() => switchChain(String(otherChainCart.chainId))}
+          >
+            Switch
+          </button>
+        </p>
+      ) : null}
+      {/* A failed read being read again is still loading: the verdict waits for its answer. */}
+      {surfaceError && !surfaceFetching ? (
         <p className="mt-2 text-sm text-red-600">
-          Couldn&apos;t verify this project&apos;s accepted tokens — payments are disabled.
+          Couldn&apos;t verify this project&apos;s accepted tokens. Payments are off.{" "}
+          <button type="button" className="underline" onClick={() => void refetchSurface()}>
+            Try again
+          </button>
+        </p>
+      ) : null}
+      {surface?.routingUnavailable ? (
+        <p className="mt-2 text-sm text-zinc-600" role="status">
+          Some payment routes could not be checked.{" "}
+          <button
+            type="button"
+            className="underline disabled:opacity-50"
+            disabled={surfaceFetching}
+            onClick={() => void refetchSurface()}
+          >
+            {surfaceFetching ? "Checking routes…" : "Retry routes"}
+          </button>
         </p>
       ) : null}
       {surface?.pausePay && mode === "pay" ? (
         <p className="mt-2 text-sm text-zinc-600">Payments are paused under the current rules.</p>
       ) : null}
+      {/* On the form, not in the review: the review opens over everything once a payment is prepared. */}
+      {mode === "pay" ? <PayNoticeNote view={noticeView} retry={retryNotice} /> : null}
       {addBalanceViaRouter ? (
         <p className="mt-2 text-sm text-zinc-600">
-          Add to balance only supports tokens the project accepts directly — switch to a direct
-          token, or use Pay to route this one.
+          This token can&apos;t be added to the balance. Pick another, or use Pay.
         </p>
       ) : null}
 
@@ -1542,7 +1736,7 @@ export function V6PayCard() {
           <p className="text-sm leading-relaxed text-zinc-600">
             {/* One string, not JSX text around an expression: a line break after `{asset}`
                 swallows the space that follows it, which is how this shipped as "USDCin". */}
-            {`Payments to this project take ${buyableLabel} in order to settle instantly, stick to automated rules, and send out incentives on schedule. You'll use your card or bank to buy some first, then come back here to pay.`}
+            {`This project accepts ${buyableLabel}. Buy some with your card or bank, then return here to pay.`}
           </p>
           <div className="mt-4 flex justify-end">
             <Button
@@ -1557,7 +1751,9 @@ export function V6PayCard() {
                 // Everything needed to embed it is still here and tested (`display: "embed"`,
                 // `recordOnRampPurchase`). Ask Para to allowlist this origin on their MoonPay
                 // key and this call is one argument from being a frame again.
-                onRamp.buy({ fiatQuantity: amount.trim() || undefined });
+                onRamp.buy(
+                  amountIsDollars ? { fiatQuantity: amount.trim() || undefined } : undefined,
+                );
               }}
             >
               Buy {buyableLabel}
@@ -1566,38 +1762,125 @@ export function V6PayCard() {
         </DialogContent>
       </Dialog>
 
-      <V6PayConfirmDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        prepared={prepared}
-        phase={phase}
-        mode={mode}
-        error={txError}
-        projectTokenSymbol={projectTokenLabel}
-        txHash={txHash}
-        onConfirm={confirm}
-        onSwitchChain={switchChain}
-        onDone={resetAfterSuccess}
-      />
+      {confirmMounted ? (
+        <V6PayConfirmDialog
+          open={confirmOpen}
+          following={pay.following}
+          onOpenChange={(open) => {
+            // A sent payment only followed until its hold settles closes: the SDK remembers it, so
+            // Pay again follows it, or closes on its success, never sending it twice. A Safe
+            // proposal's run already returned: closing hides it, and the card keeps following it.
+            if (!open && pay.following && phase !== "safe-proposed" && !pay.dismiss()) return;
+            // Closing the review abandons a loosened tolerance.
+            dispatch({ type: "show", open });
+            if (!open) setPayerSlippage(null);
+          }}
+          prepared={prepared}
+          phase={phase}
+          mode={mode}
+          error={txError}
+          reviewAgain={revertedOnchain}
+          retrySlippage={
+            retrySlippageBps !== null
+              ? { bps: retrySlippageBps, onChange: (bps) => dispatch({ type: "slippage", bps }) }
+              : null
+          }
+          quoteSettled={mode !== "pay" || quoteSettled}
+          projectTokenSymbol={projectTokenLabel}
+          txHash={txHash}
+          onConfirm={confirm}
+          onSwitchChain={switchChain}
+          onDone={resetAfterSuccess}
+        />
+      ) : null}
     </div>
   );
 }
 
-async function needsApproval(
+/**
+ * What the payer still owes before `entry` can take `amount`, by the SDK's one rule: nothing, an
+ * exact approval of the entry (a Safe or other contract wallet), or a free Permit2 signature after
+ * one approval of Permit2 itself.
+ */
+async function payAuthorizationOf(
   client: PublicClient,
-  token: Address,
-  owner: Address,
-  spender: Address,
-  amount: bigint,
-): Promise<boolean> {
-  if (isNativePayToken(token) || amount === 0n) return false;
-  const allowance = await client.readContract({
-    address: token,
-    abi: erc20Abi,
-    functionName: "allowance",
-    args: [owner, spender],
+  {
+    chainId,
+    owner,
+    token,
+    entry,
+    amount,
+    isSafe,
+  }: {
+    chainId: JBChainId;
+    owner: Address;
+    token: PreparedV6Pay["token"];
+    entry: Address;
+    amount: bigint;
+    /** The connection is a Safe app, which never signs. */
+    isSafe: boolean;
+  },
+): Promise<Pick<PreparedV6Pay, "tokenApproval" | "authorization">> {
+  if (isNativePayToken(token.token) || amount === 0n) {
+    return { tokenApproval: null, authorization: null };
+  }
+  const plan = await planErc20PayAuthorization(client, {
+    chainId,
+    owner,
+    token: token.token,
+    entry,
+    amount,
+    isSafe,
   });
-  return allowance < amount;
+  const approve = (spender: Address, approved: bigint, label: string) => {
+    const args = [spender, approved] as const;
+    return {
+      kind: "token-approval" as const,
+      label,
+      request: {
+        address: token.token,
+        abi: erc20ApproveAbi,
+        functionName: "approve" as const,
+        args,
+        value: 0n,
+      },
+      calldata: encodeFunctionData({ abi: erc20ApproveAbi, functionName: "approve", args }),
+    };
+  };
+  if (plan.kind === "none") return { tokenApproval: null, authorization: null };
+  if (plan.kind === "approve") {
+    return {
+      tokenApproval: approve(plan.spender, plan.amount, `Approve ${token.symbol} access`),
+      authorization: null,
+    };
+  }
+  return {
+    tokenApproval: plan.needsTokenApproval
+      ? approve(PERMIT2_ADDRESS, maxUint256, `Let Permit2 move your ${token.symbol} (one time)`)
+      : null,
+    authorization: plan.authorization,
+  };
+}
+
+const PAYMENT_CHANGED = "The payment changed. Review it again.";
+
+const PAYMENT_REVERTED = "The payment reverted.";
+
+class PaymentChangedError extends Error {
+  constructor() {
+    super(PAYMENT_CHANGED);
+  }
+}
+
+type CurrentPay = { identity: string; quoteTerminal: Address | null };
+
+function requireCurrent(p: PreparedV6Pay, current: CurrentPay) {
+  if (
+    p.identity !== current.identity ||
+    (p.mode === "pay" && current.quoteTerminal?.toLowerCase() !== p.terminal.toLowerCase())
+  ) {
+    throw new PaymentChangedError();
+  }
 }
 
 function nextUiPaint(): Promise<void> {

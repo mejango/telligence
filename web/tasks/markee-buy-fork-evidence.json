@@ -1,0 +1,31 @@
+{
+  "verification": "local-base-fork-only",
+  "forkBlock": "52396129",
+  "admin": "0x823b92d6a4b2AED4b15675c7917c9f922ea8ADAD",
+  "payerFactory": "0x7321740fd0dcf73dd3e2aa8fc060454abfce9517",
+  "markeeFactory": "0xFD488A0fE8D4Fa99B4A6016EA9C49a860A553F7c",
+  "terminal": "0x130f5dd2bd8805443cf41755253d778a75a67f53",
+  "store": "0x7497ae014A60561925B51C0A3B4adE7460B9927C",
+  "payer": "0xa25864328E8C336DBC3d8Ed9b99Df25c399C7c49",
+  "board": "0x3c1abC714E361216fC7851AB04b9306C87CAfBEb",
+  "seed": "0xeA5C513a311082480F917ffc3889FC55A90f0f0b",
+  "bidWei": "1000000000000000",
+  "beneficiaryBps": "6200",
+  "revBalanceBefore": "288485665201921288",
+  "revBalanceAfter": "289105665201921288",
+  "revBalanceIncrease": "620000000000000",
+  "revSupplyBefore": "58051809298343013973989",
+  "revSupplyAfter": "58051809298343013973989",
+  "payerRemainder": "0",
+  "localBidReceipt": "0xd4d18c69b41522110ee8a62b3c7ade19c14e038bcb41d72b992fe5dcdde12f98",
+  "decodedAdditions": [
+    {
+      "projectId": "3",
+      "amount": "620000000000000",
+      "returnedFees": "0",
+      "memo": "Markee revnet.money",
+      "metadata": "0x",
+      "caller": "0xa25864328E8C336DBC3d8Ed9b99Df25c399C7c49"
+    }
+  ]
+}

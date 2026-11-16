@@ -1,8 +1,11 @@
 "use client";
 
+import { chainDisplayName } from "@/app/constants";
+import { TokenAmount } from "@/components/TokenAmount";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useJBContractContext } from "@/lib/nana/project";
 import { wagmiConfig } from "@/lib/wagmiConfig";
-import { formatUnits, JB_CHAINS, JBCoreContracts } from "@bananapus/nana-sdk-core";
+import { JBCoreContracts } from "@bananapus/nana-sdk-core";
 import { useState } from "react";
 import { useAccount } from "wagmi";
 import { getPublicClient } from "wagmi/actions";
@@ -15,10 +18,13 @@ import {
 
 export function DistributeReservedTokensButton({
   projects,
+  pendingLoading = false,
   tokenSymbol = "tokens",
   onSuccess,
 }: {
   projects: Array<DistributionProject & { pending?: bigint }>;
+  /** A missing `pending` is a failed read unless the reads are still in flight. */
+  pendingLoading?: boolean;
   tokenSymbol?: string;
   onSuccess?: () => void;
 }) {
@@ -33,11 +39,11 @@ export function DistributeReservedTokensButton({
   const scope = `reserved-distribution:${projects.map(distributionProjectKey).sort().join("|")}`;
 
   return (
-    <div className="my-4 space-y-3 border border-zinc-200 p-3">
+    <div className="my-4 space-y-3">
       <p className="text-sm text-zinc-600">
-        Distribute pending reserved tokens to each selected chain’s current split recipients.
+        Send pending split tokens to each selected chain’s current recipients.
       </p>
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap gap-x-6 gap-y-2">
         {projects.map((project) => {
           const key = distributionProjectKey(project);
           return (
@@ -50,11 +56,16 @@ export function DistributeReservedTokensButton({
                   setSelection((previous) => ({ ...previous, [key]: event.target.checked }))
                 }
               />
-              {JB_CHAINS[project.chainId]?.name ?? project.chainId} · project{" "}
-              {String(project.projectId)}
-              {project.pending !== undefined
-                ? ` (${formatUnits(project.pending, 18, { fractionDigits: 4 })} ${tokenSymbol})`
-                : " (balance unavailable)"}
+              {chainDisplayName(project.chainId)}
+              {project.pending !== undefined ? (
+                <span>
+                  (<TokenAmount value={project.pending} decimals={18} symbol={tokenSymbol} />)
+                </span>
+              ) : pendingLoading ? (
+                <Skeleton className="h-3 w-16" />
+              ) : (
+                <span>(balance unavailable)</span>
+              )}
             </label>
           );
         })}
@@ -64,6 +75,8 @@ export function DistributeReservedTokensButton({
         scope={scope}
         tokenSymbol={tokenSymbol}
         disabled={selected.length === 0}
+        targets={selected}
+        group={projects}
         onSuccess={onSuccess}
         prepare={async () => {
           if (!address) throw new Error("Connect your wallet to continue.");

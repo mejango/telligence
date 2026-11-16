@@ -7,6 +7,16 @@ vi.mock("@/app/[slug]/getProject", () => ({ getProject: mocks.getProject }));
 
 describe("project-name route", () => {
   beforeEach(() => mocks.getProject.mockReset());
+  it("resolves non-revnet source projects for payment display without changing form-field defaults", async () => {
+    mocks.getProject.mockResolvedValue({ isRevnet: false, name: "Source business" });
+    const response = await GET(
+      new NextRequest(
+        "https://revnet.money/api/project-name?chainId=8453&projectId=6&kind=project",
+      ),
+    );
+    expect(mocks.getProject).toHaveBeenCalledWith(6, 8453);
+    await expect(response.json()).resolves.toMatchObject({ found: true, name: "Source business" });
+  });
 
   it("resolves one exact chain and project ID", async () => {
     mocks.getProject.mockResolvedValue({

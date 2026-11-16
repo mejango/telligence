@@ -29,7 +29,7 @@ export function ViewAsForm({ onDone }: { onDone: () => void }) {
 
   return (
     <form
-      className="mt-2 flex items-start gap-2"
+      className="mt-2 space-y-2"
       onSubmit={(event) => {
         event.preventDefault();
         if (!target) return;
@@ -38,19 +38,21 @@ export function ViewAsForm({ onDone }: { onDone: () => void }) {
         onDone();
       }}
     >
+      <label htmlFor="view-as-account" className="block text-xs text-zinc-500">
+        Address or ENS name
+      </label>
       <Input
+        id="view-as-account"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        placeholder="Address or ENS name"
-        aria-label="Account to view the site as"
+        placeholder="0x… or name.eth"
         autoFocus
-        className="h-9 min-w-0 flex-1 px-3 text-sm"
+        className="h-9 px-3 text-sm"
       />
       <Button
         type="submit"
         variant="secondary"
         size="sm"
-        className="shrink-0"
         disabled={!target}
         loading={looksLikeEns && resolving}
       >

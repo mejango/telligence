@@ -3,6 +3,7 @@ import {
   groupMarketPositions,
   lpBandPrices,
   lpDeadline,
+  moveStillCovered,
   prepareAddLiquidity,
   prepareCollectLpFees,
   prepareCollectMarketFees,
@@ -55,9 +56,48 @@ const position = {
   tokenAmount: 2_000n,
 } as UserLpPosition;
 
+describe("a reviewed re-band", () => {
+  it("is no longer covered once the burn returns less than the mint takes, though the mint fits its maxima", () => {
+    const sqrtP = 2n ** 96n;
+    const lower = uniswapV4SqrtPriceX96AtTick(-600);
+    const upper = uniswapV4SqrtPriceX96AtTick(600);
+    const held = uniswapV4AmountsForLiquidity(sqrtP, lower, upper, 10n ** 18n);
+    const liquidity = uniswapV4LiquidityForAmounts(sqrtP, lower, upper, held.amount0, held.amount1);
+    const live = { ...pool, sqrtP, price: 1 } as PoolSnapshot;
+    const narrow = {
+      ...position,
+      liquidity,
+      tickLower: -600,
+      tickUpper: 600,
+      pairAmount: held.amount0,
+      tokenAmount: held.amount1,
+    } as UserLpPosition;
+    const move = prepareEditLiquidity(
+      live,
+      narrow,
+      { pairAmount: held.amount0, tokenAmount: held.amount1 },
+      { minimumPrice: 0.5, maximumPrice: 2 },
+      recipient,
+    );
+    expect(move.kind).toBe("move");
+    expect(move.pairFunding + move.tokenFunding).toBe(0n);
+    expect(moveStillCovered(move, sqrtP)).toBe(true);
+    // A 0.2% price move: the wide new band still fits its own maxima, but the narrow old band
+    // returns less of one currency than the mint takes, which the wallet would pay unreviewed.
+    const moved = uniswapV4SqrtPriceX96AtTick(20);
+    const minted = uniswapV4AmountsForLiquidity(
+      moved,
+      uniswapV4SqrtPriceX96AtTick(move.tickLower),
+      uniswapV4SqrtPriceX96AtTick(move.tickUpper),
+      move.liquidity,
+    );
+    expect(minted.amount0 <= move.amount0Max && minted.amount1 <= move.amount1Max).toBe(true);
+    expect(moveStillCovered(move, moved)).toBe(false);
+  });
+});
+
 describe("Revnet LP removal", () => {
-  // wallet-action:remove-liquidity
-  it("encodes a full burn and take-pair with exact 95% output floors", () => {
+  it("wallet-action:liquidity-management encodes a full burn and take-pair with exact 95% output floors", () => {
     const plan = prepareRemoveLiquidity(pool, position, recipient, false, 100);
     expect(plan.pairMinimum).toBe(950n);
     expect(plan.tokenMinimum).toBe(1_900n);
@@ -105,9 +145,7 @@ describe("Revnet LP removal", () => {
 });
 
 describe("Revnet LP entry", () => {
-  // wallet-action:add-liquidity
-  // wallet-action:liquidity-management
-  it("encodes a bounded mint with Permit2 token settlement and native refund", () => {
+  it("wallet-action:liquidity-management encodes a bounded mint with Permit2 token settlement and native refund", () => {
     const plan = prepareAddLiquidity(
       { ...pool, sqrtP: 2n ** 96n },
       {
@@ -154,8 +192,7 @@ const modifyParams = [
 ] as const;
 
 describe("Revnet LP edit", () => {
-  // wallet-action:edit-liquidity
-  it("tops up the same band with INCREASE_LIQUIDITY funded by the wallet", () => {
+  it("wallet-action:liquidity-management tops up the same band with INCREASE_LIQUIDITY funded by the wallet", () => {
     const plan = prepareEditLiquidity(
       livePool,
       livePosition,
@@ -322,9 +359,14 @@ describe("Revnet LP edit", () => {
       [{ type: "bytes" }, { type: "bytes[]" }],
       plan.unlockData,
     );
-    // BURN_POSITION, MINT_POSITION, CLOSE_CURRENCY ×2, SWEEP (native funding refund).
-    expect(actions).toBe("0x0302121214");
+    // BURN_POSITION, MINT_POSITION, SETTLE each reviewed cap from the caller, TAKE_PAIR: whatever the caps do
+    // not cover stays owed and TAKE_PAIR reverts, so the wallet never pays more than it reviewed.
+    expect(actions).toBe("0x03020b0b11");
     expect(params).toHaveLength(5);
+    const settle = [{ type: "address" }, { type: "uint256" }, { type: "bool" }] as const;
+    expect(decodeAbiParameters(settle, params[2])).toEqual([zeroAddress, plan.pairFunding, true]);
+    expect(decodeAbiParameters(settle, params[3])[1]).toBe(plan.tokenFunding);
+    expect(plan.value).toBe(plan.pairFunding);
     const [tokenId, amount0Minimum, amount1Minimum] = decodeAbiParameters(
       [{ type: "uint256" }, { type: "uint128" }, { type: "uint128" }, { type: "bytes" }],
       params[0],
@@ -360,8 +402,9 @@ describe("Revnet LP edit", () => {
       [{ type: "bytes" }, { type: "bytes[]" }],
       plan.unlockData,
     );
-    expect(actions).toBe("0x03021212");
-    expect(params).toHaveLength(4);
+    // Nothing to pay in: the burn must cover the mint or TAKE_PAIR reverts.
+    expect(actions).toBe("0x030211");
+    expect(params).toHaveLength(3);
   });
 
   it("maps a position's ticks back to display prices with min below max", () => {
@@ -446,8 +489,7 @@ const pairSide: UserLpPosition = {
 const corridor = { floor: 0.5, ceiling: 2 };
 
 describe("Revnet LP market", () => {
-  // wallet-action:liquidity-management
-  it("mints both sides of the corridor in one unlock with independent amounts", () => {
+  it("wallet-action:liquidity-management mints both sides of the corridor in one unlock with independent amounts", () => {
     const plan = prepareMarketLiquidity(
       marketPool,
       { tokenAmount: 10n ** 18n, pairAmount: 5n * 10n ** 17n },
@@ -584,8 +626,9 @@ describe("Revnet LP market", () => {
       [{ type: "bytes" }, { type: "bytes[]" }],
       plan.unlockData,
     );
-    expect(actions.startsWith("0x03020302")).toBe(true);
-    expect(params.length).toBeGreaterThanOrEqual(6);
+    // Two burns and mints, then TAKE_PAIR alone: nothing is paid in, so the burns must cover the mints.
+    expect(actions).toBe("0x0302030211");
+    expect(params).toHaveLength(5);
   });
 
   it("removes one side, keeps an unchanged side, and mints a missing side", () => {
@@ -634,8 +677,8 @@ describe("Revnet LP market", () => {
 });
 
 describe("Review-dialog V4 plan decoding", () => {
-  it("renders a move plan as readable burn/mint/close steps", async () => {
-    const { describeV4UnlockData } = await import("@/components/TransactionReviewProvider");
+  it("renders a move plan as readable burn, mint and take steps", async () => {
+    const { describeV4UnlockData } = await import("@bananapus/nana-sdk-core/review/decode");
     const plan = prepareEditLiquidity(
       livePool,
       livePosition,
@@ -644,7 +687,7 @@ describe("Review-dialog V4 plan decoding", () => {
       recipient,
     );
     const steps = describeV4UnlockData(plan.unlockData)! as Array<Record<string, unknown>>;
-    expect(steps).toHaveLength(4);
+    expect(steps).toHaveLength(3);
     expect(steps[0]).toMatchObject({
       action: "BURN_POSITION",
       position: "#42",
@@ -656,14 +699,34 @@ describe("Review-dialog V4 plan decoding", () => {
       ticks: { lower: plan.tickLower, upper: plan.tickUpper },
       liquidity: plan.liquidity,
     });
-    expect(steps[2]).toMatchObject({ action: "CLOSE_CURRENCY", currency: zeroAddress });
-    expect(steps[3]).toMatchObject({ action: "CLOSE_CURRENCY" });
+    expect(steps[2]).toMatchObject({ action: "TAKE_PAIR", currency0: zeroAddress, recipient });
+    // A move the wallet funds shows each cap it pays in.
+    const funded = prepareEditLiquidity(
+      livePool,
+      livePosition,
+      { pairAmount: held.amount0 * 2n, tokenAmount: held.amount1 * 2n },
+      { minimumPrice: 0.25, maximumPrice: 4 },
+      recipient,
+    );
+    const fundedSteps = describeV4UnlockData(funded.unlockData)! as Array<Record<string, unknown>>;
+    expect(fundedSteps.map((step) => step.action)).toEqual([
+      "BURN_POSITION",
+      "MINT_POSITION",
+      "SETTLE",
+      "SETTLE",
+      "TAKE_PAIR",
+    ]);
+    expect(fundedSteps[2]).toMatchObject({
+      currency: zeroAddress,
+      amount: funded.pairFunding,
+      payerIsCaller: true,
+    });
     // Unknown actions must fall back to the raw view, never a partial story.
     expect(describeV4UnlockData("0xdead")).toBeNull();
   });
 
   it("renders a top-up as an increase step with its maxima", async () => {
-    const { describeV4UnlockData } = await import("@/components/TransactionReviewProvider");
+    const { describeV4UnlockData } = await import("@bananapus/nana-sdk-core/review/decode");
     const plan = prepareEditLiquidity(
       livePool,
       livePosition,

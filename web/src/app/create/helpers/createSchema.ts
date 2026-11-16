@@ -2,6 +2,7 @@ import { buildTierConfigs, type DraftItem } from "@/components/shop/itemDraft";
 import { isRecord, issue, schema, ValidationIssue } from "@/lib/formValidation";
 import { isAddress } from "viem";
 import type { RevnetFormData } from "../types";
+import { createStorePricing } from "./createPricing";
 import { customReserveCoversChains } from "./customReserveAsset";
 import { validateStage } from "./stageSchema";
 
@@ -112,38 +113,32 @@ export const createSchema = schema<RevnetFormData>((input) => {
   const store = isRecord(input.store) ? input.store : undefined;
   const storeItems = store && Array.isArray(store.items) ? (store.items as DraftItem[]) : [];
   if (storeItems.length > 0) {
-    // The same decimals the launch will encode with, so a price that survives validation
-    // cannot be rejected by the encoder later.
-    const customDecimals = isRecord(input.customReserveAsset)
-      ? Number(input.customReserveAsset.decimals)
-      : NaN;
-    const decimals =
-      store?.pricing === "USD"
-        ? 6
-        : input.reserveAsset === "CUSTOM"
-          ? Number.isFinite(customDecimals)
-            ? customDecimals
-            : 18
-          : input.issuanceBaseCurrency === "USD"
-            ? 6
-            : 18;
-    const encoded = buildTierConfigs(storeItems, decimals);
-    if (typeof encoded === "string") issue(issues, ["store", "items"], encoded);
+    try {
+      const { decimals } = createStorePricing(input as unknown as RevnetFormData);
+      // Validate only the quantities that the selected deployments will encode.
+      for (const chainId of selectedChainIds) {
+        const encoded = buildTierConfigs(
+          storeItems,
+          decimals,
+          Number(chainId) as RevnetFormData["chainIds"][number],
+        );
+        if (typeof encoded === "string") {
+          issue(issues, ["store", "items"], encoded);
+          break;
+        }
+      }
+    } catch (error) {
+      issue(
+        issues,
+        ["store", "items"],
+        error instanceof Error ? error.message : "Invalid shop pricing",
+      );
+    }
     storeItems.forEach((item, index) => {
-      const composes = item.name?.trim() || item.description?.trim() || item.mediaFile;
+      const composes =
+        item.name?.trim() || item.description?.trim() || item.mediaFile || item.mediaUri?.trim();
       if (composes && !item.name?.trim()) {
         issue(issues, ["store", "items", index, "name"], "Item name is required");
-      }
-      for (const [chainId, value] of Object.entries(item.perChainSupply ?? {})) {
-        const trimmed = String(value).trim();
-        if (trimmed === "" || trimmed === "unlimited") continue;
-        if (!/^\d+$/.test(trimmed)) {
-          issue(
-            issues,
-            ["store", "items", index, "perChainSupply", chainId],
-            'Quantity must be a whole number, empty, or "unlimited"',
-          );
-        }
       }
     });
   }

@@ -1,4 +1,5 @@
 import {
+  pinDetailEdits,
   pinMediaEdits,
   readMediaEditSource,
   replaceTierMedia,
@@ -33,7 +34,12 @@ function client(values: Record<string, unknown> = {}) {
           encodedIpfsUriOf: digest,
           tokenUriResolverOf: zeroAddress,
           isTierRemoved: false,
-          tierOf: { id: 12, initialSupply: 100 },
+          tierOf: {
+            id: 12,
+            initialSupply: 100,
+            discountPercent: 40,
+            flags: { cantBeRemoved: false, cantIncreaseDiscountPercent: true },
+          },
           ...values,
         })[functionName],
     ),
@@ -43,8 +49,8 @@ function client(values: Record<string, unknown> = {}) {
 beforeEach(() => mocks.pinJsonMetadata.mockResolvedValue(cid));
 afterEach(() => vi.unstubAllGlobals());
 
-describe("wallet-action:shop-items — shop media replacement", () => {
-  it("replaces owned media fields while preserving names, attributes and peer custom data", () => {
+describe("shop media replacement", () => {
+  it("wallet-action:shop-items replaces owned media fields while preserving names, attributes and peer custom data", () => {
     const source = {
       name: "Peer item",
       attributes: [{ trait_type: "Color", value: "Blue" }],
@@ -126,6 +132,30 @@ describe("wallet-action:shop-items — shop media replacement", () => {
     expect(mocks.pinJsonMetadata).not.toHaveBeenCalled();
   });
 
+  it("keeps pointing at artwork whose digest is the media itself, so a details edit does not drop it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockImplementation(
+          async () => new Response("png", { headers: { "content-type": "image/png" } }),
+        ),
+    );
+    const source = await readMediaEditSource(client(), destination, 12, owner, "details");
+    expect(source.metadata).toEqual({
+      image: expect.stringContaining(cid),
+      mediaType: "image/png",
+    });
+    const [edit] = await pinDetailEdits([source], "Hat", "Warm");
+    expect(mocks.pinJsonMetadata).toHaveBeenCalledWith({
+      image: expect.stringContaining(cid),
+      mediaType: "image/png",
+      name: "Hat",
+      description: "Warm",
+    });
+    expect(edit.tierId).toBe(12);
+  });
+
   it("allows a genuinely empty metadata digest", async () => {
     const source = await readMediaEditSource(
       client({ encodedIpfsUriOf: `0x${"0".repeat(64)}` }),
@@ -154,5 +184,25 @@ describe("wallet-action:shop-items — shop media replacement", () => {
       mediaType: "image/png",
     });
     expect(edits.map((edit) => edit.tierId)).toEqual([12, 41, 12]);
+  });
+
+  it("reads a discount or removal under its own permission, without the item's JSON", async () => {
+    const reads = client();
+    const source = await readMediaEditSource(reads, destination, 12, owner, "discount");
+    expect(source).toMatchObject({ discountPercent: 40, cantIncreaseDiscountPercent: true });
+    expect(source.preconditions).toHaveLength(4);
+    // A custom resolver blocks only metadata edits.
+    await expect(
+      readMediaEditSource(client({ tokenUriResolverOf: owner }), destination, 12, owner, "remove"),
+    ).resolves.toMatchObject({ tierId: 12 });
+    const locked = {
+      id: 12,
+      initialSupply: 100,
+      discountPercent: 0,
+      flags: { cantBeRemoved: true },
+    };
+    await expect(
+      readMediaEditSource(client({ tierOf: locked }), destination, 12, owner, "remove"),
+    ).rejects.toThrow("cannot be removed on Base");
   });
 });

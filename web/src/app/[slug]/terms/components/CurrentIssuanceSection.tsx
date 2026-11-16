@@ -2,9 +2,9 @@
 
 import { SkeletonLines } from "@/components/ui/skeleton";
 import { useBoostRecipient } from "@/hooks/useBoostRecipient";
-import { useCountdownToDate } from "@/hooks/useCountdownToDate";
 import { useFormattedTokenIssuance } from "@/hooks/useFormattedTokenIssuance";
 import { useProjectBaseToken } from "@/hooks/useProjectBaseToken";
+import { useSecondsUntil } from "@/hooks/useSecondsUntil";
 import { useJBRulesetContext } from "@/lib/nana/project";
 import { formatSeconds } from "@/lib/utils";
 import { getNextRulesetWeight, ReservedPercent, RulesetWeight } from "@bananapus/nana-sdk-core";
@@ -30,10 +30,9 @@ export function CurrentIssuanceSection() {
     useFormattedTokenIssuance({ reservedPercent: new ReservedPercent(0) }),
   );
 
-  const nextCutTime = ruleset?.data
-    ? new Date((ruleset.data.start + ruleset.data.duration) * 1000)
-    : undefined;
-  const timeLeft = useCountdownToDate(nextCutTime);
+  const timeLeft = useSecondsUntil(
+    ruleset?.data ? ruleset.data.start + ruleset.data.duration : undefined,
+  );
 
   const nextWeight = ruleset?.data
     ? new RulesetWeight(
@@ -65,14 +64,15 @@ export function CurrentIssuanceSection() {
 
       {timeLeft && nextIssuance && (
         <p className="text-sm text-zinc-500">
-          Cut to <span className="font-normal tabular-nums text-black">{nextIssuance}</span> in{" "}
+          Changes to <span className="font-normal tabular-nums text-black">{nextIssuance}</span> in{" "}
           {formatSeconds(timeLeft)}
         </p>
       )}
 
       {splitPercent && boostRecipient && (
         <p className="text-sm text-zinc-500">
-          {splitPercent.formatPercentage().toFixed(2)}% of issuance and buybacks to splits
+          {splitPercent.formatPercentage().toFixed(2)}% of new or bought tokens goes to the listed
+          recipients
         </p>
       )}
     </div>
