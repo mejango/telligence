@@ -22,7 +22,7 @@ test("pending routing shows ready, cooldown, and final attempts above activity",
     if (!request.url().endsWith("/api/bendystraw/mainnet/query")) return;
     const body = request.postDataJSON();
     if (body?.variables?.projectId === 6) {
-      expect(body.variables).toEqual({ chainId: 1, projectId: 6, version: 6 });
+      expect(body.variables).toEqual({ chainId: 8453, projectId: 6, version: 6 });
       sourceNameReads += 1;
     }
   });
@@ -32,9 +32,9 @@ test("pending routing shows ready, cooldown, and final attempts above activity",
       await route.fallback();
       return;
     }
-    const current = protocolRollout.chains["1"].contracts.JBRouterTerminalGateway.toLowerCase();
+    const current = protocolRollout.chains["8453"].contracts.JBRouterTerminalGateway.toLowerCase();
     expect(body.variables).toEqual({
-      chainId: 1,
+      chainId: 8453,
       projectId: 1,
       gateway: body.variables.gateway,
       limit: 100,
@@ -56,7 +56,7 @@ test("pending routing shows ready, cooldown, and final attempts above activity",
       body: JSON.stringify(pending),
     });
   });
-  expectSecurityHeaders(await page.goto("/eth:1", { waitUntil: "domcontentloaded" }));
+  expectSecurityHeaders(await page.goto("/base:1", { waitUntil: "domcontentloaded" }));
   const disclosure = page
     .locator("details")
     .filter({ has: page.locator("summary", { hasText: "3 payments need processing." }) });

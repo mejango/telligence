@@ -83,7 +83,22 @@ const routes = [
   { route: "/build", path: "/build", kib: 362 },
   // The audit prompts render in the page so a fetch can read them: /audit measures 362.0 KiB (just over 362).
   { route: "/audit", path: "/audit", kib: 363 },
-  { route: "/discover", path: "/discover", kib: 344 },
+  // Telligence's own pages. Discover lists compute projects and the account's projects page offers
+  // their compute controls, so they measure 355.3 and 463.4 KiB; /account/[id]/roles measures 396.3.
+  // The Base fixture project measures operator 708.6 and owners 657.6 KiB.
+  { route: "/discover", path: "/discover", kib: 356 },
+  { route: "/how-it-works", path: "/how-it-works", kib: 348 },
+  { route: "/recover", path: "/recover", kib: 461 },
+  {
+    route: "/compute/[projectId]",
+    path: "/compute/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    kib: 464,
+  },
+  {
+    route: "/compute/[projectId]/keys",
+    path: "/compute/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/keys",
+    kib: 435,
+  },
   // Permit2 pay authorization and the SDK's hook, router and revnet fee rules (SDK 6.6.0) measure /create 569.2,
   // /[slug] 599.8, terms 599.1, operator 682.4, owners 636.3, shop 605.9, extras 617.5, account 431.9 and
   // holdings 421.0 KiB: all client JavaScript grew 1.0 KiB, the rest is shared chunks regrouped. Rounded up only.
@@ -100,21 +115,21 @@ const routes = [
   // 640.5 and 608.0 KiB on /[slug], terms, owners and shop. Rounded up only.
   // SDK 6.9.0's pay route run as the payer (simulated payment, revert reading): terms measures just over
   // 602.0, operator 684.4 and extras 621.4 KiB. Rounded up only.
-  { route: "/[slug]", path: "/eth:1", kib: 603 },
-  { route: "/[slug]/terms", path: "/eth:1/terms", kib: 603 },
-  { route: "/[slug]/operator", path: "/eth:1/operator", kib: 685 },
+  { route: "/[slug]", path: "/base:1", kib: 603 },
+  { route: "/[slug]/terms", path: "/base:1/terms", kib: 603 },
+  { route: "/[slug]/operator", path: "/base:1/operator", kib: 709 },
   // Configured Safe service boundary with SDK 6.7.0 measures owners 637.7 and extras 618.3 KiB.
   // Round only these two incremental route costs up; static and aggregate ceilings stay unchanged.
   // Loans, bridge sends and claims in the shared activity rows, and the pay review's notice and beneficiary:
   // owners measures 638.4, shop 606.2, extras 619.1 and /account/[id] 432.2 KiB. Rounded up only.
   // The re-band net-debit check at send time together with SDK 6.9.0: owners measures 641.1 KiB. Rounded up only.
-  { route: "/[slug]/owners", path: "/eth:1/owners", kib: 642 },
-  { route: "/[slug]/shop", path: "/eth:1/shop", kib: 609 },
-  { route: "/[slug]/extras", path: "/eth:1/extras", kib: 622 },
+  { route: "/[slug]/owners", path: "/base:1/owners", kib: 658 },
+  { route: "/[slug]/shop", path: "/base:1/shop", kib: 609 },
+  { route: "/[slug]/extras", path: "/base:1/extras", kib: 622 },
   { route: "/account/[id]", path: `/account/${account}`, kib: 433 },
   { route: "/account/[id]/holdings", path: `/account/${account}/holdings`, kib: 422 },
-  { route: "/account/[id]/projects", path: `/account/${account}/projects`, kib: 435 },
-  { route: "/account/[id]/roles", path: `/account/${account}/roles`, kib: 394 },
+  { route: "/account/[id]/projects", path: `/account/${account}/projects`, kib: 464 },
+  { route: "/account/[id]/roles", path: `/account/${account}/roles`, kib: 397 },
   { route: "/_not-found", path: "/no-such-page/x/y", kib: 358, status: 404 },
 ];
 // Next renders its global error page only when the root layout itself throws; no URL reaches it.

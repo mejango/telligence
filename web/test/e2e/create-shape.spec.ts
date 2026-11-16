@@ -138,6 +138,9 @@ test("review binds the written purpose and resets acknowledgement when editing",
   await page
     .getByRole("textbox", { name: "What will it do?" })
     .fill("Summarize archival documents");
+  await page
+    .getByRole("textbox", { name: "Recovery wallet" })
+    .fill("0x7777777777777777777777777777777777777777");
   await page.getByRole("button", { name: "Review" }).click();
   await expect(page.getByRole("heading", { name: "Review your project" })).toBeFocused();
   await expect(page.getByText("Public archive", { exact: true })).toBeVisible();

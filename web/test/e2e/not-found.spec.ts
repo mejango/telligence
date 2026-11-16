@@ -12,5 +12,5 @@ test("the 404 page's Return Home link loads the home page", async ({ page }) => 
   expectBoundaryToStayLocal(boundary);
   await page.getByRole("link", { name: "Return Home" }).click();
   await expect(page).toHaveURL(/127\.0\.0\.1:\d+\/$/u);
-  await expect(page.getByRole("region", { name: "Markee advertisement" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Throw money/, level: 1 })).toBeVisible();
 });

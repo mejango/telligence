@@ -85,7 +85,7 @@ test("an open dialog inerts the page, stacks, and restores it on close", async (
   // dialog, so every keystroke re-renders it with fresh inline callbacks —
   // the same churn the payment card produces while quoting. Neither the
   // inertness nor the caret may move.
-  const accountInput = page.getByRole("textbox", { name: "Account to view the site as" });
+  const accountInput = dialog.getByRole("textbox", { name: "Address or ENS name" });
   await accountInput.click();
   await page.keyboard.type("0x11111111");
   await expect(accountInput).toBeFocused();
@@ -111,9 +111,7 @@ test("an open dialog inerts the page, stacks, and restores it on close", async (
   await expect(stackedButton).toHaveAttribute("data-clicked", "true");
   expect(
     await page.evaluate(() => {
-      const input = document.querySelector(
-        'input[aria-label="Account to view the site as"]',
-      ) as HTMLElement | null;
+      const input = document.getElementById("view-as-dialog-account");
       input?.focus();
       return document.activeElement === input;
     }),
@@ -146,7 +144,9 @@ test("layout utilities on a dialog surface win over the shell's defaults", async
   await installBrowserBoundary(page);
   const response = await page.goto("/create", { waitUntil: "domcontentloaded" });
   expectSecurityHeaders(response);
-  await expect(page.getByRole("heading", { name: "Create a revnet" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /What would you build with a budget to think/ }),
+  ).toBeVisible();
 
   // The transaction review, shared with Juicebox Money, lays out its dialog
   // surface with utilities (ModalDialog's className), on ModalDialog's own

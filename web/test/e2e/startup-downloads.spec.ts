@@ -4,7 +4,7 @@ import { installBrowserBoundary } from "./browser-support";
 
 // The bundle gate reads each route's HTML; this covers what a page imports on its own once it
 // hydrates. Without any interaction, no vendor wallet SDK downloads.
-for (const path of ["/", "/eth:1"]) {
+for (const path of ["/", "/base:1"]) {
   test(`${path} downloads no vendor wallet SDK before an interaction`, async ({ page }) => {
     await installBrowserBoundary(page);
     const bodies: Promise<string>[] = [];

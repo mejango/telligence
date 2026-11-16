@@ -554,7 +554,7 @@ test("deployment diagnostics are available from Extras without a wallet", async 
   await expect(dialog.getByText("Diagnostics copied.")).toBeVisible();
   const report = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
   expect(report).toMatchObject({
-    chainId: 1,
+    chainId: 8453,
     projectId: "1",
     indexer: { project: "available", group: "available" },
   });
