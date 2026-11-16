@@ -1,4 +1,7 @@
 {
   "description": "Reviewed Prettier debt. A content change must format the file or explicitly review a new baseline.",
-  "baselines": {}
+  "baselines": {
+    "scripts/lib/test-titles.mjs": "f6999b8746b8d01078de3d12ed929c1844cccd6401c811123fc9eccc81b12182",
+    "test/lib/test-titles.test.ts": "bfad53ed0b6a11667df363ec1e3fc0f63c8ed5237884ab2129b6a2750b2e809d"
+  }
 }

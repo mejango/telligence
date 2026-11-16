@@ -99,6 +99,29 @@ const map = (items: ActivityEventItem[]) =>
   mapActivityEvents(items, () => ({ tokenSymbol: "ETH", decimals: 18 }));
 
 describe("activity swap direction", () => {
+  it("retains the full auto-issuance amount on the homepage's compact description", () => {
+    render(
+      <HomepageActivityFeed
+        initialEvents={[
+          activity({
+            autoIssueEvent: {
+              id: "auto-issue-1",
+              txHash,
+              timestamp,
+              from: account,
+              beneficiary: account,
+              count: "1234567890123456789012345",
+            },
+          }),
+        ]}
+        initialHasMore={false}
+      />,
+    );
+    expect(screen.getByTitle("1,234,567.890123456789012345 SBB")).toHaveTextContent(
+      "auto-issued 1.23M SBB",
+    );
+  });
+
   it.each([
     ["buy", "swapBuy", "bought 2.34 SBB via the buyback pool", "in"],
     ["sell", "swapSell", "sold 2.34 SBB via the buyback pool", "out"],

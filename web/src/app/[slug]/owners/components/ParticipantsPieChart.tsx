@@ -2,7 +2,8 @@
 
 import { EthereumAddress } from "@/components/EthereumAddress";
 import type { ProjectTokenData } from "@/lib/nana/types";
-import { formatPortion } from "@/lib/utils";
+import { formatTokenAmount } from "@/lib/token";
+import { formatShare, formatTokenSymbol } from "@/lib/utils";
 import { JBProjectToken } from "@bananapus/nana-sdk-core";
 import { useMemo, useState } from "react";
 import { Address } from "viem";
@@ -59,17 +60,20 @@ export function donutSliceRanges(balances: readonly bigint[]) {
 const OwnerTooltip = ({
   item,
   totalSupply,
+  token,
 }: {
   item: { address: Address; balance: JBProjectToken };
   totalSupply: bigint;
+  token: ProjectTokenData | null | undefined;
 }) => {
-  const portion = formatPortion(item.balance.value, totalSupply);
+  const symbol = formatTokenSymbol(token?.symbol);
 
   return (
     <>
       <EthereumAddress address={item.address} short />
       <div className="text-zinc-500">
-        {item.balance.format()} tokens ({portion}%)
+        {formatTokenAmount(item.balance.value, { symbol, decimals: token?.decimals ?? 18 })}{" "}
+        {symbol} ({formatShare(item.balance.value, totalSupply)})
       </div>
     </>
   );
@@ -78,6 +82,7 @@ const OwnerTooltip = ({
 export function ParticipantsPieChart({
   totalSupply,
   participants,
+  token,
   showOwnerCount = false,
 }: {
   token: ProjectTokenData | null | undefined;
@@ -135,7 +140,7 @@ export function ParticipantsPieChart({
       </svg>
       {activeItem ? (
         <div className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 border border-zinc-200 bg-white px-5 py-3 text-sm shadow-md">
-          <OwnerTooltip item={activeItem} totalSupply={totalSupply} />
+          <OwnerTooltip item={activeItem} totalSupply={totalSupply} token={token} />
         </div>
       ) : null}
       {showOwnerCount ? (

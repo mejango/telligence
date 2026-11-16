@@ -1,9 +1,11 @@
 "use client";
 
+import { chainDisplayName, chainSortIndex } from "@/app/constants";
 import { ChainLogo } from "@/components/ChainLogo";
 import { EthereumAddress } from "@/components/EthereumAddress";
 import EtherscanLink from "@/components/EtherscanLink";
 import { TableSkeleton } from "@/components/loading/LoadingSkeletons";
+import { TokenAmount } from "@/components/TokenAmount";
 import { Check } from "@/components/ui/icons";
 import {
   Table,
@@ -22,18 +24,17 @@ import { matchesProjectRef, projectRefsWhere } from "@/lib/bendystraw/projectRef
 import { formatShortDateTime } from "@/lib/date";
 import { useJBContractContext, useJBTokenContext } from "@/lib/nana/project";
 import type { JBChainId } from "@/lib/nana/types";
-import { commaNumber } from "@/lib/number";
 import { formatTokenSymbol } from "@/lib/utils";
 import { wagmiConfig } from "@/lib/wagmiConfig";
-import { formatUnits, JB_CHAINS, JBCoreContracts } from "@bananapus/nana-sdk-core";
+import { JB_CHAINS, JBCoreContracts } from "@bananapus/nana-sdk-core";
 import { useState } from "react";
 import { useAccount } from "wagmi";
 import { getPublicClient } from "wagmi/actions";
-import { OwnerDistributionBatchButton } from "../../../owners/components/OwnerDistributionBatchButton";
 import {
   autoIssuanceKey,
   prepareAutoIssuance,
 } from "../../../owners/components/ownerDistributionBatch";
+import { OwnerDistributionBatchButton } from "../../../owners/components/OwnerDistributionBatchButton";
 import { ProjectItem } from "../shared";
 
 /**
@@ -106,10 +107,13 @@ export function V6AutoIssuanceSubtab({ projects }: { projects: ProjectItem[] }) 
         ...row,
         stage: stageIdx >= 0 ? stageIdx + 1 : undefined,
         startsAt: stageIdx >= 0 ? Number(rulesets[stageIdx].start) : undefined,
-        distributedTxn: distributed ? distributed.id.split("-")[1] : undefined,
+        distributedTxn: distributed?.txHash,
       };
     })
-    .sort((a, b) => (a.stage ?? 99) - (b.stage ?? 99) || a.chainId - b.chainId);
+    .sort(
+      (a, b) =>
+        (a.stage ?? 99) - (b.stage ?? 99) || chainSortIndex(a.chainId) - chainSortIndex(b.chainId),
+    );
 
   const loading = stored.isLoading || issued.isLoading || rulesetReads.isLoading;
   const unavailable = stored.isError || issued.isError || rulesetReads.isError;
@@ -126,8 +130,8 @@ export function V6AutoIssuanceSubtab({ projects }: { projects: ProjectItem[] }) 
   return (
     <div>
       <p className="text-md text-black font-light italic mb-2">
-        Auto issuance mints a fixed amount to a preset account when a stage starts. Anyone can
-        trigger the distribution once its unlock date passes.
+        These accounts can receive a fixed number of new tokens without paying. Anyone can send the
+        tokens to them once the stage begins.
       </p>
       <div className="mb-4">
         <OwnerDistributionBatchButton
@@ -135,6 +139,11 @@ export function V6AutoIssuanceSubtab({ projects }: { projects: ProjectItem[] }) 
           scope={scope}
           tokenSymbol={tokenSymbol}
           disabled={selected.length === 0}
+          group={chains}
+          targets={selected.map((row) => ({
+            chainId: row.chainId,
+            projectId: BigInt(row.projectId),
+          }))}
           onSuccess={() => {
             void issued.refetch();
             void stored.refetch();
@@ -170,10 +179,10 @@ export function V6AutoIssuanceSubtab({ projects }: { projects: ProjectItem[] }) 
       ) : rows.length === 0 ? (
         <p className="text-center text-zinc-400">No auto issuances</p>
       ) : null}
-      <div className="mb-4 max-h-96 overflow-auto">
+      <div className="mb-4">
         <div className="flex flex-col">
-          <Table className="min-w-max">
-            <TableHeader>
+          <Table className="min-w-max max-sm:block max-sm:min-w-0">
+            <TableHeader className="max-sm:hidden">
               <TableRow>
                 <TableHead className="whitespace-nowrap">Chain</TableHead>
                 <TableHead className="whitespace-nowrap">Stage</TableHead>
@@ -183,14 +192,22 @@ export function V6AutoIssuanceSubtab({ projects }: { projects: ProjectItem[] }) 
                 <TableHead className="whitespace-nowrap">Distribute</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="max-sm:block">
               {rows.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell className="whitespace-nowrap">
+                <TableRow
+                  key={row.id}
+                  className="max-sm:grid max-sm:grid-cols-2 max-sm:gap-x-4 max-sm:py-2"
+                >
+                  <TableCell className="whitespace-nowrap max-sm:block max-sm:min-w-0 max-sm:px-0 max-sm:py-1 max-sm:whitespace-normal">
+                    <span className="block text-xs text-zinc-500 sm:hidden">Chain</span>
                     <ChainLogo chainId={row.chainId as JBChainId} standalone />
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">{row.stage ?? "—"}</TableCell>
-                  <TableCell className="whitespace-nowrap">
+                  <TableCell className="whitespace-nowrap max-sm:block max-sm:min-w-0 max-sm:px-0 max-sm:py-1 max-sm:whitespace-normal">
+                    <span className="block text-xs text-zinc-500 sm:hidden">Stage</span>
+                    {row.stage ?? "—"}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap max-sm:block max-sm:min-w-0 max-sm:px-0 max-sm:py-1 max-sm:whitespace-normal">
+                    <span className="block text-xs text-zinc-500 sm:hidden">Account</span>
                     <EthereumAddress
                       address={row.beneficiary as `0x${string}`}
                       chain={JB_CHAINS[row.chainId as JBChainId]?.chain}
@@ -199,13 +216,16 @@ export function V6AutoIssuanceSubtab({ projects }: { projects: ProjectItem[] }) 
                       withEnsName
                     />
                   </TableCell>
-                  <TableCell className="whitespace-nowrap tabular-nums">
-                    {commaNumber(formatUnits(BigInt(row.count), 18))} {tokenSymbol}
+                  <TableCell className="whitespace-nowrap tabular-nums max-sm:block max-sm:min-w-0 max-sm:px-0 max-sm:py-1 max-sm:whitespace-normal">
+                    <span className="block text-xs text-zinc-500 sm:hidden">Amount</span>
+                    <TokenAmount value={BigInt(row.count)} decimals={18} symbol={tokenSymbol} />
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">
+                  <TableCell className="whitespace-nowrap max-sm:block max-sm:min-w-0 max-sm:px-0 max-sm:py-1 max-sm:whitespace-normal">
+                    <span className="block text-xs text-zinc-500 sm:hidden">Unlock date</span>
                     {row.startsAt ? formatShortDateTime(row.startsAt * 1000) : "—"}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">
+                  <TableCell className="whitespace-nowrap max-sm:block max-sm:min-w-0 max-sm:px-0 max-sm:py-1 max-sm:whitespace-normal">
+                    <span className="block text-xs text-zinc-500 sm:hidden">Distribute</span>
                     {row.distributedTxn ? (
                       <div className="flex items-center gap-1 text-zinc-400">
                         <EtherscanLink
@@ -220,7 +240,7 @@ export function V6AutoIssuanceSubtab({ projects }: { projects: ProjectItem[] }) 
                       <label className="flex items-center gap-2">
                         <input
                           type="checkbox"
-                          aria-label={`Distribute on ${JB_CHAINS[row.chainId as JBChainId]?.name ?? row.chainId}, project ${row.projectId}, stage ${row.stageId}, to ${row.beneficiary}`}
+                          aria-label={`Distribute on ${chainDisplayName(row.chainId)}, project ${row.projectId}, stage ${row.stageId}, to ${row.beneficiary}`}
                           disabled={row.startsAt === undefined || row.startsAt > now}
                           checked={
                             row.startsAt !== undefined &&

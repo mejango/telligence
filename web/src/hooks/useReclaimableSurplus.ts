@@ -1,4 +1,4 @@
-import { applyRevFee, netCashOutValue, revFeeApplies } from "@/lib/feeHelpers";
+import { netCashOutValue } from "@/lib/feeHelpers";
 import { decodeRulesetMetadata } from "@/lib/utils";
 import {
   getJBContractAddress,
@@ -9,8 +9,14 @@ import {
   jbRulesetsAbi,
   jbTerminalStoreAbi,
 } from "@bananapus/nana-sdk-core";
-import type { Address } from "viem";
-import { useReadContract } from "wagmi";
+import {
+  cashOutCountAfterRevnetFee,
+  revnetCashOutFeeApplies,
+  revnetCashOutFeeTerminalExists,
+} from "@bananapus/nana-sdk-core/v6";
+import { useQuery } from "@tanstack/react-query";
+import type { Address, PublicClient } from "viem";
+import { usePublicClient, useReadContract } from "wagmi";
 
 export function useReclaimableSurplus(params: {
   chainId: JBChainId | undefined;
@@ -50,9 +56,23 @@ export function useReclaimableSurplus(params: {
    * not add the revnet fee hook" (REVOwner.sol:303). Applying it unconditionally quoted every
    * zero-tax revnet, and every plain project, 2.5% low.
    */
-  const chargesRevFee = revFeeApplies(isRevnet, cashOutTaxRate);
+  const client = usePublicClient({ chainId });
+  // REVOwner also skips its fee when the fee revnet has no terminal for this token. Until that
+  // is read, the fee is assumed.
+  const { data: feeTerminalExists } = useQuery({
+    queryKey: ["revnetFeeTerminal", chainId, token],
+    enabled: !!client && !!chainId && !!token && isRevnet === true,
+    staleTime: 5 * 60_000,
+    queryFn: () =>
+      revnetCashOutFeeTerminalExists(client as PublicClient, { chainId: chainId!, token: token! }),
+  });
+  // Undefined inputs mean "still loading": the fee is left out rather than guessed.
+  const chargesRevFee =
+    isRevnet === true &&
+    revnetCashOutFeeApplies({ cashOutTaxRate, feeTerminalExists: feeTerminalExists ?? true }) ===
+      true;
   const feeableTokenAmount =
-    tokenAmount === undefined ? undefined : chargesRevFee ? applyRevFee(tokenAmount) : tokenAmount;
+    tokenAmount === undefined ? undefined : cashOutCountAfterRevnetFee(tokenAmount, chargesRevFee);
 
   const { data: raw, ...rest } = useReadContract({
     abi: jbTerminalStoreAbi,

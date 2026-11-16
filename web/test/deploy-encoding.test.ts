@@ -62,7 +62,7 @@ beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
-describe("wallet-action:create-revnet — REVDeployer deployment encoding", () => {
+describe("REVDeployer deployment encoding", () => {
   it("targets the contract-derived deploy-all fixture, independently of the SDK address book", () => {
     const request = buildRequest();
 
@@ -73,7 +73,7 @@ describe("wallet-action:create-revnet — REVDeployer deployment encoding", () =
   // Every revnet carries a store: REVDeployer deploys an empty 721 hook itself when no config
   // is given, hardcoding 18 price decimals and every operator permission, so the client always
   // sends the six-argument overload with the store the form actually described.
-  it("selects and round-trips the store-carrying deployFor overload", () => {
+  it("wallet-action:create-revnet selects and round-trips the store-carrying deployFor overload", () => {
     const request = buildRequest();
     const data = encodeFunctionData({
       abi: request.abi,
@@ -302,7 +302,7 @@ describe("wallet-action:create-revnet — REVDeployer deployment encoding", () =
 // overrides and operator overrides keyed by chainId) must resolve to each
 // chain's own address in that chain's deployFor args, falling back to the
 // single default value on chains without an override.
-describe("wallet-action:create-revnet — per-chain inline values", () => {
+describe("per-chain inline values", () => {
   const CHAIN_IDS = [sepolia.id, baseSepolia.id] as const;
 
   function perChainForm() {
@@ -338,7 +338,7 @@ describe("wallet-action:create-revnet — per-chain inline values", () => {
     });
   }
 
-  it("routes each chain's split beneficiary override and falls back to the default", () => {
+  it("wallet-action:create-revnet routes each chain's split beneficiary override and falls back to the default", () => {
     const form = perChainForm();
     const sepoliaSplits = requestFor(form, sepolia.id).args[1].stageConfigurations[0].splits;
     const baseSepoliaSplits = requestFor(form, baseSepolia.id).args[1].stageConfigurations[0]
@@ -375,7 +375,7 @@ describe("wallet-action:create-revnet — per-chain inline values", () => {
 // mints only the rows whose chainId matches block.chainid. The client must
 // therefore send the FULL row list — user-chosen chainIds intact — to every
 // chain, never filtering rows or rewriting a row's chainId to the config chain.
-describe("wallet-action:create-revnet — multi-chain auto issuance", () => {
+describe("multi-chain auto issuance", () => {
   const CHAIN_IDS = [sepolia.id, baseSepolia.id] as const;
 
   function multiChainRequest(chainId: (typeof CHAIN_IDS)[number]) {
@@ -422,7 +422,7 @@ describe("wallet-action:create-revnet — multi-chain auto issuance", () => {
     }
   });
 
-  it("encodes a byte-identical REVConfig for every chain", () => {
+  it("wallet-action:create-revnet encodes a byte-identical REVConfig for every chain", () => {
     const [sepoliaConfig, baseSepoliaConfig] = CHAIN_IDS.map((chainId) =>
       encodeRevnetConfig(multiChainRequest(chainId)),
     );

@@ -1,10 +1,11 @@
 import { chainDisplayName } from "@/app/constants";
 import { ButtonWithWallet } from "@/components/ButtonWithWallet";
 import { ChainLogo } from "@/components/ChainLogo";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { SummaryRow, TxProgress } from "@/components/ui/TxProgress";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -20,31 +21,33 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/use-toast";
+import { netLoanProceeds } from "@/lib/feeHelpers";
+import { SAFE_PROPOSAL_PENDING_LINE, SAFE_PROPOSAL_UNCONFIRMED_LINE } from "@/lib/reviewed-call";
 import { getTokenSymbolFromAddress } from "@/lib/tokenUtils";
-import { JBChainId, NATIVE_TOKEN_DECIMALS } from "@bananapus/nana-sdk-core";
+import { JBChainId } from "@bananapus/nana-sdk-core";
 import { PropsWithChildren, useCallback, useEffect, useMemo, useState } from "react";
 import { formatUnits } from "viem";
 import { ImportantInfo } from "./ImportantInfo";
 import { LoanFeeChart } from "./LoanFeeChart";
 import { SimulatedLoanCard } from "./SimulatedLoanCard";
-import { useBorrowDialog } from "./hooks/useBorrowDialog";
+import { useBorrowDialog, type LoanStatus } from "./hooks/useBorrowDialog";
 
 interface Props {
   projectId: bigint;
   tokenSymbol: string;
 }
 
-const BORROW_STATUS_TEXT: Record<string, string> = {
+const BORROW_STATUS_TEXT: Record<LoanStatus, string> = {
+  idle: "",
   checking: "Checking permissions...",
   "granting-permission": "Granting permission...",
-  "permission-granted": "Permission granted. Creating loan...",
   "waiting-signature": "Waiting for wallet confirmation...",
   pending: "Creating loan...",
+  proposed: SAFE_PROPOSAL_PENDING_LINE,
   "reallocation-pending": "Adjusting loan...",
-  success: "Loan created successfully!",
-  "error-permission-denied": "Permission was not granted. Please approve to proceed.",
-  "error-loan-canceled": "Loan creation was canceled.",
-  error: "Something went wrong during loan creation.",
+  success: "Loan opened.",
+  "safe-unconfirmed": SAFE_PROPOSAL_UNCONFIRMED_LINE,
+  error: "The loan could not be opened.",
 };
 
 export function BorrowDialog(props: PropsWithChildren<Props>) {
@@ -87,6 +90,11 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
     baseToken,
     selectedChainTokenConfig,
     tokenConfigForChain,
+    loanSourceLine,
+    loanSourceBlocked,
+    loanSourcePending,
+    borrowQuote,
+    borrowQuoteError,
   } = borrowDialog;
 
   // ===== PHASE 3: DYNAMIC TOKEN SYMBOL =====
@@ -111,7 +119,12 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
     [balances],
   );
   const defaultBalance = selectableBalances[0] ?? balances?.[0];
-  const hasOnlyOneProjectChain = balances?.length === 1;
+  // One usable network is plain text, not a one-option dropdown.
+  const hasOnlyChosenChain =
+    !!cashOutChainId &&
+    (balances?.length === 1 ||
+      (selectableBalances.length === 1 &&
+        selectableBalances[0].chainId === Number(cashOutChainId)));
 
   // Handle chain selection - exactly like RedeemDialog
   const handleChainSelect = useCallback(
@@ -123,7 +136,7 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
         // Clear, not pre-fill. Pre-filling the FULL balance here contradicted the auto-select
         // effect below, which deliberately leaves the amount empty so that picking a sensible
         // chain does not silently opt the holder into collateralizing everything they hold.
-        setCollateralAmount("");
+        setCollateralAmount("", "auto");
         setInternalSelectedLoan(null);
       }
     },
@@ -150,24 +163,69 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
       ? selectedLoanReallocAmount - BigInt(internalSelectedLoan.borrowAmount)
       : estimatedBorrowFromInputOnly;
 
-  // Use correct decimals for the selected chain. `??`, not `||`: a legitimate
-  // 0-decimal accounting token must not be read as 18.
-  const tokenDecimals = selectedChainTokenConfig?.decimals ?? NATIVE_TOKEN_DECIMALS;
-  const simulatedAmountBorrowed = effectiveBorrowableAmount
-    ? Number(formatUnits(effectiveBorrowableAmount, tokenDecimals))
-    : 0;
+  // The selected chain's decimals as the loans contract reports them; no amount before they land.
+  const tokenDecimals = selectedChainTokenConfig?.decimals;
+  const simulatedAmountBorrowed =
+    effectiveBorrowableAmount && tokenDecimals !== undefined
+      ? Number(formatUnits(effectiveBorrowableAmount, tokenDecimals))
+      : 0;
 
   const busy =
-    loading ||
-    ["checking", "granting-permission", "permission-granted", "waiting-signature"].includes(
-      borrowStatus,
-    );
+    loading || ["checking", "granting-permission", "waiting-signature"].includes(borrowStatus);
   const statusText = BORROW_STATUS_TEXT[borrowStatus];
+  const amountEntered = !!collateralAmount && Number(collateralAmount) > 0;
+  const blockedLine = !cashOutChainId
+    ? "Choose a network."
+    : !amountEntered
+      ? "Enter an amount."
+      : borrowQuoteError
+        ? "Couldn't read the loan quote. Try again."
+        : borrowQuote !== undefined && minimumBorrowAmountPreview === undefined
+          ? `Nothing can be borrowed on ${chainDisplayName(Number(cashOutChainId) as JBChainId)} right now.`
+          : null;
   const adjusting =
     !!internalSelectedLoan && !!collateralAmount && !isNaN(Number(collateralAmount));
+  const loanContext =
+    cashOutChainId && selectedChainTokenConfig
+      ? [
+          { label: "Tokens used for loan", value: `${collateralAmount} ${tokenSymbol}` },
+          { label: "On", value: chainDisplayName(Number(cashOutChainId) as JBChainId) },
+          {
+            label: "Borrows",
+            value: `~${simulatedAmountBorrowed.toFixed(8)} ${selectedChainTokenSymbol}`,
+            strong: true,
+            ...(minimumBorrowAmountPreview !== undefined
+              ? {
+                  note: `At least ${formatUnits(minimumBorrowAmountPreview, selectedChainTokenConfig.decimals)} ${selectedChainTokenSymbol}; the contract enforces this minimum`,
+                }
+              : {}),
+          },
+          {
+            label: "Fees",
+            value: `2.5% protocol + 1% revnet + ${prepaidPercent}% prepaid`,
+          },
+          ...(effectiveBorrowableAmount
+            ? [
+                {
+                  label: "You receive",
+                  // The contracts' own fee arithmetic; the prepaid fee is out of 1,000.
+                  value: `~${formatUnits(
+                    netLoanProceeds(
+                      effectiveBorrowableAmount,
+                      BigInt(Math.round(Number(prepaidPercent) * 10)),
+                    ),
+                    selectedChainTokenConfig.decimals,
+                  )} ${selectedChainTokenSymbol}`,
+                  strong: true,
+                },
+              ]
+            : []),
+        ]
+      : [];
 
   useEffect(() => {
-    if (["pending", "reallocation-pending", "success"].includes(borrowStatus)) setReview(false);
+    if (["pending", "proposed", "reallocation-pending", "success"].includes(borrowStatus))
+      setReview(false);
   }, [borrowStatus]);
 
   return (
@@ -176,17 +234,21 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>New loan</DialogTitle>
+          <DialogDescription>
+            Use tokens to back a loan from the revnet. The tokens are removed from supply; repay
+            before 10 years to create them again.
+          </DialogDescription>
         </DialogHeader>
-        <div className="mb-5 w-[65%]">
+        <div className="mb-5">
           <span className="text-sm text-black font-medium">Your {tokenSymbol}</span>
-          <div className="mt-1 border border-melon-300 p-3 bg-melon-25">
+          <div className="mt-1 grid grid-cols-2 gap-3 border border-melon-300 p-3">
             {balances?.map((balance) => (
-              <div key={balance.chainId} className="flex justify-between gap-2">
-                {chainDisplayName(balance.chainId as JBChainId)}
-                <span className="font-medium">
-                  {balance.balance?.format(8)} {tokenSymbol}
-                </span>
-              </div>
+              <SummaryRow
+                key={balance.chainId}
+                label={chainDisplayName(balance.chainId as JBChainId)}
+              >
+                {balance.balance?.format(8)} {tokenSymbol}
+              </SummaryRow>
             ))}
           </div>
         </div>
@@ -194,21 +256,19 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
         {/* Collateral Input Section - Like RedeemDialog */}
         <div className="grid w-full gap-1.5">
           <Label htmlFor="collateral-amount" className="text-zinc-900">
-            How much {tokenSymbol} do you want to collateralize?
+            How much {tokenSymbol} do you want to use for this loan?
           </Label>
-          <div className="grid grid-cols-7 gap-2">
-            <div className="col-span-3">
-              {hasOnlyOneProjectChain && cashOutChainId ? (
-                <div className="flex h-10 w-full items-center border-2 border-melon-300 bg-melon-25 px-3 py-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <ChainLogo chainId={Number(cashOutChainId) as JBChainId} />
-                    <span>{chainDisplayName(Number(cashOutChainId) as JBChainId)}</span>
-                  </div>
+          <div className="flex gap-2">
+            <div className="shrink-0">
+              {hasOnlyChosenChain ? (
+                <div className="flex h-10 w-fit items-center gap-2 border border-melon-300 bg-melon-25 px-3 text-sm text-zinc-700">
+                  <ChainLogo chainId={Number(cashOutChainId) as JBChainId} />
+                  {chainDisplayName(Number(cashOutChainId) as JBChainId)}
                 </div>
               ) : (
                 <Select onValueChange={handleChainSelect} value={cashOutChainId || ""}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select chain">
+                  <SelectTrigger className="w-fit gap-2">
+                    <SelectValue placeholder="Choose network">
                       {cashOutChainId && (
                         <div className="flex items-center gap-2">
                           <ChainLogo chainId={Number(cashOutChainId) as JBChainId} />
@@ -230,7 +290,7 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
                 </Select>
               )}
             </div>
-            <div className="col-span-4">
+            <div className="min-w-0 flex-1">
               <div className="relative">
                 <Input
                   id="collateral-amount"
@@ -263,7 +323,8 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
                     } else {
                       // Prevent entering more than available balance
                       if (numValue > maxValue) {
-                        setCollateralAmount(maxValue.toFixed(8));
+                        // Clamped to the most allowed: the user's choice is now Max.
+                        setCollateralAmount(maxValue.toFixed(8), "max");
                       } else {
                         setCollateralAmount(value);
                       }
@@ -289,12 +350,15 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
                     if (!cashOutChainId) {
                       return toast({
                         variant: "warning",
-                        description: "Please select a chain first.",
+                        description: "Choose a network first.",
                       });
                     }
-                    setCollateralAmount((maxCollateralAmount * (pct / 100)).toFixed(8));
+                    setCollateralAmount(
+                      (maxCollateralAmount * (pct / 100)).toFixed(8),
+                      pct === 100 ? "max" : `${pct}%`,
+                    );
                   }}
-                  className="h-10 px-3 text-sm text-zinc-700 border border-zinc-300 rounded-md bg-white hover:bg-zinc-100"
+                  className="h-10 px-3 text-sm text-zinc-700 border border-zinc-300 bg-white hover:bg-zinc-100"
                 >
                   {pct === 100 ? "Max" : `${pct}%`}
                 </button>
@@ -316,17 +380,13 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
           />
         ) : null}
         {minimumBorrowAmountPreview !== undefined && selectedChainTokenConfig ? (
-          <div className="border border-melon-300 bg-melon-25 p-3 text-sm">
-            <div className="flex justify-between gap-3">
-              <span className="text-zinc-600">Protected minimum borrowed</span>
-              <span className="font-medium">
-                {formatUnits(minimumBorrowAmountPreview, selectedChainTokenConfig.decimals)}{" "}
-                {selectedChainTokenSymbol}
-              </span>
-            </div>
+          <div className="border border-melon-300 p-3">
+            <SummaryRow label="Minimum borrowed">
+              {formatUnits(minimumBorrowAmountPreview, selectedChainTokenConfig.decimals)}{" "}
+              {selectedChainTokenSymbol}
+            </SummaryRow>
             <p className="mt-1 text-xs text-zinc-500">
-              Based on the live contract quote with a 1% safety tolerance; refreshed again before
-              submission.
+              Stops if the loan would borrow less. The quote refreshes before you submit.
             </p>
           </div>
         ) : null}
@@ -336,7 +396,7 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
           onClick={() => setShowChart(!showChart)}
           className="flex items-center gap-2 text-left text-zinc-700 text-sm font-bold"
         >
-          <span>Variable Fee Structure</span>
+          <span>Repayment cost over time</span>
           <span
             className={`transform transition-transform ${showChart ? "rotate-90" : "rotate-0"}`}
           >
@@ -356,13 +416,13 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
             displayMonths={displayMonths}
           />
         )}
-        {/* Important Info toggleable section */}
+        {/* What happens to the tokens, toggleable section */}
         <button
           type="button"
           onClick={() => setShowInfo(!showInfo)}
           className="flex items-center gap-2 text-left text-zinc-700 text-sm font-bold mb-2"
         >
-          <span>Important Info</span>
+          <span>What happens to your tokens</span>
           <span className={`transform transition-transform ${showInfo ? "rotate-90" : "rotate-0"}`}>
             ▶
           </span>
@@ -374,13 +434,19 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
         <DialogFooter className="flex items-center justify-between w-full gap-4">
           <div className="flex-1 text-left">
             {statusText ? <p className="text-sm text-zinc-600">{statusText}</p> : null}
+            {loanSourceLine && !review ? (
+              <p className="text-sm text-zinc-600">{loanSourceLine}</p>
+            ) : null}
+            {blockedLine ? <p className="text-sm text-zinc-600">{blockedLine}</p> : null}
           </div>
           {/* Single borrow button for both reallocation and standard borrowing */}
           <ButtonWithWallet
+            connectWhileDisabled
             targetChainId={Number(cashOutChainId) as JBChainId}
-            loading={loading}
+            loading={loading || (loanSourcePending && !!collateralAmount)}
             disabled={
               !cashOutChainId ||
+              loanSourceBlocked ||
               !collateralAmount ||
               Number(collateralAmount) <= 0 ||
               minimumBorrowAmountPreview === undefined
@@ -392,20 +458,17 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
           </ButtonWithWallet>
         </DialogFooter>
         {review && cashOutChainId && selectedChainTokenConfig ? (
-          <TxConfirmDialog
+          <TxProgress
             open
-            onOpenChange={(open) => {
-              if (!open) setReview(false);
-            }}
+            onClose={() => setReview(false)}
             title={adjusting ? "Confirm loan adjustment" : "Confirm loan"}
-            chainId={Number(cashOutChainId) as JBChainId}
             steps={[
               ...(grantsPermission
                 ? [
                     {
                       key: "permission",
-                      title: "Let REVLoans burn your collateral",
-                      detail: "A one-off permission so the loan can hold your tokens.",
+                      title: "Let the loan contract remove your tokens from supply",
+                      detail: "Repayment creates the tokens again and returns them to you.",
                     },
                   ]
                 : []),
@@ -414,30 +477,14 @@ export function BorrowDialog(props: PropsWithChildren<Props>) {
             activeIndex={
               borrowStatus === "granting-permission" ? 0 : busy ? (grantsPermission ? 1 : 0) : -1
             }
-            action={adjusting ? "Adjust loan" : "Open loan"}
-            onConfirm={() => void handleBorrow()}
+            start={async () => {
+              if ((await handleBorrow(loanContext)) === "closed") setReview(false);
+            }}
             busy={busy}
-            status={busy ? statusText : null}
-            error={borrowStatus.startsWith("error") ? statusText : null}
-          >
-            <SummaryRow label="Collateral">
-              {collateralAmount} {tokenSymbol}
-            </SummaryRow>
-            <SummaryRow label="On">
-              {chainDisplayName(Number(cashOutChainId) as JBChainId)}
-            </SummaryRow>
-            <SummaryRow label="Borrows">
-              ~{simulatedAmountBorrowed.toFixed(8)} {selectedChainTokenSymbol}
-              {minimumBorrowAmountPreview !== undefined ? (
-                <span className="block text-xs text-zinc-500">
-                  At least{" "}
-                  {formatUnits(minimumBorrowAmountPreview, selectedChainTokenConfig.decimals)}{" "}
-                  {selectedChainTokenSymbol}, enforced onchain
-                </span>
-              ) : null}
-            </SummaryRow>
-            <SummaryRow label="Prepaid fee">{prepaidPercent}%</SummaryRow>
-          </TxConfirmDialog>
+            status={busy || borrowStatus === "safe-unconfirmed" ? statusText : null}
+            error={loanSourceLine ?? (borrowStatus.startsWith("error") ? statusText : null)}
+            rows={loanContext}
+          />
         ) : null}
       </DialogContent>
     </Dialog>

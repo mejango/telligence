@@ -1,6 +1,7 @@
 import {
   JB_PROJECT_HANDLES_ADDRESS,
   PROJECT_HANDLE_CHAIN_ID,
+  PROJECT_HANDLE_TEXT_WRITE_SIMULATION_GAS,
   canonicalProjectHandle,
   ensTextResolverAbi,
   jbProjectHandlesAbi,
@@ -28,7 +29,6 @@ const RESOLVER = "0x2222222222222222222222222222222222222222";
 const NODE = `0x${"11".repeat(32)}` as const;
 
 describe("project handles", () => {
-  // wallet-action:project-handle
   it("resumes the two-step flow without duplicating either completed record", () => {
     expect(projectHandleProgress(false, false)).toEqual({
       ensRecordComplete: false,
@@ -87,7 +87,7 @@ describe("project handles", () => {
     expect(projectHandleRecord(8453, 42n)).toBe("8453:42");
   });
 
-  it("pins the Ethereum registry call and exact reverse-label arguments", () => {
+  it("wallet-action:project-handle pins the Ethereum registry call and exact reverse-label arguments", () => {
     expect(PROJECT_HANDLE_CHAIN_ID).toBe(1);
     expect(JB_PROJECT_HANDLES_ADDRESS).toBe("0x726f4a3dfd2fb8297f8ab98d215b42a92d8eefe8");
 
@@ -161,14 +161,15 @@ describe("project handles", () => {
     fetchSpy.mockRestore();
   });
 
-  it("simulates resolver writes with raw bounded no-CCIP semantics", async () => {
+  it("wallet-action:project-handle simulates resolver writes with raw bounded no-CCIP semantics", async () => {
     const request = vi.fn().mockResolvedValue("0x");
     const client = { request } as unknown as PublicClient;
     const account = "0x1111111111111111111111111111111111111111";
 
+    expect(PROJECT_HANDLE_TEXT_WRITE_SIMULATION_GAS).toBe(500_000n);
     await expect(
       simulateExactEnsTextWrite(client, RESOLVER, NODE, "8453:42", account),
-    ).resolves.toBe(500_000n);
+    ).resolves.toBe(PROJECT_HANDLE_TEXT_WRITE_SIMULATION_GAS);
     expect(request).toHaveBeenCalledWith({
       method: "eth_call",
       params: [

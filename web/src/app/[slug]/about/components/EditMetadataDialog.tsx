@@ -1,5 +1,8 @@
 "use client";
 
+import { refreshProjectDisplay } from "@/app/[slug]/invalidateProjectDisplay";
+import { chainDisplayName } from "@/app/constants";
+
 import { runSequentialWrites } from "@/app/[slug]/components/v6/operator/operatorLib";
 import { FieldGroup } from "@/app/create/form/Fields";
 import { MarkdownFieldGroup } from "@/app/create/form/MarkdownFieldGroup";
@@ -17,24 +20,26 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { useToast } from "@/components/ui/use-toast";
+import {
+  isSafeProposalPendingError,
+  reviewClosed,
+  ReviewRefusal,
+  useReviewedAction,
+} from "@/hooks/useReviewedAction";
 import {
   requireRelayrRecoveryScopeAvailable,
   useGetRelayrTxQuote,
   useSendRelayrTx,
   waitForRelayrBundle,
 } from "@/hooks/useReviewedRelayr";
-import {
-  isSafeConnector,
-  submittedViaSafe,
-  useWriteContract,
-} from "@/hooks/useReviewedWriteContract";
 import type { Project } from "@/lib/bendystraw/types";
 import { FormProvider, type FormHelpers } from "@/lib/forms";
 import { isRecord, issue, schema, ValidationIssue, withSchema } from "@/lib/formValidation";
-import { gasWithHeadroom } from "@/lib/gas";
+import { submittedViaSafe } from "@/lib/held-rows";
 import { ipfsUri } from "@/lib/ipfs";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
 import {
   useJBChainId,
   useJBContractContext,
@@ -47,12 +52,15 @@ import {
   type MetadataDestination,
 } from "@/lib/project-metadata-write";
 import { areRelayrChainsCompatible } from "@/lib/relayr-chains";
+import { useSafeConnection } from "@/lib/safe-connector";
+import { preselectedRelayrPayment, relayrPaymentOptions } from "@/lib/transaction-review";
 import { formatHexEther, formatWalletError } from "@/lib/utils";
 import { wagmiConfig } from "@/lib/wagmiConfig";
-import { JB_CHAINS, JBChainId, jbControllerAbi, JBCoreContracts } from "@bananapus/nana-sdk-core";
+import { JBChainId, jbControllerAbi, JBCoreContracts } from "@bananapus/nana-sdk-core";
+import { gasWithHeadroom, type ReviewedCall } from "@bananapus/nana-sdk-core/review";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { encodeFunctionData, type PublicClient } from "viem";
+import { encodeFunctionData, type Address, type PublicClient } from "viem";
 import { useAccount } from "wagmi";
 import { getPublicClient } from "wagmi/actions";
 import {
@@ -124,7 +132,9 @@ const metadataSchema = schema<MetadataFormData>((input) => {
 });
 
 interface Props {
-  projects: Array<Pick<Project, "projectId" | "token" | "chainId">>;
+  projects: Array<
+    Pick<Project, "projectId" | "token" | "chainId"> & Partial<Pick<Project, "suckerGroupId">>
+  >;
   triggerVariant?: "default" | "outline" | "secondary";
 }
 
@@ -135,10 +145,13 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
   const displayedChainId = useJBChainId();
   const { toast } = useToast();
   const router = useRouter();
-  const { address, chainId: connectedChainId, connector } = useAccount();
+  const { address, chainId: connectedChainId } = useAccount();
+  const viaSafe = useSafeConnection(wagmiConfig);
+  // Destinations come from the server sucker-group list: only chain-verified pairs are written.
+  const gate = useGroupWriteGate(projects);
   const relayed =
     projects.length > 1 &&
-    !isSafeConnector(connector) &&
+    !viaSafe &&
     areRelayrChainsCompatible(projects.map((project) => project.chainId));
 
   const { getRelayrTxQuote, reset: resetRelayr } = useGetRelayrTxQuote();
@@ -150,29 +163,33 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
     destinations: Array<MetadataDestination & { metadataUri: string }>;
     name: string;
   } | null>(null);
-  const { writeContractAsync, isPending } = useWriteContract({
-    reverify: async (call, signer) => {
-      const destination = reviewed?.destinations.find(
-        (item) =>
-          item.source.chainId === call.chainId &&
-          item.source.controller.toLowerCase() === call.address.toLowerCase(),
+  const { run, busy: isPending } = useReviewedAction();
+  const reverifyDestination = async (call: ReviewedCall, signer: Address) => {
+    const destination = reviewed?.destinations.find(
+      (item) =>
+        item.source.chainId === call.chainId &&
+        item.source.controller.toLowerCase() === call.to.toLowerCase(),
+    );
+    if (!destination)
+      throw new ReviewRefusal(
+        "The reviewed metadata destination is unavailable. Reopen the editor.",
       );
-      if (!destination)
-        throw new Error("The reviewed metadata destination is unavailable. Reopen the editor.");
-      const client = getPublicClient(wagmiConfig, {
-        chainId: destination.source.chainId as JBChainId,
-      });
-      if (!client) throw new Error("The metadata network is unavailable.");
-      await verifyMetadataSource(client as PublicClient, destination.source, signer);
-      requireRelayrRecoveryScopeAvailable(
-        signer,
-        `project-metadata:${destination.source.chainId}:${destination.source.projectId}`,
-      );
-    },
-  });
+    const client = getPublicClient(wagmiConfig, {
+      chainId: destination.source.chainId as JBChainId,
+    });
+    if (!client) throw new ReviewRefusal("The metadata network is unavailable. Try again.");
+    await verifyMetadataSource(client as PublicClient, destination.source, signer);
+    await requireRelayrRecoveryScopeAvailable(
+      signer,
+      `project-metadata:${destination.source.chainId}:${destination.source.projectId}`,
+    );
+  };
   // The confirm's line while the metadata pins and, on several chains, the relay quote loads.
   const [preparing, setPreparing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // What went to the Safe as a proposal, the update or its relay payment:
+  // nothing more to send from here.
+  const [proposed, setProposed] = useState<string | null>(null);
   const [submissionStatus, setSubmissionStatus] = useState<string | null>(null);
   const [directChainIndex, setDirectChainIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -239,6 +256,7 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
 
   const closeReview = useCallback(() => {
     setReviewed(null);
+    setProposed(null);
     setPreparing(null);
     setError(null);
     setSubmissionStatus(null);
@@ -255,10 +273,22 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
       description: "New data will be visible shortly.",
     });
     setTimeout(() => {
-      void metadata.refetch?.();
-      router.refresh();
+      // Evict immediately before refresh, after the existing indexing grace
+      // period. An unavailable refresh action still has the cache's 30s bound.
+      void refreshProjectDisplay(
+        projects.map(({ chainId, projectId, suckerGroupId }) => ({
+          chainId,
+          projectId,
+          groupId: suckerGroupId,
+        })),
+      )
+        .catch(() => undefined)
+        .finally(() => {
+          void metadata.refetch?.();
+          router.refresh();
+        });
     }, 5000);
-  }, [toast, metadata, router, closeReview]);
+  }, [toast, metadata, router, closeReview, projects]);
 
   const review = async (
     values: MetadataFormData,
@@ -268,6 +298,7 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
       if (!address) throw new Error("Please connect your wallet");
       // Fail closed: never merge onto a metadata JSON we could not read.
       if (!metadataReady) throw new Error("Still loading the current metadata. Try again.");
+      gate.assertVerified(projects);
 
       const customProperties = parseCustomProperties(values.customProperties ?? "");
       if (!customProperties.ok) throw new Error(customProperties.error);
@@ -344,6 +375,7 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
     setBusy(true);
     setError(null);
     try {
+      gate.assertVerified(projects);
       await Promise.all(
         destinations.map(async (destination) => {
           const client = getPublicClient(wagmiConfig, {
@@ -354,12 +386,11 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
         }),
       );
       if (!relayed) {
-        destinations.forEach(({ source }) =>
-          requireRelayrRecoveryScopeAvailable(
+        for (const { source } of destinations)
+          await requireRelayrRecoveryScopeAvailable(
             address,
             `project-metadata:${source.chainId}:${source.projectId}`,
-          ),
-        );
+          );
         await runSequentialWrites({
           writes: destinations.map(({ source, metadataUri }) => ({
             abi: jbControllerAbi,
@@ -369,11 +400,12 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
             args: [BigInt(source.projectId), metadataUri],
           })),
           account: address,
-          writeContractAsync: async (call) => {
-            setDirectChainIndex(projects.findIndex((project) => project.chainId === call.chainId));
-            return writeContractAsync(call);
-          },
-          onProgress: setSubmissionStatus,
+          label: "Update project details",
+          context: metadataContext(destinations),
+          run,
+          reverify: (call) => reverifyDestination(call, address),
+          beforeWallet: (call) =>
+            setDirectChainIndex(projects.findIndex((project) => project.chainId === call.chainId)),
         });
         onSuccess();
         return true;
@@ -427,13 +459,19 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
 
       setRelayrQuote(quote);
       // Signing may switch the wallet; prefer the chain captured before this submission.
-      selectPayment(
-        quote.payment_info.find((payment: ChainPayment) => payment.chain === connectedChainId) ??
-          null,
-      );
+      selectPayment(preselectedRelayrPayment(quote.payment_info, connectedChainId));
       return true;
     } catch (e: unknown) {
+      if (reviewClosed(e)) {
+        closeReview();
+        return false;
+      }
       const message = formatWalletError(e) || "Failed to update metadata";
+      if (isSafeProposalPendingError(e)) {
+        setProposed(message);
+        toast({ title: "Safe proposal submitted", description: message });
+        return false;
+      }
       setError(message);
       toast({ variant: "destructive", title: "Error", description: message });
       console.error(e);
@@ -444,17 +482,34 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
     }
   };
 
+  const metadataContext = (
+    destinations: {
+      source: { chainId: number; projectId: string | number };
+      metadataUri: string;
+    }[],
+  ) => [
+    { label: "Name", value: reviewed?.name ?? "", strong: true },
+    { label: "On", value: chainNames },
+    ...destinations.map(({ source, metadataUri }) => ({
+      label: `Project ${source.projectId} on ${chainDisplayName(source.chainId)}`,
+      value: metadataUri,
+      mono: true,
+    })),
+  ];
+
   const handlePayAndSubmit = async () => {
     if (!relayrQuote || !selectedPayment || !sendRelayrTx) return;
     setBusy(true);
     setError(null);
     try {
+      gate.assertVerified(projects);
       const hash = await sendRelayrTx(selectedPayment);
       if (submittedViaSafe(hash)) {
+        setProposed("Payment proposed to Safe. Approve and execute it there.");
         toast({
           title: "Safe payment proposal submitted",
           description:
-            "The Relayr bundle is not paid yet. Approve and execute this proposal in Safe; do not submit another payment.",
+            "The bundle is not paid yet. Approve and execute this proposal in Safe; do not submit another payment.",
         });
         return;
       }
@@ -462,7 +517,7 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
 
       toast({
         title: "Metadata updated on every chain",
-        description: "Relayr confirmed every destination transaction.",
+        description: "Every destination transaction is confirmed.",
       });
       onSuccess();
     } catch (e: unknown) {
@@ -475,9 +530,7 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
     }
   };
 
-  const chainNames = projects
-    .map((project) => JB_CHAINS[project.chainId as JBChainId]?.name ?? String(project.chainId))
-    .join(", ");
+  const chainNames = projects.map((project) => chainDisplayName(project.chainId)).join(", ");
   const relayFee = selectedPayment ? `${formatHexEther(selectedPayment.amount)} ETH` : null;
 
   return (
@@ -520,8 +573,7 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
                 <DialogHeader>
                   <DialogTitle>Edit metadata</DialogTitle>
                   <DialogDescription>
-                    Apply your edits across the listed chains. Unchanged fields and custom
-                    properties on each chain are preserved.
+                    Saves on {chainNames}. Fields you leave unchanged stay as they are.
                   </DialogDescription>
                 </DialogHeader>
 
@@ -605,7 +657,7 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
                     placeholder="Shown to supporters before they pay. Leave empty for none."
                   />
 
-                  <details className="border-2 border-melon-300 bg-melon-25 px-3 py-2">
+                  <details className="border border-melon-300 px-3 py-2">
                     <summary className="cursor-pointer select-none text-md font-semibold leading-6">
                       Advanced
                     </summary>
@@ -616,7 +668,7 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
                             id="customProperties"
                             name="customProperties"
                             label="Custom properties"
-                            description="Any other fields stored with this project, as JSON. This is the full set: remove a key to delete it, leave it empty for none."
+                            description="Other fields stored with this project, as JSON. Removing a key deletes it. Leaving this empty deletes them all."
                             component="textarea"
                             rows={6}
                             spellCheck={false}
@@ -641,6 +693,7 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
                   </details>
                 </div>
 
+                {gate.line ? <p className="text-sm text-zinc-600">{gate.line}</p> : null}
                 <DialogFooter>
                   <Button
                     type="button"
@@ -655,8 +708,8 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
                     targetChainId={
                       (relayed ? connectedChainId : projects[0].chainId) as JBChainId | undefined
                     }
-                    loading={isLoading}
-                    disabled={isLoading || !metadataReady}
+                    loading={isLoading || gate.pending}
+                    disabled={isLoading || !metadataReady || gate.blocked}
                     connectWalletText="Connect Wallet"
                     className="bg-teal-500 text-melon-950 hover:bg-teal-600"
                   >
@@ -668,60 +721,57 @@ export function EditMetadataDialog({ projects, triggerVariant = "outline" }: Pro
           }}
         </FormProvider>
         {reviewed || preparing ? (
-          <TxConfirmDialog
+          <TxProgress
             open
-            onOpenChange={(next) => {
-              if (!next) closeReview();
-            }}
+            onClose={() => closeReview()}
             title="Confirm metadata"
-            chainId={
-              (selectedPayment?.chain ??
-                projects[directChainIndex]?.chainId ??
-                projects[0].chainId) as JBChainId
-            }
             preparing={!reviewed || (relayed && !relayrQuote)}
             steps={
               relayed
                 ? [
                     ...projects.map((project) => ({
-                      title: `Sign the authorization on ${JB_CHAINS[project.chainId as JBChainId]?.name ?? project.chainId}`,
+                      title: `Sign the authorization on ${chainDisplayName(project.chainId)}`,
                     })),
                     { title: relayFee ? `Pay ${relayFee} to relay` : "Pay to relay" },
                   ]
                 : projects.map((project) => ({
-                    title: `Save changes on ${JB_CHAINS[project.chainId as JBChainId]?.name ?? project.chainId}`,
+                    title: `Save changes on ${chainDisplayName(project.chainId)}`,
                   }))
             }
             activeIndex={
               !busy && !isPending ? -1 : relayed && relayrQuote ? projects.length : directChainIndex
             }
-            action={relayed ? "Pay and submit" : "Save changes"}
-            onConfirm={() => void (relayrQuote ? handlePayAndSubmit() : handleSubmit())}
+            start={relayed ? undefined : () => void handleSubmit()}
             busy={Boolean(preparing) || busy || isPending}
-            disabled={relayed && !selectedPayment}
-            status={preparing ?? submissionStatus}
+            complete={proposed !== null}
+            status={proposed ?? preparing ?? submissionStatus}
             error={error}
-          >
-            <SummaryRow label="Name">{reviewed?.name}</SummaryRow>
-            <SummaryRow label="On">{chainNames}</SummaryRow>
-            {reviewed?.destinations.map(({ source, metadataUri }) => (
-              <SummaryRow
-                key={`${source.chainId}:${source.projectId}`}
-                label={`${JB_CHAINS[source.chainId as JBChainId]?.name ?? source.chainId} · project ${source.projectId}`}
-              >
-                <span className="break-all font-mono text-xs">{metadataUri}</span>
-              </SummaryRow>
-            ))}
-            {relayrQuote ? (
-              <RelayrPaymentSelect
-                payments={relayrQuote.payment_info}
-                tokenSymbol="ETH"
-                selectedPayment={selectedPayment}
-                onSelectPayment={selectPayment}
-                disabled={busy}
-              />
-            ) : null}
-          </TxConfirmDialog>
+            rows={reviewed ? metadataContext(reviewed.destinations) : []}
+            footerContent={
+              relayrQuote ? (
+                <>
+                  <RelayrPaymentSelect
+                    options={relayrPaymentOptions(relayrQuote.payment_info)}
+                    value={selectedPayment?.chain ?? null}
+                    onValueChange={(chainId) =>
+                      selectPayment(
+                        relayrQuote.payment_info.find((payment) => payment.chain === chainId) ??
+                          null,
+                      )
+                    }
+                    disabled={busy}
+                  />
+                  <Button
+                    className="mt-3 w-full"
+                    disabled={busy || !selectedPayment}
+                    onClick={() => void handlePayAndSubmit()}
+                  >
+                    Pay and submit
+                  </Button>
+                </>
+              ) : undefined
+            }
+          />
         ) : null}
       </DialogContent>
     </Dialog>

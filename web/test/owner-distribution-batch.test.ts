@@ -1,17 +1,10 @@
 import {
   autoIssuanceKey,
-  intentionalReservedBurn,
   prepareAutoIssuance,
-  prepareCreditClaim,
   prepareReservedDistribution,
   type DistributionClient,
 } from "@/app/[slug]/owners/components/ownerDistributionBatch";
-import {
-  jbControllerAbi,
-  jbDirectoryAbi,
-  jbSplitsAbi,
-  jbTokensAbi,
-} from "@bananapus/nana-sdk-core";
+import { jbControllerAbi, jbDirectoryAbi, jbSplitsAbi } from "@bananapus/nana-sdk-core";
 import { buildAutoIssueTx } from "@bananapus/nana-sdk-core/v6";
 import {
   decodeFunctionData,
@@ -103,24 +96,8 @@ beforeEach(() => {
   };
 });
 
-describe("wallet-action:owner-distributions", () => {
-  it("counts only direct burn-sentinel splits, rounding each recipient separately", () => {
-    const burn = {
-      ...split,
-      projectId: 0n,
-      beneficiary: "0x000000000000000000000000000000000000dEaD" as Address,
-      percent: 333_333_333,
-    };
-    expect(intentionalReservedBurn(5n, [burn, burn])).toBe(2n);
-    expect(
-      intentionalReservedBurn(5n, [
-        { ...burn, hook: token },
-        { ...burn, projectId: 12n },
-        { ...burn, beneficiary: account },
-      ]),
-    ).toBe(0n);
-  });
-  it("targets the destination's active controller and current ruleset, preserving every split field", async () => {
+describe("reserved token distribution", () => {
+  it("wallet-action:owner-distributions targets the destination's active controller and current ruleset, preserving every split field", async () => {
     const result = await prepareReservedDistribution(client, identity, account);
     expect(result.call).toMatchObject({
       chainId: 10,
@@ -130,13 +107,21 @@ describe("wallet-action:owner-distributions", () => {
     });
     expect(result.amount).toBe(700n);
     expect(result.call.rejectEvents).toHaveLength(2);
+    // The receipt must prove each of these splits' shares, sent by this account in this cycle.
     expect(result.call.reservedReceipt).toEqual({
       controller,
-      tokenRegistry: registry,
+      tokens: registry,
       projectId: "91",
-      amount: "700",
-      intentionalBurn: "0",
+      rulesetId: "200",
+      cycleNumber: "1",
+      owner: revnetOwner,
+      caller: account,
+      tokenCount: "700",
+      splits: [{ ...split, projectId: "12" }],
     });
+    expect(JSON.parse(JSON.stringify(result.call.reservedReceipt))).toEqual(
+      result.call.reservedReceipt,
+    );
     expect(readContract).toHaveBeenCalledWith(
       expect.objectContaining({
         functionName: "splitsOf",
@@ -197,48 +182,6 @@ describe("wallet-action:owner-distributions", () => {
     simulateContract.mockRejectedValueOnce(new Error("split hook reverted"));
     await expect(prepareReservedDistribution(client, identity, account)).rejects.toThrow(
       "split hook reverted",
-    );
-  });
-});
-
-describe("credit claim snapshots", () => {
-  it("uses the runtime token registry and fresh holder balance, keeping holder and beneficiary bound", async () => {
-    const result = await prepareCreditClaim(client, identity, account);
-    expect(result.call).toMatchObject({
-      address: controller,
-      functionName: "claimTokensFor",
-      args: [account, 91n, 900n, account],
-    });
-    expect(readContract).toHaveBeenCalledWith(
-      expect.objectContaining({
-        address: registry,
-        functionName: "creditBalanceOf",
-        args: [account, 91n],
-      }),
-    );
-    const guard = result.call.preconditions.at(-1)!;
-    expect(
-      decodeFunctionResult({
-        abi: jbTokensAbi,
-        functionName: "creditBalanceOf",
-        data: guard.expected,
-      }),
-    ).toBe(900n);
-  });
-
-  it.each(["controllerOf", "TOKENS", "tokenOf"])(
-    "rejects missing %s before signing",
-    async (field) => {
-      values[field] = zeroAddress;
-      await expect(prepareCreditClaim(client, identity, account)).rejects.toThrow("unavailable");
-      expect(simulateContract).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects already-claimed credits", async () => {
-    values.creditBalanceOf = 0n;
-    await expect(prepareCreditClaim(client, identity, account)).rejects.toThrow(
-      "no credits to claim",
     );
   });
 });

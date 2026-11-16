@@ -45,6 +45,19 @@ describe("pinDraftItems", () => {
     });
   });
 
+  it("writes pinned media that is not an image as an animation with its type", async () => {
+    await pinDraftItems([
+      item({ name: "Clip", mediaUri: "ipfs://bafy-clip", mediaType: "video/mp4" }),
+    ]);
+
+    expect(mocks.pinMediaFile).not.toHaveBeenCalled();
+    expect(mocks.pinJsonMetadata).toHaveBeenCalledWith({
+      name: "Clip",
+      animation_url: "ipfs://bafy-clip",
+      mediaType: "video/mp4",
+    });
+  });
+
   it("carries the category's name so the shop can label its shelf", async () => {
     await pinDraftItems(
       [item({ name: "Tee", category: "2" })],

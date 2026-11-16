@@ -40,7 +40,7 @@ export async function ensureFreshQuote(options: {
   bundle: RelayrPostBundleResponse;
   payment: ChainPayment;
   quotedStageStart?: QuotedStageStart;
-  rebuildStaleQuote?: () => Promise<RelayrPostBundleResponse>;
+  rebuildStaleQuote?: (stale: RelayrPostBundleResponse) => Promise<RelayrPostBundleResponse>;
   onRebuild?: () => void;
   nowSeconds?: number;
 }): Promise<{ bundle: RelayrPostBundleResponse; payment: ChainPayment }> {
@@ -58,7 +58,7 @@ export async function ensureFreshQuote(options: {
     );
   }
   onRebuild?.();
-  const rebuilt = await rebuildStaleQuote();
+  const rebuilt = await rebuildStaleQuote(bundle);
   const refreshed = rebuilt.payment_info.find(
     (candidate) =>
       candidate.chain === payment.chain &&

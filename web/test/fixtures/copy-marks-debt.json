@@ -1,0 +1,21 @@
+{
+  "src/app/[slug]/components/ActivityFeed/ActivityItem.tsx": 1,
+  "src/app/[slug]/components/v6/operator/PermissionsCard.tsx": 1,
+  "src/app/[slug]/components/v6/operator/operatorLib.ts": 1,
+  "src/app/[slug]/components/v6/operator/permissionMeta.ts": 2,
+  "src/app/[slug]/components/v6/owners/accounts/V6AllCard.tsx": 1,
+  "src/app/[slug]/components/v6/owners/market/MarketPriceChart.tsx": 1,
+  "src/app/[slug]/components/v6/owners/market/formView.ts": 7,
+  "src/app/[slug]/components/v6/owners/market/liquidityWrite.tsx": 1,
+  "src/app/[slug]/components/v6/shop/InventorySection.tsx": 1,
+  "src/app/[slug]/components/v6/shop/V6ShopTab.tsx": 1,
+  "src/app/[slug]/components/v6/terms/StepChartBase.tsx": 1,
+  "src/app/create/form/ChainSelect.tsx": 1,
+  "src/app/create/form/StoreSection.tsx": 2,
+  "src/app/create/helpers/feedReachability.ts": 3,
+  "src/components/TransactionReviewDialog.tsx": 6,
+  "src/components/shop/itemDraft.ts": 1,
+  "src/lib/jbcenter-ipfs.ts": 1,
+  "src/providers/OnRampHandoff.tsx": 2,
+  "src/providers/para-config.ts": 1
+}

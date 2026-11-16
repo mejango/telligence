@@ -1,4 +1,4 @@
-import { quoteDirectSellSwap } from "@/lib/directPaySwap";
+import { quoteDirectSellSwap } from "@/lib/directSellSwap";
 import { NATIVE_TOKEN } from "@bananapus/nana-sdk-core";
 import type { CashOutRoute, UniswapV4PoolKey } from "@bananapus/nana-sdk-core/v6";
 import type { Address, PublicClient } from "viem";
@@ -33,8 +33,7 @@ const cashOutRoute = (expectedReturn: bigint): CashOutRoute => ({
 });
 
 describe("Revnet direct-sell best execution", () => {
-  // wallet-action:cash-out
-  it("selects the pool only when its slippage-protected minimum beats cashing out", async () => {
+  it("wallet-action:cash-out selects the pool only when its slippage-protected minimum beats cashing out", async () => {
     quoteMock.mockResolvedValue(200n);
     const selected = await quoteDirectSellSwap({
       client: {} as PublicClient,

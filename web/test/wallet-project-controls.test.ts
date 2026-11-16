@@ -5,42 +5,29 @@ import { describe, expect, it } from "vitest";
 type SourceExpectation = { file: string; contains: string[] };
 
 const actionExpectations: Array<{
-  marker: string;
+  action: string;
   sources: SourceExpectation[];
 }> = [
   {
-    marker: "wallet-action:repay",
+    action: "repay",
     sources: [
       {
         file: "src/app/[slug]/components/Value/RepayDialog.tsx",
-        contains: [
-          'functionName: "approve"',
-          'functionName: "repayLoan"',
-          "requireOnchainExecution",
-        ],
+        contains: ['functionName: "approve"', 'functionName: "repayLoan"', "reviewedCall"],
       },
     ],
   },
   {
-    marker: "wallet-action:claim-credits",
-    sources: [
-      {
-        file: "src/app/[slug]/components/v6/owners/accounts/V6ClaimCreditsDialog.tsx",
-        contains: ["prepareCreditClaim", "OwnerDistributionBatchButton"],
-      },
-    ],
-  },
-  {
-    marker: "wallet-action:split-hook",
+    action: "split-hook",
     sources: [
       {
         file: "src/app/[slug]/components/v6/owners/market/SplitHookCard.tsx",
-        contains: ['"deployPool"', '"collectAndRouteLPFees"', "simulateContract"],
+        contains: ['"deployPool"', '"collectAndRouteLPFees"', "reviewedCall", "useReviewedAction"],
       },
     ],
   },
   {
-    marker: "wallet-action:auto-issuance",
+    action: "auto-issuance",
     sources: [
       {
         file: "src/app/[slug]/components/v6/owners/V6AutoIssuanceSubtab.tsx",
@@ -49,7 +36,7 @@ const actionExpectations: Array<{
     ],
   },
   {
-    marker: "wallet-action:token-admin",
+    action: "token-admin",
     sources: [
       {
         file: "src/app/[slug]/components/v6/owners/V6TokenPanel.tsx",
@@ -58,7 +45,7 @@ const actionExpectations: Array<{
     ],
   },
   {
-    marker: "wallet-action:reserved-distribution",
+    action: "reserved-distribution",
     sources: [
       {
         file: "src/app/[slug]/owners/components/DistributeReservedTokensButton.tsx",
@@ -67,25 +54,25 @@ const actionExpectations: Array<{
     ],
   },
   {
-    marker: "wallet-action:split-groups",
+    action: "split-groups",
     sources: [
       {
         file: "src/app/[slug]/owners/components/hooks/useSetSplitGroups.ts",
-        contains: ['functionName: "setSplitGroupsOf"', "getRelayrTxQuote", "writeContractAsync"],
+        contains: ['functionName: "setSplitGroupsOf"', "getRelayrTxQuote", "runSequentialWrites"],
       },
     ],
   },
   {
-    marker: "wallet-action:metadata",
+    action: "metadata",
     sources: [
       {
         file: "src/app/[slug]/about/components/EditMetadataDialog.tsx",
-        contains: ['functionName: "setUriOf"', "getRelayrTxQuote", "writeContractAsync"],
+        contains: ['functionName: "setUriOf"', "getRelayrTxQuote", "runSequentialWrites"],
       },
     ],
   },
   {
-    marker: "wallet-action:project-payer",
+    action: "project-payer",
     sources: [
       {
         file: "src/app/[slug]/components/v6/extras/PayerDeployForm.tsx",
@@ -94,7 +81,7 @@ const actionExpectations: Array<{
     ],
   },
   {
-    marker: "wallet-action:project-handle",
+    action: "project-handle",
     sources: [
       {
         file: "src/app/[slug]/components/v6/operator/ProjectHandleEditor.tsx",
@@ -103,14 +90,14 @@ const actionExpectations: Array<{
           'functionName: "setEnsNamePartsFor"',
           'functionName: "createProxyWithNonce"',
           "isLiveRevnetOperator",
-          "simulateSafeProxyDeployment",
-          "requireOnchainExecution",
+          "prepareSafeSameAddressDeployment",
+          "requireDone",
         ],
       },
     ],
   },
   {
-    marker: "wallet-action:operator-writes",
+    action: "operator-writes",
     sources: [
       {
         file: "src/app/[slug]/components/v6/operator/BuybackRouterCard.tsx",
@@ -128,7 +115,7 @@ const actionExpectations: Array<{
       },
       {
         file: "src/app/[slug]/components/v6/operator/operatorLib.ts",
-        contains: ["simulateContract", "writeContractAsync", "operatorWriteRoute"],
+        contains: ["reviewedCall", "requireDone", "operatorWriteRoute"],
       },
       {
         // A signer of an operator Safe proposes the exact call to that chain's
@@ -145,25 +132,25 @@ const actionExpectations: Array<{
     ],
   },
   {
-    marker: "wallet-action:settlement-sync",
+    action: "settlement-sync",
     sources: [
       {
         file: "src/app/[slug]/components/v6/owners/settlement/GossipCard.tsx",
-        contains: ["buildSyncAccountingDataTx", "simulateContract", "writeContractAsync"],
+        contains: ["buildSyncAccountingDataTx", "reviewedCall", "useReviewedAction"],
       },
     ],
   },
   {
-    marker: "wallet-action:queued-movements",
+    action: "queued-movements",
     sources: [
       {
         file: "src/app/[slug]/components/v6/owners/settlement/QueuedMovementsCard.tsx",
-        contains: ["buildV6ClaimTxFromRow", 'functionName: "toRemote"', "simulateContract"],
+        contains: ["buildV6ClaimTxFromRow", 'functionName: "toRemote"', "reviewedCall"],
       },
     ],
   },
   {
-    marker: "wallet-action:shop-items",
+    action: "shop-items",
     sources: [
       {
         file: "src/app/[slug]/components/v6/shop/AddItemsModal.tsx",
@@ -173,8 +160,8 @@ const actionExpectations: Array<{
   },
 ];
 
-for (const { marker, sources } of actionExpectations) {
-  describe(marker, () => {
+for (const { action, sources } of actionExpectations) {
+  describe(action, () => {
     for (const { file, contains } of sources) {
       it(`${file} retains its reviewed contract operation and simulation boundary`, () => {
         const source = readFileSync(resolve(process.cwd(), file), "utf8");
@@ -204,8 +191,8 @@ describe("project handle ENS authorization", () => {
     expect(source).toContain("Publishing is blocked until the");
     expect(source).toContain("The current revnet operator could not be verified.");
     expect(source).toContain('placeholder="banny.eth"');
-    expect(source).toContain('title="ENS juicebox text record"');
-    expect(source).toContain('title="JBProjectHandles reverse claim"');
+    expect(source).toContain('title="Set the ENS text record"');
+    expect(source).toContain('title="Publish the handle"');
     expect(source).toContain("total={2}");
     expect(readFileSync(resolve(process.cwd(), "src/components/ui/TxSteps.tsx"), "utf8")).toContain(
       "Step {number} of {total}",
@@ -240,10 +227,18 @@ describe("project handle ENS authorization", () => {
       resolve(process.cwd(), "src/app/[slug]/components/v6/operator/ProjectHandleEditor.tsx"),
       "utf8",
     );
-    expect(source).toContain("The exact resolver itself remains pinned");
-    expect(source).toContain("approved delegates can also submit");
+    expect(source).toContain("The exact resolver stays pinned");
+    expect(source).toContain("ENS owners can approve delegates");
     expect(source).not.toContain("connectedIsEnsController");
     expect(source).not.toContain("fresh.ensController.toLowerCase()");
+  });
+
+  it("reviews the gas limit its ENS record write simulates and sends", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "src/app/[slug]/components/v6/operator/ProjectHandleEditor.tsx"),
+      "utf8",
+    );
+    expect(source).toContain("gas: PROJECT_HANDLE_TEXT_WRITE_SIMULATION_GAS }");
   });
 
   it("live-checks the server fallback across every Operator authority surface", () => {
@@ -289,27 +284,29 @@ describe("project handle ENS authorization", () => {
     );
     expect(source).toContain("confirmedResolver.toLowerCase() !== fresh.resolver.toLowerCase()");
     expect(source).toContain("const confirmedRecord = await readExactEnsText");
-    expect(source).toContain("const confirmedAuthority = await readCrossChainHandleAuthority");
+    expect(source).toContain("const confirmedAuthority = await readHandleAuthority");
     expect(source).toContain("const confirmed = await readHandleSetup");
-    expect(source.match(/readCrossChainHandleAuthority/g)?.length ?? 0).toBeGreaterThanOrEqual(5);
+    expect(source.match(/readHandleAuthority\(/g)?.length ?? 0).toBeGreaterThanOrEqual(5);
   });
 
-  it("mines and semantically confirms handle-scoped Safe executions only", () => {
+  it("mines every Safe execution and confirms it, and a handle's result, from the receipt", () => {
     const source = readFileSync(
       resolve(process.cwd(), "src/app/[slug]/components/v6/operator/SafeQueueCard.tsx"),
       "utf8",
     );
     expect(source).toContain("const handleBinding = await verifyLiveQueuedTransaction(row, tx)");
-    expect(source).toContain("manualReceiptVerification:");
-    expect(source).toContain("if (handleBinding) {");
-    expect(source).toContain("waitForReceiptWithRetry(publicClientFor(row.chainId), hash)");
-    expect(source).toContain("requireSafeExecutionSuccess(receipt, row.safe, expectedSafeTxHash)");
+    expect(source).toContain("await executeReviewedSafeTransaction(");
     expect(source).toContain("verifyQueuedProjectHandlePostcondition");
     expect(source).toContain("executionBlockNumber: receipt.blockNumber");
-    expect(source).toContain("releaseTransactionActivityVerification");
-    expect(source).toContain("failTransactionActivityVerification");
-    expect(source).toContain("handleExecutionHash = undefined");
-    expect(source).toContain('handleBinding ? "Executed" : "Submitted"');
+    expect(source).toContain("if (safeTransactionHasRefund(tx)) throw new Error(REFUND_REFUSAL)");
+    // Connected as a Safe (the Safe app, or Safe{Wallet} over WalletConnect),
+    // the Safe cannot sign or execute its own queue; every action button
+    // defers to Safe{Wallet}, and renders again once the peer is known.
+    expect(source).toContain("const viaSafeApp = useSafeConnection(config)");
+    expect(source).toContain("canBatch && !viaSafeApp");
+    expect(source).toContain("!viaSafeApp && !handleError && !refund && !signed && !ready");
+    expect(source).toContain("!viaSafeApp && !handleError && !refund && ready");
+    expect(source).toContain("Executed Safe transaction #${tx.nonce}");
   });
 
   it("binds project-handle publish inputs and the exact ENS record after review", () => {
@@ -317,10 +314,10 @@ describe("project handle ENS authorization", () => {
       resolve(process.cwd(), "src/app/[slug]/components/v6/operator/ProjectHandleEditor.tsx"),
       "utf8",
     );
-    expect(source).toContain('variables.functionName !== "setEnsNamePartsFor"');
-    expect(source).toContain("encodedChainId !== BigInt(project.chainId)");
-    expect(source).toContain("encodedProjectId !== BigInt(project.projectId)");
-    expect(source).toContain("canonicalProjectHandleParts");
+    expect(source).toContain(
+      "args: [BigInt(project.chainId), BigInt(project.projectId), handle.parts]",
+    );
+    expect(source).toContain("() => reverifyPublish(handle, address)");
     expect(source).toContain("const record = await readExactEnsText");
     expect(source).toContain("record !== expectedRecord");
   });
@@ -330,7 +327,7 @@ describe("project handle ENS authorization", () => {
       resolve(process.cwd(), "src/app/[slug]/components/v6/operator/SafeQueueCard.tsx"),
       "utf8",
     );
-    expect(source.match(/verifyLiveQueuedTransaction/g)?.length ?? 0).toBeGreaterThanOrEqual(7);
+    expect(source.match(/verifyLiveQueuedTransaction/g)?.length ?? 0).toBeGreaterThanOrEqual(6);
     expect(source).toContain("target.handleOnly");
     expect(source).toContain("bindingMatchesProject(binding, target.handleSource)");
     expect(source).toContain("verifyQueuedProjectHandleBinding");

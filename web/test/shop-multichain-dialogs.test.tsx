@@ -1,7 +1,12 @@
+import { AddItemsModal } from "@/app/[slug]/components/v6/shop/AddItemsModal";
+import { EditItemMediaModal } from "@/app/[slug]/components/v6/shop/EditItemMediaModal";
+import type { ShopInventory, ShopTier } from "@/app/[slug]/components/v6/shop/shopLib";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { confirmIsOpen, expectEveryWayOutRefused, findConfirm } from "./support/confirm";
+import { groupGateState } from "./support/group-write-gate";
 
 const mocks = vi.hoisted(() => ({
   runBatch: vi.fn(),
@@ -9,11 +14,15 @@ const mocks = vi.hoisted(() => ({
   addItemsConditions: vi.fn(),
   readMediaEditSource: vi.fn(),
   pinMediaEdits: vi.fn(),
+  pinDetailEdits: vi.fn(),
   pinMediaFile: vi.fn(),
   saved: false,
   destinations: [] as unknown[],
 }));
-vi.mock("wagmi", () => ({ useAccount: () => ({ address: `0x${"22".repeat(20)}` }) }));
+vi.mock("wagmi", () => ({
+  useAccount: () => ({ address: `0x${"22".repeat(20)}` }),
+  usePublicClient: () => undefined,
+}));
 vi.mock("@/hooks/useMultichainBatch", () => ({
   useMultichainBatch: () => ({
     runBatch: mocks.runBatch,
@@ -40,9 +49,11 @@ vi.mock("@/app/[slug]/components/v6/shop/shopBatch", async (importOriginal) => (
 vi.mock("@/app/[slug]/components/v6/shop/shopMediaEdit", () => ({
   readMediaEditSource: mocks.readMediaEditSource,
   pinMediaEdits: mocks.pinMediaEdits,
+  pinDetailEdits: mocks.pinDetailEdits,
 }));
 vi.mock("@/app/create/helpers/pinProjectMetaData", () => ({ pinMediaFile: mocks.pinMediaFile }));
 vi.mock("@/components/ChainLogo", () => ({ ChainLogo: () => null }));
+vi.mock("@/lib/nana/groupWriteGate", () => import("./support/group-write-gate"));
 vi.mock("@/components/ButtonWithWallet", () => ({
   ButtonWithWallet: ({
     children,
@@ -58,44 +69,16 @@ vi.mock("@/components/ButtonWithWallet", () => ({
     </button>
   ),
 }));
-vi.mock("@/components/ui/dialog", () => ({
+// The shop modals render inline here. The confirm's own dialog shell keeps the
+// real native-dialog mechanics.
+vi.mock("@/components/ui/dialog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/dialog")>()),
   Dialog: ({ children }: { children: ReactNode }) => <>{children}</>,
   DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DialogDescription: ({ children }: { children: ReactNode }) => <p>{children}</p>,
   DialogHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
   DialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
 }));
-vi.mock("@/components/ui/TxConfirmDialog", () => ({
-  SummaryRow: ({ label, children }: { label: ReactNode; children: ReactNode }) => (
-    <div>
-      {label}
-      {children}
-    </div>
-  ),
-  TxConfirmDialog: ({
-    children,
-    onConfirm,
-    busy,
-    error,
-  }: {
-    children: ReactNode;
-    onConfirm: () => void;
-    busy?: boolean;
-    error?: string;
-  }) => (
-    <div role="dialog">
-      {children}
-      <button disabled={busy} onClick={onConfirm}>
-        Confirm transaction
-      </button>
-      {error ? <p role="alert">{error}</p> : null}
-    </div>
-  ),
-}));
-
-import { AddItemsModal } from "@/app/[slug]/components/v6/shop/AddItemsModal";
-import { EditItemMediaModal } from "@/app/[slug]/components/v6/shop/EditItemMediaModal";
-import type { ShopInventory, ShopTier } from "@/app/[slug]/components/v6/shop/shopLib";
 
 const flags = {
   noNewTiersWithReserves: false,
@@ -121,7 +104,12 @@ const peerShop = {
 const guard = { address: primaryShop.hook, data: "0x1234", expected: "0x5678" };
 const digest = `0x${"77".repeat(32)}`;
 
-function mount(kind: "add" | "media") {
+/** The open confirm's action. */
+async function confirmAction(name: string) {
+  return within(await findConfirm()).getByRole("button", { name });
+}
+
+function mount(kind: "add" | "media", mode?: "details" | "discount" | "remove") {
   return render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
@@ -140,8 +128,9 @@ function mount(kind: "add" | "media") {
           chainId={1}
           projectId={7n}
           projects={[]}
-          tier={{ id: 3 } as ShopTier}
+          tier={{ id: 3, discountPercent: 20 } as ShopTier}
           media={{ name: "Original" }}
+          mode={mode}
           onClose={vi.fn()}
         />
       )}
@@ -150,6 +139,7 @@ function mount(kind: "add" | "media") {
 }
 
 beforeEach(() => {
+  groupGateState.reset();
   mocks.saved = false;
   mocks.destinations = [
     { chainId: 1, projectId: 7n, shop: primaryShop },
@@ -167,14 +157,30 @@ beforeEach(() => {
   );
 });
 
-describe("wallet-action:shop-items — selected-chain shop dialogs", () => {
-  it("submits one add-items call per selected hook with exact per-chain pricing and frozen guards", async () => {
+describe("selected-chain shop dialogs", () => {
+  it.each([
+    { kind: "add" as const, peer: "Add on Base", action: "Add items" },
+    { kind: "media" as const, peer: "Update media on Base", action: "Review media update" },
+  ])(
+    "wallet-action:shop-items keeps $kind off while a selected peer is not linked onchain",
+    ({ kind, peer, action }) => {
+      groupGateState.unverified = ["8453:91"];
+      mount(kind);
+      expect(screen.getByRole("button", { name: action })).not.toBeDisabled();
+      fireEvent.click(screen.getByRole("checkbox", { name: peer }));
+      expect(screen.getByText("A project listed here isn't linked onchain.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: action })).toBeDisabled();
+      expect(mocks.addItemsConditions).not.toHaveBeenCalled();
+      expect(mocks.readMediaEditSource).not.toHaveBeenCalled();
+    },
+  );
+
+  it("wallet-action:shop-items submits one add-items call per selected hook with exact per-chain pricing and frozen guards", async () => {
     mount("add");
     fireEvent.click(screen.getByRole("checkbox", { name: "Add on Base" }));
     fireEvent.change(screen.getByLabelText("Item 1 price on Ethereum"), { target: { value: "2" } });
     fireEvent.change(screen.getByLabelText("Item 1 price on Base"), { target: { value: "3.25" } });
     fireEvent.click(screen.getByRole("button", { name: "Add items" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm transaction" }));
     await waitFor(() => expect(mocks.runBatch).toHaveBeenCalledOnce());
     const input = mocks.runBatch.mock.calls[0][0];
     expect(input.scope).toBe("shop-add:1:7");
@@ -195,6 +201,22 @@ describe("wallet-action:shop-items — selected-chain shop dialogs", () => {
     expect(input.calls.map((call: { args: unknown[] }) => call.args[1])).toEqual([[], []]);
   });
 
+  it.each([
+    { kind: "add" as const, resume: "Resume saved shop update" },
+    { kind: "media" as const, resume: "Resume saved media update" },
+  ])(
+    "wallet-action:shop-items holds a saved $kind update while inventories load and a group pair is not linked onchain",
+    ({ kind, resume }) => {
+      groupGateState.unverified = ["1:7"];
+      mocks.saved = true;
+      mocks.destinations = [];
+      mount(kind);
+      fireEvent.click(screen.getByRole("button", { name: resume }));
+      expect(screen.getByRole("button", { name: resume })).toBeDisabled();
+      expect(mocks.runBatch).not.toHaveBeenCalled();
+    },
+  );
+
   it("blocks the whole addition before pinning when a selected peer denies permission", async () => {
     mocks.addItemsConditions.mockRejectedValue(new Error("Peer permission denied"));
     mount("add");
@@ -212,10 +234,10 @@ describe("wallet-action:shop-items — selected-chain shop dialogs", () => {
     const view = mount("add");
     fireEvent.change(screen.getByLabelText("Item 1 price on Ethereum"), { target: { value: "1" } });
     fireEvent.click(screen.getByRole("button", { name: "Add items" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm transaction" }));
     await screen.findByText("Network result unknown");
     expect(screen.getByRole("checkbox", { name: "Add on Base" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm transaction" }));
+    // The failed send leaves the frozen batch in the confirm to send again.
+    fireEvent.click(await confirmAction("Try again"));
     await waitFor(() => expect(mocks.runBatch).toHaveBeenCalledTimes(2));
     expect(mocks.pinDraftItems).toHaveBeenCalledOnce();
     expect(mocks.runBatch.mock.calls[1][0].calls).toEqual(mocks.runBatch.mock.calls[0][0].calls);
@@ -232,7 +254,7 @@ describe("wallet-action:shop-items — selected-chain shop dialogs", () => {
     expect(mocks.pinDraftItems).toHaveBeenCalledOnce();
   });
 
-  it("requires an explicit peer tier and preserves collection/resolver settings in media writes", async () => {
+  it("wallet-action:shop-items requires an explicit peer tier and preserves collection/resolver settings in media writes", async () => {
     mount("media");
     fireEvent.change(screen.getByLabelText("Replacement media URI"), {
       target: { value: "ipfs://replacement" },
@@ -243,7 +265,6 @@ describe("wallet-action:shop-items — selected-chain shop dialogs", () => {
     expect(mocks.pinMediaEdits).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("Item on Base"), { target: { value: "12" } });
     fireEvent.click(screen.getByRole("button", { name: "Review media update" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm transaction" }));
     await waitFor(() => expect(mocks.runBatch).toHaveBeenCalledOnce());
     const calls = mocks.runBatch.mock.calls[0][0].calls;
     expect(calls).toHaveLength(2);
@@ -259,6 +280,73 @@ describe("wallet-action:shop-items — selected-chain shop dialogs", () => {
       address: peerShop.hook,
       args: ["", "", "", "", peerShop.hook, 12n, digest],
       recoveryScope: "shop-media:8453:91:12",
+    });
+  });
+
+  it("wallet-action:shop-items sets a reviewed discount, refusing one a chain can only lower", async () => {
+    mocks.readMediaEditSource.mockImplementation(async (_client, destination, tierId) => ({
+      destination,
+      tierId,
+      discountPercent: 20,
+      cantIncreaseDiscountPercent: true,
+      metadata: {},
+      preconditions: [guard],
+    }));
+    mount("media", "discount");
+    const field = screen.getByLabelText("Discount (% off)");
+    expect(field).toHaveValue(10);
+    fireEvent.change(field, { target: { value: "12.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review discount" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("can only be lowered on Ethereum");
+    fireEvent.change(field, { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review discount" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("already have this discount");
+    fireEvent.change(field, { target: { value: "2.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review discount" }));
+    await waitFor(() => expect(mocks.runBatch).toHaveBeenCalledOnce());
+    expect(mocks.readMediaEditSource.mock.calls[0][4]).toBe("discount");
+    expect(mocks.runBatch.mock.calls[0][0].calls).toMatchObject([
+      {
+        chainId: 1,
+        address: primaryShop.hook,
+        functionName: "setDiscountPercentOf",
+        args: [3n, 5n],
+        recoveryScope: "shop-discount:1:7:3",
+        preconditions: [guard],
+      },
+    ]);
+    expect(mocks.pinMediaEdits).not.toHaveBeenCalled();
+  });
+
+  it("wallet-action:shop-items saves a new name and description over each chain's own JSON", async () => {
+    mocks.pinDetailEdits.mockImplementation(async (sources) =>
+      sources.map((source: object) => ({ ...source, encodedIpfsUri: digest, uri: "ipfs://new" })),
+    );
+    mount("media", "details");
+    expect(screen.getByLabelText("Name")).toHaveValue("Original");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed" } });
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Warm" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review details update" }));
+    await waitFor(() => expect(mocks.runBatch).toHaveBeenCalledOnce());
+    expect(mocks.pinDetailEdits).toHaveBeenCalledWith(expect.any(Array), "Renamed", "Warm");
+    expect(mocks.runBatch.mock.calls[0][0]).toMatchObject({
+      label: "Edit shop item details",
+      context: expect.arrayContaining([{ label: "New name", value: "Renamed" }]),
+      calls: [
+        { functionName: "setMetadata", args: ["", "", "", "", primaryShop.hook, 3n, digest] },
+      ],
+    });
+  });
+
+  it("wallet-action:shop-items removes only the reviewed item, after the warning", async () => {
+    mount("media", "remove");
+    expect(screen.getByText(/Buyers can no longer mint this item/u)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Review removal" }));
+    await waitFor(() => expect(mocks.runBatch).toHaveBeenCalledOnce());
+    expect(mocks.runBatch.mock.calls[0][0]).toMatchObject({
+      label: "Remove shop item",
+      scope: "shop-remove:1:7:3",
+      calls: [{ chainId: 1, functionName: "adjustTiers", args: [[], [3n]] }],
     });
   });
 
@@ -278,5 +366,38 @@ describe("wallet-action:shop-items — selected-chain shop dialogs", () => {
     );
     expect(mocks.readMediaEditSource).not.toHaveBeenCalled();
     expect(mocks.pinMediaEdits).not.toHaveBeenCalled();
+  });
+
+  it("refuses every way out while the items are added, then closes once they land", async () => {
+    let finish!: (outcome: unknown) => void;
+    mocks.runBatch.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    mount("add");
+    fireEvent.change(screen.getByLabelText("Item 1 price on Ethereum"), { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add items" }));
+    const confirm = await findConfirm();
+    await waitFor(() => expect(mocks.runBatch).toHaveBeenCalledOnce());
+
+    expectEveryWayOutRefused(confirm);
+
+    finish({ status: "success", hashes: [] });
+    await waitFor(() => expect(confirmIsOpen()).toBe(false));
+    expect(mocks.runBatch).toHaveBeenCalledOnce();
+  });
+
+  it("refuses every way out while media is replaced, then closes once it lands", async () => {
+    let finish!: (outcome: unknown) => void;
+    mocks.runBatch.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    mount("media");
+    fireEvent.change(screen.getByLabelText("Replacement media URI"), {
+      target: { value: "ipfs://replacement" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review media update" }));
+    const confirm = await findConfirm();
+    await waitFor(() => expect(mocks.runBatch).toHaveBeenCalledOnce());
+
+    expectEveryWayOutRefused(confirm);
+
+    finish({ status: "success", hashes: [] });
+    await waitFor(() => expect(confirmIsOpen()).toBe(false));
   });
 });

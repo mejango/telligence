@@ -42,7 +42,7 @@ describe("Safe App hosting", () => {
     expect(manifest.safe_apps_permissions).toEqual([]);
     expect(() => readFileSync(`${publicDirectory}${manifest.iconPath}`)).not.toThrow();
     expect(readFileSync(`${publicDirectory}${manifest.iconPath}`, "utf8")).toContain(
-      'viewBox="0 0 64 64"',
+      'viewBox="0 0 48 48"',
     );
   });
 });

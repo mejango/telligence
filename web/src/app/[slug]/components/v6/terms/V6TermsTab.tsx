@@ -4,6 +4,7 @@ import { useProjectBaseToken } from "@/hooks/useProjectBaseToken";
 import { useTokenA } from "@/hooks/useTokenA";
 import { useJBTokenContext } from "@/lib/nana/project";
 import { formatTokenSymbol } from "@/lib/utils";
+import Link from "next/link";
 import { useMemo } from "react";
 import { CurrentIssuanceSection } from "../../../terms/components/CurrentIssuanceSection";
 import { StagesTable } from "../../../terms/components/StagesTable";
@@ -47,6 +48,11 @@ export function V6TermsTab({ rulesets }: { rulesets: Ruleset[] }) {
 
   return (
     <div className="flex flex-col min-w-0">
+      <p className="mb-4 text-sm text-zinc-500">
+        Creating new tokens is called issuance. The rate below shows how many tokens a payment
+        creates before the share set aside for other recipients. The chart shows the cost per new
+        token, which is separate from its market price.
+      </p>
       <div>
         <h3 className="mb-1 text-base font-semibold text-zinc-700">Token issuance</h3>
         <CurrentIssuanceSection />
@@ -57,6 +63,15 @@ export function V6TermsTab({ rulesets }: { rulesets: Ruleset[] }) {
 
       <div className="mt-8">
         <h3 className="text-base font-semibold text-zinc-700">Stages</h3>
+        <p className="mt-2 text-sm text-zinc-500">
+          Each stage is a period with terms set at launch. Splits set aside tokens for named
+          recipients; auto issuance creates a fixed number without payment. The cash-out tax setting
+          controls how much stays for other holders when someone cashes out.{" "}
+          <Link href="/learn#glossary" className="underline">
+            Read the glossary
+          </Link>
+          .
+        </p>
         {/* StagesTable carries its own top margin; tuck it under the heading. */}
         <div className="[&>div]:mt-2">
           <StagesTable rulesets={rulesets} />

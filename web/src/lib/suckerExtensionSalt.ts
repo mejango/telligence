@@ -1,4 +1,5 @@
 import { createSalt } from "@bananapus/nana-sdk-core";
+import { SAVED_ATTEMPT_UNREADABLE_LINE } from "@bananapus/nana-sdk-core/review";
 import type { Address } from "viem";
 
 /**
@@ -28,13 +29,46 @@ function attemptKey(sender: Address, projectId: bigint | number, targetChainId: 
   return `${sender.toLowerCase()}:${projectId.toString()}:${targetChainId}`;
 }
 
+/**
+ * The saved salts. A store that can't be read or parsed throws SAVED_ATTEMPT_UNREADABLE_LINE: never
+ * taken for an empty one, since a write over it would drop salts already-deployed peers need.
+ */
 function read(): SaltStore {
   if (typeof window === "undefined") return {};
+  let raw: string | null;
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as SaltStore;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    raw = window.localStorage.getItem(STORAGE_KEY);
   } catch {
-    return {};
+    // Storage won't read: only the user's warned continue lets the attempt start afresh.
+    if (discarded) return {};
+    throw new Error(SAVED_ATTEMPT_UNREADABLE_LINE);
+  }
+  discarded = false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw ?? "{}");
+  } catch {
+    throw new Error(SAVED_ATTEMPT_UNREADABLE_LINE);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error(SAVED_ATTEMPT_UNREADABLE_LINE);
+  return parsed as SaltStore;
+}
+
+/** The user's warned continue over a store that won't read, while storage still refuses it. */
+let discarded = false;
+
+/**
+ * The user's warned continue over saved salts that won't read (SAVED_ATTEMPT_CONTINUE_ANYWAY_LABEL): they go,
+ * and the next extension starts with a fresh salt. Called only after an extension just failed on it.
+ */
+export function discardUnreadableSalts(): void {
+  discarded = true;
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Storage refuses: `discarded` lets this tab start afresh.
   }
 }
 
@@ -69,7 +103,13 @@ export function clearExtensionSalt(
   targetChainId: number,
 ): void {
   const key = attemptKey(sender, projectId, targetChainId);
-  const store = read();
+  let store: SaltStore;
+  try {
+    store = read();
+  } catch {
+    // Unreadable: kept as it is; nothing is cleared over it.
+    return;
+  }
   if (!(key in store)) return;
   delete store[key];
   write(store);

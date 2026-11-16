@@ -1,11 +1,13 @@
 "use client";
 
 import { ShopInventorySkeleton } from "@/components/loading/LoadingSkeletons";
+import { useHydrated } from "@/hooks/useHydrated";
 import { useJBChainId, useJBContractContext } from "@/lib/nana/project";
-import { decodeProjectRouteSlug } from "@/lib/slug";
+import { projectViewHref } from "@/lib/projectSubtabNavigation";
 import { cn } from "@/lib/utils";
-import { useParams, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { useProjectNavigation } from "../../../ProjectRouteContext";
 import { ProjectItem } from "../shared";
 import { CustomersSection } from "./CustomersSection";
 import { InventorySection } from "./InventorySection";
@@ -17,15 +19,6 @@ const SUBTABS = [
 ] as const;
 
 type SubtabKey = (typeof SUBTABS)[number]["key"];
-
-export function shopSubtabNavigation(slug: string, currentHref: string, key: SubtabKey) {
-  const url = new URL(currentHref);
-  url.searchParams.set("subtab", key);
-  return {
-    href: url.href,
-    mode: decodeProjectRouteSlug(slug)?.startsWith("@") ? "document" : "client",
-  } as const;
-}
 
 /**
  * The Shop tab (website/ renderShopTab parity): INVENTORY | CUSTOMERS
@@ -41,7 +34,7 @@ export function V6ShopTab({ projects }: { projects: ProjectItem[] }) {
 }
 
 function ShopTabInner({ projects }: { projects: ProjectItem[] }) {
-  const params = useParams<{ slug: string }>();
+  const navigate = useProjectNavigation();
   const searchParams = useSearchParams();
   const { projectId } = useJBContractContext();
   const chainId = useJBChainId();
@@ -50,7 +43,7 @@ function ShopTabInner({ projects }: { projects: ProjectItem[] }) {
   const initial: SubtabKey = SUBTABS.some((tab) => tab.key === requested)
     ? (requested as SubtabKey)
     : "inventory";
-  const [subtab, setSubtab] = useState<SubtabKey>(initial);
+  const subtab = initial;
   // Lazy mount: a subtab renders the first time it's opened, then stays
   // mounted (hidden) so its state and queries survive switching back.
   const [visited, setVisited] = useState<Record<SubtabKey, boolean>>({
@@ -59,24 +52,23 @@ function ShopTabInner({ projects }: { projects: ProjectItem[] }) {
   });
 
   const show = (key: SubtabKey) => {
-    const navigation = shopSubtabNavigation(params.slug, window.location.href, key);
-    if (navigation.mode === "document") {
-      // The alias may have rebound while this shop remained mounted. Resolve
-      // it again before revealing another project's cached inventory data.
-      window.location.assign(navigation.href);
-      return;
-    }
-    setSubtab(key);
-    setVisited((current) => (current[key] ? current : { ...current, [key]: true }));
-    window.history.replaceState(null, "", navigation.href);
+    const href = projectViewHref(window.location.href, "subtab", key);
+    navigate(() => {
+      setVisited((current) => (current[key] ? current : { ...current, [key]: true }));
+      window.history.replaceState(null, "", href);
+    }, href);
   };
 
+  const [retryingMedia, setRetryingMedia] = useState(false);
   const shopQuery = useShopInventory(chainId, projectId);
-  const { data: mediaById } = useTierMedia(chainId, shopQuery.data);
+  const media = useTierMedia(chainId, shopQuery.data);
+  const mediaById = media.data;
+  // The Pay card can fill this query before this boundary hydrates, so match the server first.
+  const hydrated = useHydrated();
 
   if (!chainId) return null;
 
-  if (shopQuery.isLoading) {
+  if (!hydrated || shopQuery.isLoading) {
     return <ShopInventorySkeleton />;
   }
   if (shopQuery.isError) {
@@ -99,6 +91,7 @@ function ShopTabInner({ projects }: { projects: ProjectItem[] }) {
           <button
             key={tab.key}
             type="button"
+            data-project-navigation="local"
             onClick={() => show(tab.key)}
             className={cn(
               "-mb-px pb-2 text-sm font-medium tracking-wide transition-colors",
@@ -112,8 +105,24 @@ function ShopTabInner({ projects }: { projects: ProjectItem[] }) {
         ))}
       </div>
 
-      {visited.inventory ? (
+      {visited.inventory || subtab === "inventory" ? (
         <div className={subtab === "inventory" ? "" : "hidden"}>
+          {media.isError || retryingMedia ? (
+            <p className="mb-4 text-sm text-zinc-500" role="status">
+              Some item details could not be loaded.{" "}
+              <button
+                type="button"
+                className="underline disabled:opacity-50"
+                disabled={retryingMedia || media.isFetching}
+                onClick={() => {
+                  setRetryingMedia(true);
+                  void media.retryFailed().finally(() => setRetryingMedia(false));
+                }}
+              >
+                {retryingMedia || media.isFetching ? "Retrying details…" : "Retry details"}
+              </button>
+            </p>
+          ) : null}
           <InventorySection
             shop={shop}
             chainId={chainId}
@@ -124,7 +133,7 @@ function ShopTabInner({ projects }: { projects: ProjectItem[] }) {
         </div>
       ) : null}
 
-      {visited.customers ? (
+      {visited.customers || subtab === "customers" ? (
         <div className={subtab === "customers" ? "" : "hidden"}>
           <CustomersSection shop={shop} mediaById={mediaById} projects={projects} />
         </div>

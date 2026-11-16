@@ -11,12 +11,12 @@ import {
   verifyQueuedProjectHandlePostcondition,
   verifyQueuedProjectHandleTransaction,
 } from "@/lib/queuedProjectHandle";
-import type { SafeQueuedTransaction } from "@/lib/safe-queue";
 import {
   RevnetCoreContracts,
   getJBContractAddress,
   type JBChainId,
 } from "@bananapus/nana-sdk-core";
+import type { SafeQueuedTransaction } from "@bananapus/nana-sdk-core/safe-service";
 import {
   encodeFunctionData,
   encodeFunctionResult,
@@ -26,6 +26,7 @@ import {
   type PublicClient,
 } from "viem";
 import { describe, expect, it, vi } from "vitest";
+import { creationService, provenSafe, safeChain } from "./fixtures/safe-chain";
 
 const SAFE = "0x1111111111111111111111111111111111111111" as Address;
 const RESOLVER = "0x2222222222222222222222222222222222222222" as Address;
@@ -440,16 +441,16 @@ describe("queued project-handle live verification", () => {
           result: to === JB_PROJECT_HANDLES_ADDRESS.toLowerCase() ? handle : record,
         } as never);
       });
-      const mainnetGetBytecode = vi.fn().mockResolvedValue(mainnetCode);
+      const mainnetGetCode = vi.fn().mockResolvedValue(mainnetCode);
       const mainnet = {
         getBlockNumber: vi.fn().mockResolvedValue(latestMainnetBlock),
-        getBytecode: mainnetGetBytecode,
+        getCode: mainnetGetCode,
         readContract: vi.fn().mockResolvedValue(RESOLVER),
         request: mainnetRequest,
       } as unknown as PublicClient;
       const source = {
         getBlockNumber: vi.fn().mockResolvedValue(200n),
-        getBytecode: vi.fn().mockResolvedValue(undefined),
+        getCode: vi.fn().mockResolvedValue(undefined),
         readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
           if (functionName === "ownerOf") {
             return getJBContractAddress(RevnetCoreContracts.REVOwner, 6, 8453);
@@ -459,7 +460,7 @@ describe("queued project-handle live verification", () => {
         }),
       } as unknown as PublicClient;
       return {
-        mainnetGetBytecode,
+        mainnetGetCode,
         mainnetRequest,
         clientFor: (chainId: JBChainId) => (chainId === 1 ? mainnet : source),
       };
@@ -475,7 +476,7 @@ describe("queued project-handle live verification", () => {
         executionBlockNumber: 100n,
       }),
     ).resolves.toBeUndefined();
-    expect(lagging.mainnetGetBytecode).toHaveBeenCalledWith(
+    expect(lagging.mainnetGetCode).toHaveBeenCalledWith(
       expect.objectContaining({ blockNumber: 100n }),
     );
     await expect(
@@ -505,6 +506,64 @@ describe("queued project-handle live verification", () => {
         executionBlockNumber: 100n,
       }),
     ).rejects.toThrow("no longer the encoded revnet's live operator");
+  });
+});
+
+describe("queued project-handle writes from a Safe operator", () => {
+  // Creation records are cached per chain and Safe, so each case has a Safe of its own.
+  const UNPROVEN_SAFE = provenSafe({ saltNonce: 21n });
+  const PROVEN_SAFE = provenSafe({ saltNonce: 22n });
+
+  /** Base holds the revnet and its operator Safe; Ethereum holds the same Safe and the ENS record. */
+  function chains(safe: Address) {
+    const base = {
+      ...safeChain(safe).client,
+      getBlockNumber: vi.fn().mockResolvedValue(200n),
+      readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
+        if (functionName === "ownerOf") {
+          return getJBContractAddress(RevnetCoreContracts.REVOwner, 6, 8453);
+        }
+        if (functionName === "isOperatorOf") return true;
+        throw new Error(`Unexpected read ${functionName}`);
+      }),
+    } as unknown as PublicClient;
+    const ethereum = {
+      ...safeChain(safe, {
+        otherRequest: async () =>
+          encodeFunctionResult({
+            abi: ensTextResolverAbi,
+            functionName: "text",
+            result: "8453:42",
+          }),
+      }).client,
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      readContract: vi.fn().mockResolvedValue(RESOLVER),
+    } as unknown as PublicClient;
+    return (chainId: JBChainId) => (chainId === 1 ? ethereum : base);
+  }
+
+  it("refuses the write in one line when Base's Safe service can't prove the Safe", async () => {
+    await expect(
+      verifyQueuedProjectHandleTransaction({
+        executionChainId: 1,
+        safe: UNPROVEN_SAFE.address,
+        transaction: setHandleTx(),
+        clientFor: chains(UNPROVEN_SAFE.address),
+      }),
+    ).rejects.toThrow(/^Can't verify this Safe is the same on Ethereum\.$/);
+  });
+
+  it("accepts the write once the Safe's creation record proves it", async () => {
+    vi.stubGlobal("fetch", creationService(PROVEN_SAFE, "base"));
+
+    await expect(
+      verifyQueuedProjectHandleTransaction({
+        executionChainId: 1,
+        safe: PROVEN_SAFE.address,
+        transaction: setHandleTx(),
+        clientFor: chains(PROVEN_SAFE.address),
+      }),
+    ).resolves.toMatchObject({ kind: "project-handle" });
   });
 });
 

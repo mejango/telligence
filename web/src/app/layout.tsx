@@ -1,5 +1,4 @@
 import { Footer } from "@/components/layout/Footer";
-import { MutableHandleNavigationGuard } from "@/components/MutableHandleNavigationGuard";
 import { Toaster } from "@/components/ui/toaster";
 import type { Metadata } from "next";
 import { twMerge } from "tailwind-merge";
@@ -40,10 +39,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <link rel="icon" href="/assets/img/telligence-mark.svg" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        {/* Plain tags, not metadata.alternates: a page that sets its own canonical replaces that whole field. */}
+        <link rel="alternate" type="text/markdown" href="/skill.md" title="Agent skill" />
+        <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt" />
       </head>
       <body className={twMerge(simplonMono.variable, "min-h-screen font-sans text-zinc-950")}>
         <Providers>
-          <MutableHandleNavigationGuard />
           <main className="min-h-screen">{children}</main>
           <Footer />
         </Providers>
@@ -73,7 +74,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: imgUrl,
           width: 1200,
           height: 630,
-          alt: "Telligence — throw money at a problem together",
+          alt: "Telligence: throw money at a problem together",
           type: "image/png",
         },
       ],

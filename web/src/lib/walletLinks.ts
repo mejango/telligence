@@ -1,4 +1,6 @@
-const WALLET_SAFE_GATEWAY = "https://juicebox.center";
+// JB Center's path gateway serves HTML as a download and ipfs.io now 302s to the inbrowser.link service
+// worker, so wallet browsers get the eth.sucks subdomain gateway, which serves the site without a service worker.
+const WALLET_SAFE_GATEWAY_HOST = "eth.sucks";
 const SUBDOMAIN_IPFS_SUFFIXES = [
   ".ipfs.inbrowser.link",
   ".ipfs.dweb.link",
@@ -6,10 +8,10 @@ const SUBDOMAIN_IPFS_SUFFIXES = [
 ] as const;
 
 function ipfsPathUrl(cid: string, pathname: string, search: string, hash: string) {
-  return `${WALLET_SAFE_GATEWAY}/ipfs/${cid}${pathname || "/"}${search}${hash}`;
+  return `https://${cid}.${WALLET_SAFE_GATEWAY_HOST}${pathname || "/"}${search}${hash}`;
 }
 
-/** Use a path gateway in wallet browsers, which may not support IPFS gateway service workers. */
+/** Use a non-service-worker gateway in wallet browsers, which may not support IPFS gateway service workers. */
 export function walletDappUrl(href: string) {
   let url: URL;
   try {
@@ -45,15 +47,4 @@ export function mobileWalletLinks(href: string) {
       url: `https://link.trustwallet.com/open_url?coin_id=60&url=${encoded}`,
     },
   ];
-}
-
-export function isMobileDevice(nav: {
-  userAgent?: string;
-  platform?: string;
-  maxTouchPoints?: number;
-}) {
-  return (
-    /Android|iPhone|iPad|iPod/i.test(nav.userAgent || "") ||
-    (nav.platform === "MacIntel" && (nav.maxTouchPoints ?? 0) > 1)
-  );
 }

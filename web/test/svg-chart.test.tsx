@@ -226,14 +226,14 @@ describe("LoanFeeChart", () => {
       />,
     );
 
-    const chart = screen.getByRole("group", { name: "Loan unlock cost over time" });
+    const chart = screen.getByRole("group", { name: "Loan repayment cost over time" });
     fireEvent.focus(chart);
-    expect(screen.getByText("Final period – no collateral will be returned")).toBeInTheDocument();
+    expect(screen.getByText("Ten-year deadline: token recovery ends")).toBeInTheDocument();
 
     fireEvent.keyDown(chart, { key: "ArrowLeft" });
     expect(screen.getByText("12 months (1y 0m)")).toBeInTheDocument();
-    expect(screen.getByText("Total paid to unlock: 1.20000000 ETH")).toBeInTheDocument();
-    expect(screen.getByText("Collateral returned: 100 REV")).toBeInTheDocument();
+    expect(screen.getByText("Repayment: 1.20000000 ETH")).toBeInTheDocument();
+    expect(screen.getByText("Tokens returned: 100 REV")).toBeInTheDocument();
   });
 
   it("renders a stable empty state when all observations are unsafe", () => {
@@ -247,6 +247,6 @@ describe("LoanFeeChart", () => {
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent("No loan fee data available");
+    expect(screen.getByRole("status")).toHaveTextContent("Repayment estimate unavailable");
   });
 });

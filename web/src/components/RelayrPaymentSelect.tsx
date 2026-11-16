@@ -1,6 +1,5 @@
 "use client";
 
-import { chainDisplayName } from "@/app/constants";
 import {
   Select,
   SelectContent,
@@ -8,41 +7,48 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { ChainPayment } from "@/lib/nana/types";
-import { formatHexEther } from "@/lib/utils";
-import { JBChainId } from "@bananapus/nana-sdk-core";
+import type { FundingChainOption } from "@/lib/transaction-review";
+import { useId } from "react";
 
 interface Props {
-  payments: ChainPayment[];
-  tokenSymbol: string;
-  selectedPayment: ChainPayment | null;
-  onSelectPayment: (payment: ChainPayment) => void;
+  options: readonly FundingChainOption[];
+  value: number | null;
+  onValueChange: (chainId: number) => void;
+  label?: string;
+  placeholder?: string;
   disabled?: boolean;
 }
 
 export function RelayrPaymentSelect(props: Props) {
-  const { payments, tokenSymbol, selectedPayment, onSelectPayment, disabled = false } = props;
+  const {
+    options,
+    value,
+    onValueChange,
+    label = "How would you like to pay?",
+    placeholder = "Select chain",
+    disabled = false,
+  } = props;
+  const id = useId();
   return (
     <div>
-      <div className="text-left text-black-500 font-semibold mb-2">How would you like to pay?</div>
+      <label htmlFor={id} className="text-left text-black-500 font-semibold mb-2 block">
+        {label}
+      </label>
       <div className="max-w-sm">
         <Select
-          onValueChange={(v) => onSelectPayment(payments.find((p) => p.chain === Number(v))!)}
-          value={selectedPayment?.chain.toString()}
+          onValueChange={(chainId) => onValueChange(Number(chainId))}
+          value={value?.toString()}
           disabled={disabled}
         >
-          <SelectTrigger>
-            <SelectValue placeholder="Select chain" />
+          <SelectTrigger id={id}>
+            <SelectValue placeholder={placeholder} />
           </SelectTrigger>
           <SelectContent>
-            {payments.map((payment) => {
-              return (
-                <SelectItem value={payment.chain.toString()} key={payment.chain}>
-                  {formatHexEther(payment.amount)} {tokenSymbol} on{" "}
-                  {chainDisplayName(payment.chain as JBChainId)}
-                </SelectItem>
-              );
-            })}
+            {options.map((option) => (
+              <SelectItem value={option.chainId.toString()} key={option.chainId}>
+                {option.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>

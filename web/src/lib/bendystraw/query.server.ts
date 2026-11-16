@@ -6,7 +6,7 @@ import {
   normalizeBendystrawEndpoint,
   requestBendystraw,
 } from "@bananapus/nana-sdk-core";
-import { compileBendystrawOperation } from "./operationContract";
+import { compileBendystrawOperation } from "@bananapus/nana-sdk-core/bendystraw-operations";
 import type { BendystrawOperation } from "./operations";
 import { getRegisteredQuery } from "./registry.server";
 

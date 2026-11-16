@@ -1,4 +1,5 @@
-import { isMobileDevice, mobileWalletLinks, walletDappUrl } from "@/lib/walletLinks";
+import { mobileWalletLinks, walletDappUrl } from "@/lib/walletLinks";
+import { isMobileDevice } from "@bananapus/nana-sdk-core/review/react";
 import { describe, expect, it } from "vitest";
 
 const CID = "bafybeif2pn5x3mxfhin4cflqyeu3spqlanc3r6nutyufh7ijw54gggtdra";
@@ -7,7 +8,7 @@ describe("mobile wallet links", () => {
   it("rewrites every deployed IPFS subdomain gateway for a wallet browser", () => {
     for (const gateway of ["inbrowser.link", "dweb.link", "w3s.link"]) {
       expect(walletDappUrl(`https://${CID}.ipfs.${gateway}/project#pay`)).toBe(
-        `https://juicebox.center/ipfs/${CID}/project#pay`,
+        `https://${CID}.eth.sucks/project#pay`,
       );
     }
   });

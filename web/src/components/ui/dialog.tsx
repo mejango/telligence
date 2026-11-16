@@ -1,10 +1,12 @@
 "use client";
 
+import { ProjectRouteBlockedContext } from "@/lib/project-route-state";
+
 import { X } from "@/components/ui/icons";
 import * as React from "react";
 import { createPortal } from "react-dom";
 
-import { registerOpenDialog } from "@/lib/topLayer";
+import { registerOpenDialog, topLayerHost } from "@/lib/topLayer";
 import { cn } from "@/lib/utils";
 import { composeRefs, Slot } from "./slot";
 
@@ -13,6 +15,10 @@ type DialogContextValue = {
   descriptionId: string;
   hasDescription: boolean;
   hasTitle: boolean;
+  /** Keeps the dialog open until the release it returns is called. */
+  hold: () => () => void;
+  /** Something hosted in the dialog holds it open, so every close path is refused. */
+  held: boolean;
   onOpenChange: (open: boolean) => void;
   open: boolean;
   /** The content panel, for a view that replaces the dialog's body in place. */
@@ -84,6 +90,27 @@ function Dialog({
     setDescriptionCount((count) => count + 1);
     return () => setDescriptionCount((count) => Math.max(0, count - 1));
   }, []);
+  const [holdCount, setHoldCount] = React.useState(0);
+  const hold = React.useCallback(() => {
+    setHoldCount((count) => count + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      setHoldCount((count) => count - 1);
+    };
+  }, []);
+  const held = holdCount > 0;
+  // The dialog's own close paths (Escape, the backdrop, its close controls)
+  // all request a close here, so a hold refuses every one of them. The owner
+  // can still close a controlled dialog through `open`.
+  const requestOpenChange = React.useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen && held) return;
+      setOpen(nextOpen);
+    },
+    [held, setOpen],
+  );
 
   const context = React.useMemo<DialogContextValue>(
     () => ({
@@ -91,7 +118,9 @@ function Dialog({
       descriptionId: `dialog-description-${reactId}`,
       hasDescription: descriptionCount > 0,
       hasTitle: titleCount > 0,
-      onOpenChange: setOpen,
+      hold,
+      held,
+      onOpenChange: requestOpenChange,
       open,
       panelRef,
       registerDescription,
@@ -99,7 +128,17 @@ function Dialog({
       titleId: `dialog-title-${reactId}`,
       triggerRef,
     }),
-    [descriptionCount, open, reactId, registerDescription, registerTitle, setOpen, titleCount],
+    [
+      descriptionCount,
+      held,
+      hold,
+      open,
+      reactId,
+      registerDescription,
+      registerTitle,
+      requestOpenChange,
+      titleCount,
+    ],
   );
 
   return <DialogContext.Provider value={context}>{children}</DialogContext.Provider>;
@@ -141,7 +180,8 @@ const DialogTrigger = React.forwardRef<HTMLElement, DialogTriggerProps>(
 );
 DialogTrigger.displayName = "DialogTrigger";
 
-function useDialogPortalNode(open: boolean) {
+/** A body-level node of its own for an open dialog to portal into. */
+export function useDialogPortalNode(open: boolean) {
   const [portalNode, setPortalNode] = React.useState<HTMLElement | null>(null);
   React.useEffect(() => {
     if (!open) {
@@ -220,12 +260,17 @@ function coverDialogsBelow(dialog: HTMLDialogElement) {
   return () => covered.forEach((other) => other.removeAttribute("data-covered"));
 }
 
-function useNativeModalDialog({
+/**
+ * Opens `dialogRef` with `showModal()` while `open` and `enabled`: it joins the
+ * top layer registry (so toasts, select popovers and tooltips attach inside
+ * it), covers the dialog below, locks body scroll and focuses the dialog.
+ */
+export function useNativeModalDialog({
   dialogRef,
   enabled,
   onEscapeKeyDown,
   onOpenChange,
-  open,
+  open: requestedOpen,
 }: {
   dialogRef: React.RefObject<HTMLDialogElement | null>;
   enabled: boolean;
@@ -233,6 +278,8 @@ function useNativeModalDialog({
   onOpenChange: (open: boolean) => void;
   open: boolean;
 }) {
+  const projectBlocked = React.useContext(ProjectRouteBlockedContext);
+  const open = requestedOpen && !projectBlocked;
   // Callers pass inline arrows, so these identities change on every parent
   // render. Reading them through a ref keeps the effect below tied to real
   // state changes instead of re-running (and re-opening the dialog) on every
@@ -247,6 +294,7 @@ function useNativeModalDialog({
     const dialog = dialogRef.current;
     if (!dialog) return;
 
+    const focusBeforeOpen = document.activeElement;
     // `showModal()` throws on a dialog that is already open.
     if (!dialog.open) dialog.showModal();
     // `showModal()` hands focus to the first focusable descendant, the close button, and its focus
@@ -257,14 +305,30 @@ function useNativeModalDialog({
     lockBody();
 
     let closingForReact = false;
+    // React owns the open state: only unmounting closes the dialog. Escape
+    // asks instead, so an owner that refuses (a send in flight) keeps a live
+    // dialog, not a hidden one React still renders over a page that cannot
+    // scroll. Preventing the event `onEscapeKeyDown` gets refuses Escape alone.
+    const requestClose = () => {
+      const request = new Event("cancel", { cancelable: true });
+      callbacks.current.onEscapeKeyDown?.(request);
+      if (!request.defaultPrevented) callbacks.current.onOpenChange(false);
+    };
     const handleCancel = (event: Event) => {
-      // Escape reaches only the topmost dialog. Preventing the cancel is how a
-      // caller refuses dismissal, for instance while a send is in flight.
-      callbacks.current.onEscapeKeyDown?.(event);
+      // Escape reaches only the topmost dialog.
+      event.preventDefault();
+      requestClose();
     };
     const handleClose = () => {
       if (closingForReact) return;
-      callbacks.current.onOpenChange(false);
+      // The browser closed it anyway: Chrome does not let a page cancel a
+      // second Escape pressed with no click or key between the two. React
+      // still renders the dialog, so show it again and ask, as for any Escape.
+      if (!dialog.open) {
+        dialog.showModal();
+        dialog.focus({ preventScroll: true });
+      }
+      requestClose();
     };
     dialog.addEventListener("cancel", handleCancel);
     dialog.addEventListener("close", handleClose);
@@ -277,6 +341,16 @@ function useNativeModalDialog({
       unlockBody();
       closingForReact = true;
       dialog.close();
+      // React may remove the portal before cleanup, skipping the browser's native focus restore.
+      // Only restore into the remaining top layer, so closing an underlying dialog cannot steal focus.
+      const host = topLayerHost();
+      if (
+        focusBeforeOpen instanceof HTMLElement &&
+        focusBeforeOpen.isConnected &&
+        host.contains(focusBeforeOpen)
+      ) {
+        focusBeforeOpen.focus({ preventScroll: true });
+      }
     };
   }, [dialogRef, enabled, open]);
 }
@@ -286,8 +360,8 @@ const DIALOG_PANEL_CLASS =
 
 interface DialogContentProps extends React.HTMLAttributes<HTMLDivElement> {
   /**
-   * Runs on the native `cancel` event. Calling `preventDefault()` on it keeps
-   * the dialog open, which is the only supported way to refuse a dismissal.
+   * Runs when Escape asks to close the dialog. Calling `preventDefault()` on
+   * its event keeps the dialog open; refusing in `onOpenChange` does too.
    */
   onEscapeKeyDown?: (event: Event) => void;
   /** Off for dialogs that render their own dismissal control. */
@@ -302,7 +376,11 @@ const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
     useNativeModalDialog({
       dialogRef,
       enabled: portalNode !== null,
-      onEscapeKeyDown,
+      onEscapeKeyDown: (event) => {
+        // A held dialog refuses Escape before its owner hears of it.
+        if (context.held) event.preventDefault();
+        else onEscapeKeyDown?.(event);
+      },
       onOpenChange: context.onOpenChange,
       open: context.open,
     });
@@ -333,7 +411,10 @@ const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
         >
           {children}
           {showCloseButton ? (
-            <DialogClose className="absolute right-4 top-4 opacity-70 ring-offset-white transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2 disabled:pointer-events-none dark:ring-offset-zinc-950 dark:focus:ring-zinc-300">
+            <DialogClose
+              disabled={context.held}
+              className="absolute right-4 top-4 opacity-70 ring-offset-white transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:ring-offset-2 disabled:pointer-events-none dark:ring-offset-zinc-950 dark:focus:ring-zinc-300"
+            >
               <X aria-hidden="true" className="h-4 w-4" />
               <span className="sr-only">Close</span>
             </DialogClose>
@@ -421,6 +502,18 @@ function useEnclosingDialogPanel(): HTMLDivElement | null {
   return context ? panel : null;
 }
 
+/**
+ * While `held`, the dialog this component is rendered inside refuses every
+ * close path: Escape, a backdrop press and its close controls. A view hosted in
+ * the dialog's panel has no dialog of its own, so this is how its busy reaches
+ * the host. A layout effect, so no event lands between the render that sets it
+ * and the host's refusal.
+ */
+function useHoldEnclosingModal(held: boolean) {
+  const hold = React.useContext(DialogContext)?.hold;
+  React.useLayoutEffect(() => (held && hold ? hold() : undefined), [held, hold]);
+}
+
 export {
   Dialog,
   DialogContent,
@@ -430,4 +523,5 @@ export {
   DialogTitle,
   DialogTrigger,
   useEnclosingDialogPanel,
+  useHoldEnclosingModal,
 };

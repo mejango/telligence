@@ -1,13 +1,22 @@
 import { Button } from "@/components/ui/button";
-import Link from "next/link";
+import type { Metadata } from "next";
+import { NotFoundMessage, NotFoundNav } from "./NotFoundMessage";
+
+export const metadata: Metadata = { title: "Not found | Telligence" };
 
 export default function NotFound() {
   return (
-    <div className="min-h-screen w-full flex flex-col items-center justify-center">
-      <h2 className="text-4xl mb-3">Revnet Not Found</h2>
-      <Link href="/">
-        <Button>Return Home</Button>
-      </Link>
-    </div>
+    <>
+      <NotFoundNav />
+      <div className="flex w-full flex-col items-center px-4 py-24 text-center">
+        <h1 className="mb-3 text-4xl">Not found</h1>
+        <NotFoundMessage />
+        {/* A plain link: next/link here put the home bundle on every route that renders a 404. */}
+        <Button asChild>
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- keeps next/link off the 404 bundle */}
+          <a href="/">Return Home</a>
+        </Button>
+      </div>
+    </>
   );
 }

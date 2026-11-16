@@ -1,7 +1,10 @@
 import type { JBChainId } from "@bananapus/nana-sdk-core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { groupGateState } from "./support/group-write-gate";
+
+vi.mock("@/lib/nana/groupWriteGate", () => import("./support/group-write-gate"));
 
 import { AddLiquidityForm } from "@/app/[slug]/components/v6/owners/market/AmmCard";
 import type { AmmChainState, PoolSnapshot } from "@/app/[slug]/components/v6/owners/market/lib";
@@ -31,20 +34,10 @@ vi.mock("@/components/ButtonWithWallet", () => ({
   }) => <button {...props}>{children}</button>,
 }));
 
-vi.mock("@/hooks/useAllowance", () => ({
-  useAllowance: () => ({ ensureAllowance: vi.fn(), isApproving: false }),
-}));
-vi.mock("@/hooks/useReviewedWriteContract", () => ({
-  isSafeConnection: () => false,
-  submittedViaSafe: () => false,
-  useWaitForTransactionReceipt: () => ({}),
-  useWriteContract: () => ({ writeContractAsync: vi.fn(), isPending: false }),
-}));
-
 const pool = {
   chainId: 8453 as JBChainId,
   price: 0.00001,
-  poolId: "0xpool",
+  poolId: `0x${"7a".repeat(32)}`,
   pair: {
     addr: "0x0000000000000000000000000000000000000000",
     decimals: 18,
@@ -55,6 +48,7 @@ const pool = {
 
 const state: AmmChainState = {
   chainId: 8453 as JBChainId,
+  projectId: 1n,
   hook: "0x0000000000000000000000000000000000000001",
   pool,
   composition: null,
@@ -65,6 +59,22 @@ const render = (ui: React.ReactElement) =>
   rtlRender(<QueryClientProvider client={new QueryClient()}>{ui}</QueryClientProvider>);
 
 describe("AddLiquidityForm", () => {
+  beforeEach(() => groupGateState.reset());
+
+  it("wallet-action:liquidity-management keeps funding off for a pool whose project the registry does not list", () => {
+    groupGateState.unverified = ["8453:1"];
+    render(<AddLiquidityForm state={state} tokenSymbol="MARKEE" />);
+    fireEvent.change(screen.getByRole("spinbutton", { name: /MARKEE/ }), {
+      target: { value: "20000000" },
+    });
+    fireEvent.change(screen.getByRole("spinbutton", { name: /^ETH/ }), {
+      target: { value: "0.08" },
+    });
+    expect(screen.getByText("A project listed here isn't linked onchain.")).toBeInTheDocument();
+    const actions = screen.getAllByRole("button", { name: "Make the market" });
+    expect(actions[actions.length - 1]).toBeDisabled();
+  });
+
   it("defaults to making the market with independent amounts on each side of the price", () => {
     render(<AddLiquidityForm state={state} tokenSymbol="MARKEE" />);
 

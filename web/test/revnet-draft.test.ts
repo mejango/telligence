@@ -1,7 +1,7 @@
 import { parseRevnetDraft, revnetDraftFileName } from "@/lib/revnet-draft";
 import { describe, expect, it } from "vitest";
 
-describe("Revnet .jb drafts", () => {
+describe("Revnet browser drafts", () => {
   it("imports the native wrapper into whitelisted create-form values", () => {
     const parsed = parseRevnetDraft(
       JSON.stringify({
@@ -52,6 +52,28 @@ describe("Revnet .jb drafts", () => {
     expect(() => parseRevnetDraft(JSON.stringify({ name: "not enough" }))).toThrow(
       /No Revnet create draft/,
     );
+  });
+
+  it("keeps a passed start waiting for a new date across a second restore", () => {
+    const draft = (start: unknown) =>
+      JSON.stringify({ name: "A", stages: [{ futureStartTimestamp: start }] });
+    const once = parseRevnetDraft(draft(1));
+    expect(once.stages[0].futureStartTimestamp).toBeNull();
+    const twice = parseRevnetDraft(draft(once.stages[0].futureStartTimestamp));
+    expect(twice.stages[0].futureStartTimestamp).toBeNull();
+  });
+
+  it("keeps every shop item a draft holds", () => {
+    const items = Array.from({ length: 65 }, (_, index) => ({ name: `Item ${index}`, price: "1" }));
+    const parsed = parseRevnetDraft(JSON.stringify({ name: "A", stages: [{}], store: { items } }));
+    expect(parsed.store?.items).toHaveLength(65);
+  });
+
+  it("keeps a custom asset's unread decimals unread", () => {
+    const parsed = parseRevnetDraft(
+      JSON.stringify({ name: "A", stages: [{}], customReserveAsset: { decimals: null } }),
+    );
+    expect(parsed.customReserveAsset.decimals).toBeNull();
   });
 
   it("uses a stable .jb filename", () => {

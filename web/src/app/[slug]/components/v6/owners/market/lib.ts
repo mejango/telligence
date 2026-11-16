@@ -1,24 +1,23 @@
 import { queryBendystrawFromBrowser } from "@/lib/bendystraw/client";
 import {
   IndexedLpPositionsOperation,
-  IndexedPoolLiquidityEventsOperation,
+  IndexedPoolRangesOperation,
 } from "@/lib/bendystraw/operations";
+import { migratedPoolKey, poolSqrtPriceX96, retiredPoolHooks } from "@/lib/buyback-pool-migration";
+import { rolloutAddress, rolloutChain } from "@/lib/protocol-rollout";
+import { ReviewRefusal } from "@/lib/review-refusal";
 import { getViemPublicClient } from "@/lib/wagmiTransports";
 import {
-  JBBuybackHookContracts,
-  jbBuybackHookRegistryAbi,
   JBChainId,
-  jbContractAddress,
   jbControllerAbi,
   JBCoreContracts,
   jbDirectoryAbi,
-  jbOmnichainDeployerAbi,
-  JBOmnichainDeployerContracts,
+  jbMultiTerminalAbi,
   jbPricesAbi,
   jbSplitsAbi,
   jbUniswapV4LpSplitHookAbi,
+  jbV6ContractAddress,
   NATIVE_TOKEN,
-  RevnetCoreContracts,
 } from "@bananapus/nana-sdk-core";
 import {
   buildCollectUniswapV4FeesTx,
@@ -26,6 +25,9 @@ import {
   getCashOutQuote,
   getCurrentRuleset,
   readUniswapV4PositionFees,
+  resolveProjectBuybackHook,
+  revnetCashOutFeeApplies,
+  revnetCashOutFeeTerminalExists,
   UNISWAP_PERMIT2_ADDRESS,
   UNISWAP_V4_INITIALIZE_TOPIC,
   UNISWAP_V4_MAX_TICK,
@@ -53,7 +55,9 @@ import {
   erc20Abi,
   formatUnits,
   Hex,
-  parseAbiItem,
+  isAddress,
+  keccak256,
+  parseAbi,
   PublicClient,
   toFunctionSelector,
   zeroAddress,
@@ -101,6 +105,13 @@ const EXTSLOAD_ABI = [
     stateMutability: "view",
     inputs: [{ name: "slot", type: "bytes32" }],
     outputs: [{ type: "bytes32" }],
+  },
+  {
+    type: "function",
+    name: "extsload",
+    stateMutability: "view",
+    inputs: [{ name: "slots", type: "bytes32[]" }],
+    outputs: [{ type: "bytes32[]" }],
   },
 ] as const;
 
@@ -163,7 +174,7 @@ type PoolKey = UniswapV4PoolKey;
 // ── Buyback hook resolution ───────────────────────────────────────────────────
 
 function v6Address(contract: string, chainId: JBChainId): Address | null {
-  const byChain = (jbContractAddress[6] as Record<string, Record<string, string>>)[contract];
+  const byChain = (jbV6ContractAddress as Record<string, Record<string, string>>)[contract];
   return (byChain?.[String(chainId)] as Address | undefined) ?? null;
 }
 
@@ -179,7 +190,7 @@ async function projectDataHook(
   chainId: JBChainId,
   projectId: bigint,
 ): Promise<DataHookInfo | null> {
-  const directory = jbContractAddress[6][JBCoreContracts.JBDirectory][chainId] as Address;
+  const directory = jbV6ContractAddress[JBCoreContracts.JBDirectory][chainId] as Address;
   const controller = await client.readContract({
     address: directory,
     abi: jbDirectoryAbi,
@@ -194,66 +205,6 @@ async function projectDataHook(
     args: [projectId],
   });
   return { dataHook: metadata.dataHook, rulesetId: BigInt(ruleset.id), weight: ruleset.weight };
-}
-
-/**
- * The project's ACTUAL buyback hook, or null when it has no buyback pool.
- * Recognizes the ruleset data hook against the known singleton wrappers — the
- * defaulting hookOf/terminal getters must NOT be trusted for a project that
- * doesn't route through the registry (they return a default → wrong pool):
- * REVOwner / JBBuybackHookRegistry → registry.hookOf(projectId);
- * JBOmnichainDeployer → unwrap extraDataHookOf and recognize that;
- * the concrete JBBuybackHook wired directly → itself; anything else → null.
- */
-async function projectBuybackHook(
-  client: PublicClient,
-  chainId: JBChainId,
-  projectId: bigint,
-): Promise<{ hook: Address | null; info: DataHookInfo | null }> {
-  const info = await projectDataHook(client, chainId, projectId).catch(() => null);
-  if (!info || info.dataHook === zeroAddress) return { hook: null, info };
-
-  const registry = v6Address(JBBuybackHookContracts.JBBuybackHookRegistry, chainId);
-  const revOwner = v6Address(RevnetCoreContracts.REVOwner, chainId);
-  const omni = v6Address(JBOmnichainDeployerContracts.JBOmnichainDeployer, chainId);
-  const concrete = v6Address(JBBuybackHookContracts.JBBuybackHook, chainId);
-  const lc = (a: string | null) => (a ?? "").toLowerCase();
-
-  const recognize = async (dataHook: Address): Promise<Address | null> => {
-    const d = dataHook.toLowerCase();
-    if (registry && (d === lc(registry) || d === lc(revOwner))) {
-      try {
-        const hook = await client.readContract({
-          address: registry,
-          abi: jbBuybackHookRegistryAbi,
-          functionName: "hookOf",
-          args: [projectId],
-        });
-        return hook && hook !== zeroAddress ? hook : null;
-      } catch {
-        return null;
-      }
-    }
-    if (concrete && d === lc(concrete)) return dataHook;
-    return null;
-  };
-
-  let hook = await recognize(info.dataHook);
-  if (!hook && omni && info.dataHook.toLowerCase() === lc(omni)) {
-    // The omnichain deployer inserts ITSELF as the data hook and stores the real one.
-    try {
-      const extra = await client.readContract({
-        address: omni,
-        abi: jbOmnichainDeployerAbi,
-        functionName: "extraDataHookOf",
-        args: [projectId, info.rulesetId],
-      });
-      if (extra.dataHook && extra.dataHook !== zeroAddress) hook = await recognize(extra.dataHook);
-    } catch {
-      hook = null;
-    }
-  }
-  return { hook, info };
 }
 
 // ── Pool state ────────────────────────────────────────────────────────────────
@@ -321,7 +272,9 @@ export async function readPoolSnapshot(
   // The pair token comes from the accounting contexts, not the hook, so both
   // resolve concurrently.
   const [{ hook }, pair] = await Promise.all([
-    projectBuybackHook(client, chainId, projectId),
+    // The hook the current ruleset calls when paid, through its data hook (the SDK's rule). An
+    // unreadable project shows no pool.
+    resolveProjectBuybackHook(client, { chainId, projectId }).catch(() => ({ hook: null })),
     pairTokenFor(client, chainId, projectId),
   ]);
   if (!hook || !poolManager) return { hook: hook ?? null, pool: null };
@@ -383,19 +336,17 @@ export async function readPoolSnapshot(
   };
 }
 
-// ── Pool composition via net ModifyLiquidity deltas ───────────────────────────
+// ── Pool composition ──────────────────────────────────────────────────────────
 
-const INIT_EVENT = parseAbiItem(
-  "event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)",
-);
-const MODIFY_EVENT = parseAbiItem(
-  "event ModifyLiquidity(bytes32 indexed id, address indexed sender, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)",
-);
+// Center answers -32005 for an eth_getLogs span of 500 blocks or more, on every chain.
+const SCAN_WINDOW = 500n;
+const SCAN_MAX_WINDOWS = 80;
 
-const SCAN_WINDOW = 45_000n;
-const SCAN_BATCH = 8;
-const SCAN_MAX_WINDOWS = 80; // ~3.6M blocks back before giving up
-const SCAN_REORG_OVERLAP = 128n;
+// Pool.State field offsets, from v4-core's StateLibrary.
+const POOL_TICKS_OFFSET = 4n;
+const POOL_TICK_BITMAP_OFFSET = 5n;
+// Center answers 413 to a call of about 7,000 slots.
+const EXTSLOAD_BATCH = 1_000;
 
 interface PoolLiquidityRange {
   tickLower: number;
@@ -411,66 +362,89 @@ export interface PoolComposition {
   ranges: PoolLiquidityRange[];
 }
 
-interface PoolLiquidityEvent {
-  key: string;
-  blockNumber: bigint;
-  tickLower: number;
-  tickUpper: number;
-  delta: bigint;
-}
-
-interface PoolHistoryCache {
-  initializeBlock: bigint;
-  throughBlock: bigint;
-  events: PoolLiquidityEvent[];
-}
-
-const compositionCache = new Map<string, PoolHistoryCache>();
-
-async function modifyLogsInRange(
+async function extsloadSlots(
   client: PublicClient,
   pool: PoolSnapshot,
-  fromBlock: bigint,
-  toBlock: bigint,
-): Promise<PoolLiquidityEvent[]> {
-  if (fromBlock > toBlock) return [];
-  const logs = await client.getLogs({
-    address: pool.poolManager,
-    event: MODIFY_EVENT,
-    args: { id: pool.poolId },
-    fromBlock,
-    toBlock,
-  });
-  return logs.map((log, index) => ({
-    key: `${log.transactionHash ?? log.blockHash ?? log.blockNumber}:${log.logIndex ?? index}`,
-    blockNumber: log.blockNumber ?? 0n,
-    tickLower: Number(log.args.tickLower),
-    tickUpper: Number(log.args.tickUpper),
-    delta: log.args.liquidityDelta ?? 0n,
-  }));
-}
-
-async function scanKnownPoolRange(
-  client: PublicClient,
-  pool: PoolSnapshot,
-  fromBlock: bigint,
-  toBlock: bigint,
-): Promise<PoolLiquidityEvent[]> {
-  const events: PoolLiquidityEvent[] = [];
-  let cursor = fromBlock;
-  while (cursor <= toBlock) {
-    const spans: { lo: bigint; hi: bigint }[] = [];
-    for (let n = 0; n < SCAN_BATCH && cursor <= toBlock; n++) {
-      const hi = cursor + SCAN_WINDOW - 1n > toBlock ? toBlock : cursor + SCAN_WINDOW - 1n;
-      spans.push({ lo: cursor, hi });
-      cursor = hi + 1n;
-    }
-    const batches = await Promise.all(
-      spans.map(({ lo, hi }) => modifyLogsInRange(client, pool, lo, hi)),
-    );
-    for (const batch of batches) events.push(...batch);
+  slots: Hex[],
+  blockNumber: bigint,
+): Promise<Hex[]> {
+  const batches: Hex[][] = [];
+  for (let index = 0; index < slots.length; index += EXTSLOAD_BATCH) {
+    batches.push(slots.slice(index, index + EXTSLOAD_BATCH));
   }
-  return events;
+  const values = await Promise.all(
+    batches.map((batch) =>
+      client.readContract({
+        address: pool.poolManager,
+        abi: EXTSLOAD_ABI,
+        functionName: "extsload",
+        args: [batch],
+        blockNumber,
+      }),
+    ),
+  );
+  return values.flat() as Hex[];
+}
+
+/**
+ * The pool's liquidity per price band, from PoolManager's tick bitmap and
+ * liquidityNet at one block. Covers every sender, and its cost does not grow
+ * with the pool's age. Bands are split at every initialized tick, so they are
+ * not individual positions.
+ */
+async function readPoolTickRanges(
+  client: PublicClient,
+  pool: PoolSnapshot,
+): Promise<PoolLiquidityRange[]> {
+  const blockNumber = await client.getBlockNumber();
+  const spacing = pool.key.tickSpacing;
+  const stateSlot = BigInt(uniswapV4PoolStateSlot(pool.poolId));
+  const mappingSlot = (key: number, offset: bigint) =>
+    keccak256(
+      encodeAbiParameters(
+        [{ type: "int256" }, { type: "uint256" }],
+        [BigInt(key), stateSlot + offset],
+      ),
+    );
+
+  const firstWord = Math.floor(-UNISWAP_V4_MAX_TICK / spacing) >> 8;
+  const lastWord = Math.floor(UNISWAP_V4_MAX_TICK / spacing) >> 8;
+  const wordCount = lastWord - firstWord + 1;
+  const words = await extsloadSlots(
+    client,
+    pool,
+    Array.from({ length: wordCount }, (_, index) =>
+      mappingSlot(firstWord + index, POOL_TICK_BITMAP_OFFSET),
+    ),
+    blockNumber,
+  );
+
+  const ticks: number[] = [];
+  words.forEach((word, index) => {
+    const bits = BigInt(word);
+    if (bits === 0n) return;
+    for (let bit = 0; bit < 256; bit += 1) {
+      if ((bits >> BigInt(bit)) & 1n) ticks.push(((firstWord + index) * 256 + bit) * spacing);
+    }
+  });
+  if (!ticks.length) return [];
+
+  const infos = await extsloadSlots(
+    client,
+    pool,
+    ticks.map((tick) => mappingSlot(tick, POOL_TICKS_OFFSET)),
+    blockNumber,
+  );
+  const ranges: PoolLiquidityRange[] = [];
+  let liquidity = 0n;
+  ticks.forEach((tick, index) => {
+    liquidity += BigInt.asIntN(128, BigInt(infos[index]) >> 128n);
+    if (index + 1 < ticks.length) {
+      ranges.push({ tickLower: tick, tickUpper: ticks[index + 1], liquidity });
+    }
+  });
+  if (liquidity !== 0n) throw new Error("Pool tick state does not net to zero.");
+  return ranges;
 }
 
 /** Value the pool's live ranges at its current price. */
@@ -500,169 +474,119 @@ function compositionFromRanges(
   };
 }
 
+/** Reject partial or shifting pages instead of valuing an incomplete pool. */
+async function completeIndexedPages<T>(
+  readPage: (offset: number) => Promise<{ items: T[]; totalCount?: number } | null>,
+  keyOf: (item: T) => string,
+): Promise<T[]> {
+  const items: T[] = [];
+  const keys = new Set<string>();
+  let totalCount: number | undefined;
+  do {
+    const page = await readPage(items.length);
+    const count = page?.totalCount;
+    if (
+      !page ||
+      !Array.isArray(page.items) ||
+      typeof count !== "number" ||
+      !Number.isSafeInteger(count) ||
+      count < 0 ||
+      (totalCount !== undefined && count !== totalCount)
+    ) {
+      throw new Error("Indexed pool pagination is unavailable or changed.");
+    }
+    totalCount = count;
+    if (
+      items.length + page.items.length > totalCount ||
+      (page.items.length === 0 && items.length < totalCount)
+    ) {
+      throw new Error("Indexed pool pagination is incomplete.");
+    }
+    for (const item of page.items) {
+      const key = keyOf(item);
+      if (keys.has(key)) throw new Error("Indexed pool pagination repeated a row.");
+      keys.add(key);
+      items.push(item);
+    }
+  } while (items.length < totalCount);
+  return items;
+}
+
+function isIndexedUint(value: unknown): value is string {
+  return typeof value === "string" && /^\d+$/u.test(value);
+}
+
+function validIndexedRange(range: { tickLower: number; tickUpper: number; liquidity: string }) {
+  return (
+    Number.isSafeInteger(range.tickLower) &&
+    Number.isSafeInteger(range.tickUpper) &&
+    range.tickLower >= -UNISWAP_V4_MAX_TICK &&
+    range.tickUpper <= UNISWAP_V4_MAX_TICK &&
+    range.tickLower < range.tickUpper &&
+    isIndexedUint(range.liquidity)
+  );
+}
+
 /**
- * The composition from bendystraw's ModifyLiquidity history: every indexed
- * delta netted per tick range — a few small queries instead of a log scan.
- * Null when the index has nothing for this pool, which reads the same as
- * "not indexed yet", so the caller scans onchain rather than presenting an
- * empty pool as fact.
+ * Bendystraw already nets PositionManager liquidity per range. Keep the same
+ * indexed coverage as the event history without downloading every change.
+ * No rows means coverage is unknown; explicit zero ranges mean fully withdrawn.
  */
 async function readIndexedPoolComposition(pool: PoolSnapshot): Promise<PoolComposition | null> {
   try {
-    const ranges = new Map<string, { tickLower: number; tickUpper: number; liquidity: bigint }>();
-    let seen = 0;
-    let offset = 0;
-    let totalCount = 0;
-    do {
-      const result = await queryBendystrawFromBrowser(
-        IndexedPoolLiquidityEventsOperation,
-        {
-          projectId: pool.projectId,
-          chainId: Number(pool.chainId),
-          version: 6,
-          limit: 1000,
-          offset,
-        },
-        Number(pool.chainId),
-      );
-      const page = result.buybackPoolLiquidityEvents?.items ?? [];
-      totalCount = result.buybackPoolLiquidityEvents?.totalCount ?? page.length;
-      if (!page.length) break;
-      offset += page.length;
-      for (const item of page) {
-        if (item.poolId.toLowerCase() !== pool.poolId.toLowerCase()) continue;
-        seen++;
-        const key = `${item.tickLower}:${item.tickUpper}`;
-        const entry = ranges.get(key) ?? {
-          tickLower: item.tickLower,
-          tickUpper: item.tickUpper,
-          liquidity: 0n,
-        };
-        entry.liquidity += BigInt(item.liquidityDelta);
-        ranges.set(key, entry);
-      }
-    } while (offset < totalCount);
-    if (!seen) return null;
-    return compositionFromRanges(pool, [...ranges.values()]);
+    const ranges = await completeIndexedPages(
+      async (offset) => {
+        const result = await queryBendystrawFromBrowser(
+          IndexedPoolRangesOperation,
+          {
+            projectId: pool.projectId,
+            chainId: Number(pool.chainId),
+            version: 6,
+            poolId: pool.poolId,
+            limit: 1000,
+            offset,
+          },
+          Number(pool.chainId),
+        );
+        return result.buybackPoolRanges;
+      },
+      (item) => {
+        if (
+          item.chainId !== Number(pool.chainId) ||
+          item.projectId !== pool.projectId ||
+          item.version !== 6 ||
+          item.poolId.toLowerCase() !== pool.poolId.toLowerCase() ||
+          !validIndexedRange(item)
+        ) {
+          throw new Error("Indexed liquidity range does not match this pool.");
+        }
+        return `${item.tickLower}:${item.tickUpper}`;
+      },
+    );
+    if (!ranges.length) return null;
+    return compositionFromRanges(
+      pool,
+      ranges.map(({ tickLower, tickUpper, liquidity }) => ({
+        tickLower,
+        tickUpper,
+        liquidity: BigInt(liquidity),
+      })),
+    );
   } catch {
     return null;
   }
 }
 
 /**
- * The pool's current reserves, reconstructed by netting every ModifyLiquidity
- * delta per tick range (all senders — composition covers the whole pool) back to
- * the pool's Initialize event, then valuing each surviving range at the current
- * price. Null when the RPC can't return the complete history.
+ * Current reserves from indexed PositionManager ranges, valued at the live
+ * price, or from live tick state when the index has nothing for this pool.
+ * Throws when the state read fails.
  */
-export async function fetchPoolComposition(pool: PoolSnapshot): Promise<PoolComposition | null> {
+export async function fetchPoolComposition(pool: PoolSnapshot): Promise<PoolComposition> {
   const indexed = await readIndexedPoolComposition(pool);
   if (indexed) return indexed;
-
   const client = getViemPublicClient(pool.chainId) as PublicClient;
-  const cacheKey = `${pool.chainId}:${pool.poolId}`;
-  const latest = await client.getBlockNumber();
-  let cached = compositionCache.get(cacheKey);
-  if (cached && latest < cached.throughBlock) {
-    compositionCache.delete(cacheKey);
-    cached = undefined;
-  }
-
-  let initializeBlock: bigint | null = cached?.initializeBlock ?? null;
-  let events: PoolLiquidityEvent[] = [];
-  if (cached) {
-    const overlapStart =
-      cached.throughBlock > SCAN_REORG_OVERLAP
-        ? cached.throughBlock - SCAN_REORG_OVERLAP + 1n
-        : cached.initializeBlock;
-    const fromBlock = overlapStart < cached.initializeBlock ? cached.initializeBlock : overlapStart;
-    events = cached.events.filter((event) => event.blockNumber < fromBlock);
-    events.push(...(await scanKnownPoolRange(client, pool, fromBlock, latest)));
-  } else {
-    // A pool-id-filtered Initialize lookup is normally one cheap request and
-    // gives an authoritative lower bound for every subsequent range scan.
-    try {
-      const inits = await client.getLogs({
-        address: pool.poolManager,
-        event: INIT_EVENT,
-        args: { id: pool.poolId },
-        fromBlock: 0n,
-        toBlock: latest,
-      });
-      initializeBlock = inits.reduce<bigint | null>((earliest, log) => {
-        const block = log.blockNumber;
-        if (block == null) return earliest;
-        return earliest == null || block < earliest ? block : earliest;
-      }, null);
-    } catch {
-      initializeBlock = null;
-    }
-
-    if (initializeBlock != null) {
-      events = await scanKnownPoolRange(client, pool, initializeBlock, latest);
-    } else {
-      // Range-limited RPC fallback: walk backwards in parallel batches until
-      // the Initialize event proves that the collected history is complete.
-      let cursor = latest;
-      let windows = 0;
-      while (initializeBlock == null && cursor >= 0n && windows < SCAN_MAX_WINDOWS) {
-        const spans: { lo: bigint; hi: bigint }[] = [];
-        for (let n = 0; n < SCAN_BATCH && cursor >= 0n && windows < SCAN_MAX_WINDOWS; n++) {
-          const hi = cursor;
-          const lo = hi >= SCAN_WINDOW ? hi - SCAN_WINDOW + 1n : 0n;
-          spans.push({ lo, hi });
-          cursor = lo === 0n ? -1n : lo - 1n;
-          windows++;
-        }
-        const results = await Promise.all(
-          spans.map(async ({ lo, hi }) => {
-            const [inits, mods] = await Promise.all([
-              client.getLogs({
-                address: pool.poolManager,
-                event: INIT_EVENT,
-                args: { id: pool.poolId },
-                fromBlock: lo,
-                toBlock: hi,
-              }),
-              modifyLogsInRange(client, pool, lo, hi),
-            ]);
-            return { inits, mods };
-          }),
-        );
-        for (const result of results) {
-          events.push(...result.mods);
-          for (const log of result.inits) {
-            const block = log.blockNumber;
-            if (block != null && (initializeBlock == null || block < initializeBlock)) {
-              initializeBlock = block;
-            }
-          }
-        }
-      }
-    }
-  }
-  if (initializeBlock == null) return null; // incomplete history — never show an invented composition
-
-  const uniqueEvents = new Map(events.map((event) => [event.key, event]));
-  events = [...uniqueEvents.values()].sort(
-    (a, b) => Number(a.blockNumber - b.blockNumber) || a.key.localeCompare(b.key),
-  );
-  compositionCache.set(cacheKey, { initializeBlock, throughBlock: latest, events });
-
-  const ranges = new Map<string, { tickLower: number; tickUpper: number; liquidity: bigint }>();
-  for (const event of events) {
-    const key = `${event.tickLower}:${event.tickUpper}`;
-    const entry = ranges.get(key) ?? {
-      tickLower: event.tickLower,
-      tickUpper: event.tickUpper,
-      liquidity: 0n,
-    };
-    entry.liquidity += event.delta;
-    ranges.set(key, entry);
-  }
-
-  const value = compositionFromRanges(pool, [...ranges.values()]);
-  return value;
+  return compositionFromRanges(pool, await readPoolTickRanges(client, pool));
 }
 
 // ── Wallet LP positions + full-exit removal ─────────────────────────────────
@@ -740,6 +664,8 @@ async function poolPositionTokenIds(
   const latest = await client.getBlockNumber();
   const cacheKey = `${pool.chainId}:${pool.poolId.toLowerCase()}:${positionManager.toLowerCase()}`;
   const cached = poolHistoryCache.get(cacheKey);
+  // A position with liquidity always has initialized ticks.
+  if (!cached && !(await readPoolTickRanges(client, pool)).length) return [];
 
   const ids = new Map<string, bigint>(cached?.ids);
   let initializeBlock = cached?.initializeBlock ?? null;
@@ -760,7 +686,10 @@ async function poolPositionTokenIds(
     // Known pool: only the blocks added since the last scan are unseen. A short
     // overlap keeps a shallow reorg from dropping a position.
     const from = cached.throughBlock > 16n ? cached.throughBlock - 16n : 0n;
-    if (latest >= from) absorb(await rawPoolLogs(client, pool, from, latest));
+    for (let start = from; start <= latest; start += SCAN_WINDOW) {
+      const end = start + SCAN_WINDOW - 1n;
+      absorb(await rawPoolLogs(client, pool, start, end < latest ? end : latest));
+    }
   } else {
     // Cold pool: walk back toward Initialize, several windows per round trip.
     // Sequential windows made this a minute-long wait on a pool a few hundred
@@ -865,12 +794,30 @@ async function positionFor(
  */
 async function readIndexedLpPositions(pool: PoolSnapshot): Promise<UserLpPosition[] | null> {
   try {
-    const result = await queryBendystrawFromBrowser(
-      IndexedLpPositionsOperation,
-      { chainId: Number(pool.chainId), poolId: pool.poolId, limit: 250 },
-      Number(pool.chainId),
+    const items = await completeIndexedPages(
+      async (offset) => {
+        const result = await queryBendystrawFromBrowser(
+          IndexedLpPositionsOperation,
+          { chainId: Number(pool.chainId), poolId: pool.poolId, limit: 250, offset },
+          Number(pool.chainId),
+        );
+        return result.buybackPoolPositions;
+      },
+      (item) => {
+        if (
+          item.chainId !== Number(pool.chainId) ||
+          item.poolId.toLowerCase() !== pool.poolId.toLowerCase() ||
+          !isAddress(item.owner, { strict: false }) ||
+          !validIndexedRange(item) ||
+          !isIndexedUint(item.tokenId) ||
+          !isIndexedUint(item.feesClaimed0) ||
+          !isIndexedUint(item.feesClaimed1)
+        ) {
+          throw new Error("Indexed position does not match this pool.");
+        }
+        return BigInt(item.tokenId).toString();
+      },
     );
-    const items = result.buybackPoolPositions?.items ?? [];
     if (!items.length) return null;
     return items
       .map((item) => {
@@ -984,6 +931,48 @@ export async function refreshUserLpPosition(
   account: Address,
 ): Promise<UserLpPosition> {
   return (await refreshPoolAndPosition(pool, tokenId, account)).position;
+}
+
+export interface MovableLpPosition {
+  /** The retired pool the position sits in. */
+  from: PoolSnapshot;
+  position: UserLpPosition;
+}
+
+/**
+ * The wallet's positions in the pools the project's buyback used before its current V4 hook.
+ * Mirrored in juicebox-money's market reads.
+ */
+export async function readMovableLpPositions(
+  pool: PoolSnapshot,
+  account: Address,
+): Promise<MovableLpPosition[]> {
+  const chainId = Number(pool.chainId);
+  const retired = retiredPoolHooks(
+    pool.key.hooks,
+    rolloutAddress("JBUniswapV4Hook", chainId),
+    rolloutChain(chainId)?.history.JBUniswapV4Hook,
+  );
+  const client = getViemPublicClient(pool.chainId) as PublicClient;
+  const found = await Promise.all(
+    retired.map(async (hooks) => {
+      const key = migratedPoolKey(pool.key, hooks);
+      const sqrtP = await poolSqrtPriceX96(client, chainId, key);
+      if (sqrtP === 0n) return [];
+      const from: PoolSnapshot = {
+        ...pool,
+        key,
+        poolId: uniswapV4PoolId(key),
+        sqrtP,
+        price: uniswapV4PriceFromSqrtPriceX96(sqrtP, pool.pairIsC0, pool.pair.decimals),
+      };
+      const positions = await readUserLpPositions(from, account);
+      return positions
+        .filter((position) => position.liquidity > 0n)
+        .map((position) => ({ from, position }));
+    }),
+  );
+  return found.flat();
 }
 
 /** An EOA reviews and signs in one sitting, so 20 minutes covers the round trip. */
@@ -1319,6 +1308,7 @@ export function prepareAddLiquidity(
 const ACTION_INCREASE_LIQUIDITY = "00";
 const ACTION_DECREASE_LIQUIDITY = "01";
 const ACTION_BURN_POSITION = "03";
+const ACTION_SETTLE = "0b";
 const ACTION_TAKE_PAIR = "11";
 
 type EditLiquidityKind = "increase" | "decrease" | "move" | "remove";
@@ -1351,6 +1341,42 @@ interface EditOperations {
   mint: AddLiquidityPlan | null;
   amount0Max: bigint;
   amount1Max: bigint;
+  /**
+   * A move only: the band it burns, and the most each currency may pull from
+   * the wallet once the burn's return is netted against the mint.
+   */
+  burned?: { tickLower: number; tickUpper: number; funding0: bigint; funding1: bigint };
+}
+
+/**
+ * Whether a move's mint, at the live price, still costs the wallet no more
+ * than reviewed once the burn's return is counted. The mint's own maxima bound
+ * what it takes in, not the difference the wallet pays.
+ */
+export function moveStillCovered(
+  move: Pick<
+    EditOperations,
+    "tickLower" | "tickUpper" | "liquidity" | "liquidityBefore" | "burned"
+  >,
+  sqrtP: bigint,
+): boolean {
+  if (!move.burned) return true;
+  const minted = uniswapV4AmountsForLiquidity(
+    sqrtP,
+    uniswapV4SqrtPriceX96AtTick(move.tickLower),
+    uniswapV4SqrtPriceX96AtTick(move.tickUpper),
+    move.liquidity,
+  );
+  const returned = uniswapV4AmountsForLiquidity(
+    sqrtP,
+    uniswapV4SqrtPriceX96AtTick(move.burned.tickLower),
+    uniswapV4SqrtPriceX96AtTick(move.burned.tickUpper),
+    move.liquidityBefore,
+  );
+  return (
+    minted.amount0 - returned.amount0 <= move.burned.funding0 &&
+    minted.amount1 - returned.amount1 <= move.burned.funding1
+  );
 }
 
 export interface EditLiquidityPlan extends EditOperations {
@@ -1372,6 +1398,45 @@ function closeActions(pool: PoolSnapshot, recipient: Address, value: bigint) {
     actions += ACTION_SWEEP;
   }
   return { actions, parameters };
+}
+
+/**
+ * The closing actions of a plan that burns one band to mint another. The mint's
+ * maxima bound what the mint takes in, not what the wallet pays once the burn's
+ * return is counted, so closing the net would let a price move pull more than
+ * was reviewed. This pays in exactly the reviewed caps (SETTLE, payer is the
+ * caller) and takes everything left over (TAKE_PAIR), which reverts when a
+ * currency is still owed: the wallet never pays more than the caps.
+ */
+function cappedCloseActions(
+  pool: PoolSnapshot,
+  recipient: Address,
+  value: bigint,
+  erc20Sides: ReadonlyArray<{ currency: Address; max: bigint }>,
+) {
+  let actions = "";
+  const parameters: Hex[] = [];
+  for (const currency of [pool.key.currency0, pool.key.currency1]) {
+    const cap = /^0x0{40}$/.test(currency)
+      ? value
+      : (erc20Sides.find((side) => side.currency.toLowerCase() === currency.toLowerCase())?.max ??
+        0n);
+    if (cap <= 0n) continue;
+    actions += ACTION_SETTLE;
+    parameters.push(
+      encodeAbiParameters(
+        [{ type: "address" }, { type: "uint256" }, { type: "bool" }],
+        [currency, cap, true],
+      ),
+    );
+  }
+  parameters.push(
+    encodeAbiParameters(
+      [{ type: "address" }, { type: "address" }, { type: "address" }],
+      [pool.key.currency0, pool.key.currency1, recipient],
+    ),
+  );
+  return { actions: `${actions}${ACTION_TAKE_PAIR}`, parameters };
 }
 
 function encodeUnlock(actions: string, parameters: Hex[]): Hex {
@@ -1649,6 +1714,7 @@ function editOperations(
     mint,
     amount0Max: mint.amount0Max,
     amount1Max: mint.amount1Max,
+    burned: { tickLower: position.tickLower, tickUpper: position.tickUpper, funding0, funding1 },
   };
 }
 
@@ -1663,9 +1729,10 @@ function editOperations(
  *   fees offset what it pays.
  * - Same band, less liquidity → DECREASE_LIQUIDITY + TAKE_PAIR: the freed
  *   share and unclaimed fees return to the wallet, behind 95% floors.
- * - New band → BURN_POSITION + MINT_POSITION + CLOSE×2 [+ SWEEP]: the burn's
- *   credit funds the mint inside the unlock; only the difference touches the
- *   wallet, in either direction. The part of each target the old position
+ * - New band → BURN_POSITION + MINT_POSITION + SETTLE per funded currency +
+ *   TAKE_PAIR: the burn's credit funds the mint inside the unlock; the wallet
+ *   pays in at most its reviewed caps and takes back whatever is left, and the
+ *   call reverts if a currency is still owed. The part of each target the old position
  *   already covers is shaved 1% so ~1% of price drift between review and
  *   execution still fits without wallet funding, matching the plain move.
  * - Nothing on either side → the full-exit removal.
@@ -1690,7 +1757,10 @@ export function prepareEditLiquidity(
     );
     unlockData = encodeUnlock(`${ops.actions}${ACTION_TAKE_PAIR}`, [...ops.parameters, takePair]);
   } else {
-    const close = closeActions(pool, recipient, ops.value);
+    const close =
+      ops.kind === "move"
+        ? cappedCloseActions(pool, recipient, ops.value, ops.erc20Sides)
+        : closeActions(pool, recipient, ops.value);
     unlockData = encodeUnlock(`${ops.actions}${close.actions}`, [
       ...ops.parameters,
       ...close.parameters,
@@ -1711,7 +1781,7 @@ export async function reverifyEditLiquidity(
 ): Promise<void> {
   const fresh = await refreshPoolAndPosition(pool, plan.tokenId, account);
   if (fresh.position.liquidity !== plan.liquidityBefore) {
-    throw new Error("This position changed. Review it again before sending.");
+    throw new ReviewRefusal("This position changed. Review it again before sending.");
   }
   if (plan.kind !== "move" && plan.kind !== "increase") return;
   const required = uniswapV4AmountsForLiquidity(
@@ -1720,8 +1790,14 @@ export async function reverifyEditLiquidity(
     uniswapV4SqrtPriceX96AtTick(plan.tickUpper),
     plan.kind === "move" ? plan.liquidity : plan.liquidityDelta,
   );
-  if (required.amount0 > plan.amount0Max || required.amount1 > plan.amount1Max) {
-    throw new Error("The pool price moved beyond the reviewed range. Review fresh amounts.");
+  if (
+    required.amount0 > plan.amount0Max ||
+    required.amount1 > plan.amount1Max ||
+    !moveStillCovered(plan, fresh.pool.sqrtP)
+  ) {
+    throw new ReviewRefusal(
+      "The pool price moved beyond the reviewed range. Review fresh amounts.",
+    );
   }
 }
 
@@ -1923,6 +1999,7 @@ export interface MarketSideEdit {
   liquidityDelta: bigint;
   amount0Max: bigint;
   amount1Max: bigint;
+  burned?: EditOperations["burned"];
 }
 
 export interface MarketEditPlan {
@@ -1963,6 +2040,7 @@ function sideEdit(
     liquidityDelta: ops.liquidityDelta,
     amount0Max: ops.amount0Max,
     amount1Max: ops.amount1Max,
+    burned: ops.burned,
   };
 }
 
@@ -2093,7 +2171,11 @@ export function prepareMarketEdit(
   if (!operations.length) throw new Error("This leaves the market as it is.");
 
   const value = operations.reduce((sum, ops) => sum + ops.value, 0n);
-  const close = closeActions(pool, recipient, value);
+  const erc20Sides = mergeErc20Sides(operations.map((ops) => ops.erc20Sides));
+  // A re-fit burns to mint, so the whole edit pays in its reviewed caps and takes the rest.
+  const close = operations.some((ops) => ops.burned)
+    ? cappedCloseActions(pool, recipient, value, erc20Sides)
+    : closeActions(pool, recipient, value);
   const sum = (pick: (ops: EditOperations) => bigint) =>
     operations.reduce((total, ops) => total + pick(ops), 0n);
   const holdingOf = (side: { edit: MarketSideEdit } | null) => side?.edit.holding ?? 0n;
@@ -2105,7 +2187,7 @@ export function prepareMarketEdit(
     token: token?.edit ?? null,
     pair: pair?.edit ?? null,
     value,
-    erc20Sides: mergeErc20Sides(operations.map((ops) => ops.erc20Sides)),
+    erc20Sides,
     tokenFlow: sum((ops) => ops.tokenFlow),
     pairFlow: sum((ops) => ops.pairFlow),
     tokenFunding: sum((ops) => ops.tokenFunding),
@@ -2133,7 +2215,7 @@ export async function reverifyMarketEdit(
     const fresh = await refreshPoolAndPosition(pool, side.tokenId, account);
     sqrtP = fresh.pool.sqrtP;
     if (fresh.position.liquidity !== side.liquidityBefore) {
-      throw new Error("A position in this market changed. Review it again before sending.");
+      throw new ReviewRefusal("A position in this market changed. Review it again before sending.");
     }
   }
   for (const side of [plan.token, plan.pair]) {
@@ -2145,8 +2227,14 @@ export async function reverifyMarketEdit(
       uniswapV4SqrtPriceX96AtTick(side.tickUpper),
       side.kind === "increase" ? side.liquidityDelta : side.liquidity,
     );
-    if (required.amount0 > side.amount0Max || required.amount1 > side.amount1Max) {
-      throw new Error("The pool price moved beyond the reviewed range. Review fresh amounts.");
+    if (
+      required.amount0 > side.amount0Max ||
+      required.amount1 > side.amount1Max ||
+      !moveStillCovered(side, sqrtP)
+    ) {
+      throw new ReviewRefusal(
+        "The pool price moved beyond the reviewed range. Review fresh amounts.",
+      );
     }
   }
 }
@@ -2217,7 +2305,9 @@ export async function reverifyAddLiquidity(
     plan.liquidity,
   );
   if (required.amount0 > plan.amount0Max || required.amount1 > plan.amount1Max) {
-    throw new Error("The pool price moved beyond the reviewed range. Review fresh amounts.");
+    throw new ReviewRefusal(
+      "The pool price moved beyond the reviewed range. Review fresh amounts.",
+    );
   }
 }
 
@@ -2225,6 +2315,7 @@ export async function reverifyAddLiquidity(
 
 export interface AmmChainState {
   chainId: JBChainId;
+  projectId: bigint;
   hook: Address | null;
   pool: PoolSnapshot | null;
   composition: PoolComposition | null;
@@ -2277,13 +2368,15 @@ async function issuanceCeilingOf(
   }
 }
 
+const EMPTY_REFERENCE: MarketReferencePrices = { issuance: null, cashOut: null };
+
 /**
  * The ceiling and floor the pool trades between, both in pair tokens per
  * project token. Read best-effort: either half degrades to null on its own.
  *
- * The cash-out quote is hook-blind (`currentReclaimableSurplusOf` skips data
- * hooks) and display-only — transactions must quote through the hook-aware
- * path. It is taken in the accounting context's own terms, so no price-feed
+ * The cash-out quote is display-only (`currentReclaimableSurplusOf` skips data
+ * hooks, so the revnet's fee is netted here) — transactions must quote through
+ * the hook-aware path. It is taken in the accounting context's own terms, so no price-feed
  * conversion is involved.
  */
 async function readMarketReferencePrices(
@@ -2293,37 +2386,54 @@ async function readMarketReferencePrices(
 ): Promise<MarketReferencePrices> {
   const client = providedClient ?? (getViemPublicClient(pool.chainId) as PublicClient);
 
+  const current = await getCurrentRuleset(client, { chainId: pool.chainId, projectId }).catch(
+    () => null,
+  );
+  if (!current) return EMPTY_REFERENCE;
+  const cashOutTaxRate = BigInt(current.metadata.cashOutTaxRate);
+  const token = pool.pair.addr === zeroAddress ? NATIVE_TOKEN : pool.pair.addr;
+
   const [issuance, cashOut] = await Promise.all([
+    issuanceCeilingOf(client, {
+      chainId: pool.chainId,
+      projectId,
+      weight: current.ruleset.weight,
+      baseCurrency: Number(current.metadata.baseCurrency),
+      pairCurrency: pool.pair.currency,
+    }).catch(() => null),
     (async () => {
-      const current = await getCurrentRuleset(client, { chainId: pool.chainId, projectId });
-      return issuanceCeilingOf(client, {
-        chainId: pool.chainId,
-        projectId,
-        weight: current.ruleset.weight,
-        baseCurrency: Number(current.metadata.baseCurrency),
-        pairCurrency: pool.pair.currency,
-      });
-    })().catch(() => null),
-    (async () => {
-      // Quote the largest whole token unit the supply supports, never a scaled
-      // one-token extrapolation: cash-out is nonlinear, and on a few-decimal
-      // accounting token a one-token reclaim floors to zero at large supplies.
+      // What one token reclaims net of the revnet's own fee and the protocol fee, as the cash
+      // out review shows it. An unreadable fee terminal assumes the fee, never overstating the
+      // floor; with a zero tax the protocol fee depends on the fee-free surplus, read here.
+      const [feeTerminalExists, feeFreeSurplus] = await Promise.all([
+        revnetCashOutFeeTerminalExists(client, { chainId: pool.chainId, token }).catch(() => true),
+        cashOutTaxRate === 0n
+          ? client.readContract({
+              address: v6Address(JBCoreContracts.JBMultiTerminal, pool.chainId)!,
+              abi: jbMultiTerminalAbi,
+              functionName: "feeFreeSurplusOf",
+              args: [projectId, token],
+            })
+          : undefined,
+      ]);
       const quote = await getCashOutQuote(client, {
         chainId: pool.chainId,
         projectId,
         cashOutCount: 10n ** 18n,
         decimals: BigInt(pool.pair.decimals),
         currency: BigInt(pool.pair.currency),
+        cashOutTaxRate,
+        feeFreeSurplus,
+        revnetFeeApplies: revnetCashOutFeeApplies({ cashOutTaxRate, feeTerminalExists }) === true,
       });
-      const value = Number(formatUnits(quote.reclaimAmount, pool.pair.decimals));
+      if (quote.reclaimAmountAfterFee === undefined) return null;
+      const value = Number(formatUnits(quote.reclaimAmountAfterFee, pool.pair.decimals));
       return Number.isFinite(value) && value > 0 ? value : null;
     })().catch(() => null),
   ]);
 
   return { issuance, cashOut };
 }
-
-const EMPTY_REFERENCE: MarketReferencePrices = { issuance: null, cashOut: null };
 
 export interface SolvedRange {
   minPrice: number;
@@ -2436,7 +2546,7 @@ export async function fetchAmmReferences(
       const reference = pool
         ? await readReference(pool, projectId).catch(() => EMPTY_REFERENCE)
         : EMPTY_REFERENCE;
-      return { chainId, hook, pool, composition: null, reference };
+      return { chainId, projectId, hook, pool, composition: null, reference };
     }),
   );
 }
@@ -2459,6 +2569,17 @@ export async function fetchAmmStates(chains: ChainProject[]): Promise<AmmChainSt
  * surface; only the fee-project wiring differs.
  */
 export const lpSplitHookAbi = jbUniswapV4LpSplitHookAbi;
+
+/**
+ * The single-position reads of the hooks live projects use. 1.5.0 replaced them with
+ * ask and bid positions, so the SDK's current ABI no longer carries them; a 1.5.0 hook
+ * answers none and reads as having no position.
+ */
+const lpSplitHookPositionAbi = parseAbi([
+  "function tokenIdOf(uint256 projectId, address terminalToken) view returns (uint256)",
+  "function activeTickLowerOf(uint256 projectId, address terminalToken) view returns (int24)",
+  "function activeTickUpperOf(uint256 projectId, address terminalToken) view returns (int24)",
+]);
 
 /** Reserved-token split group id (JBSplitGroupIds.RESERVED_TOKENS). */
 const RESERVED_SPLIT_GROUP = 1n;
@@ -2498,7 +2619,7 @@ export async function fetchSplitHookStates(chains: ChainProject[]): Promise<Spli
         const client = getViemPublicClient(chainId) as PublicClient;
         const info = await projectDataHook(client, chainId, projectId);
         if (!info) return null;
-        const splitsAddr = jbContractAddress[6][JBCoreContracts.JBSplits][chainId] as Address;
+        const splitsAddr = jbV6ContractAddress[JBCoreContracts.JBSplits][chainId] as Address;
         const splits = await client.readContract({
           address: splitsAddr,
           abi: jbSplitsAbi,
@@ -2588,7 +2709,7 @@ export async function fetchSplitHookStates(chains: ChainProject[]): Promise<Spli
             rd(
               client.readContract({
                 address: hook,
-                abi: lpSplitHookAbi,
+                abi: lpSplitHookPositionAbi,
                 functionName: "tokenIdOf",
                 args: [projectId, primary.token],
               }),
@@ -2596,7 +2717,7 @@ export async function fetchSplitHookStates(chains: ChainProject[]): Promise<Spli
             rd(
               client.readContract({
                 address: hook,
-                abi: lpSplitHookAbi,
+                abi: lpSplitHookPositionAbi,
                 functionName: "activeTickLowerOf",
                 args: [projectId, primary.token],
               }),
@@ -2604,7 +2725,7 @@ export async function fetchSplitHookStates(chains: ChainProject[]): Promise<Spli
             rd(
               client.readContract({
                 address: hook,
-                abi: lpSplitHookAbi,
+                abi: lpSplitHookPositionAbi,
                 functionName: "activeTickUpperOf",
                 args: [projectId, primary.token],
               }),
@@ -2635,29 +2756,23 @@ export async function fetchSplitHookStates(chains: ChainProject[]): Promise<Spli
   return states.filter((s): s is SplitHookChainState => s !== null);
 }
 
-/** `deployPool(uint256)` — the next hook generation, which drops `minCashOutReturn`. */
-export const deployPoolSingleArgAbi = [
-  {
-    type: "function",
-    name: "deployPool",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "projectId", type: "uint256" }],
-    outputs: [],
-  },
-] as const;
+/** `deployPool(uint256,uint256)`: the generation live projects use, before 1.5.0 dropped `minCashOutReturn`. */
+export const deployPoolTwoArgAbi = parseAbi([
+  "function deployPool(uint256 projectId, uint256 minCashOutReturn)",
+]);
 
 /**
  * Which `deployPool` the hook at `hookAddress` actually exposes.
  *
- * Two generations exist during the lp-split-hook rollout: `deployPool(uint256,uint256)` (what
- * is deployed, and what the SDK's artifact-generated ABI carries) and `deployPool(uint256)`
- * (univ4-lp-split-hook-v6 HEAD, deployed nowhere yet). Different arity means a DIFFERENT
- * SELECTOR, so calling the wrong one reverts at simulate with nothing to explain why.
+ * Live projects use `deployPool(uint256,uint256)`; 1.5.0, the SDK's current ABI, has
+ * `deployPool(uint256)`. Different arity means a DIFFERENT SELECTOR, so calling the wrong one
+ * reverts at simulate with nothing to explain why.
  *
  * Solidity emits every external selector as a PUSH4 immediate in the dispatch table, so the
  * deployed bytecode answers this directly — one cached read, no revert-classification
- * guesswork and no simulating a write twice. Falls back to the two-argument form (what is
- * deployed today) when the code cannot be read.
+ * guesswork and no simulating a write twice. Hooks are minimal-proxy clones, so a clone's
+ * implementation is read instead. Falls back to the two-argument form (what live projects
+ * use) when the code cannot be read.
  */
 const deployPoolArityCache = new Map<string, 1 | 2>();
 
@@ -2670,7 +2785,10 @@ export async function deployPoolArity(
   if (cached) return cached;
   let arity: 1 | 2 = 2;
   try {
-    const code = await client.getCode({ address: hookAddress });
+    let code = await client.getCode({ address: hookAddress });
+    // A minimal proxy is PUSH20 <implementation> GAS DELEGATECALL in under 64 bytes.
+    const implementation = code && code.length < 2 + 128 && /73([0-9a-f]{40})5af4/i.exec(code)?.[1];
+    if (implementation) code = await client.getCode({ address: `0x${implementation}` });
     if (code && code !== "0x") {
       const body = code.toLowerCase();
       const singleArg = toFunctionSelector("deployPool(uint256)").slice(2);
@@ -2686,4 +2804,37 @@ export async function deployPoolArity(
   }
   deployPoolArityCache.set(key, arity);
   return arity;
+}
+
+/** True when a liquidity edit moves new funds into the pool, rather than only withdrawing. */
+export function addsFunds(plan: { tokenFunding: bigint; pairFunding: bigint }): boolean {
+  return plan.tokenFunding > 0n || plan.pairFunding > 0n;
+}
+
+/**
+ * Which side the wallet cannot fund, or null. Gated on what the pool pulls,
+ * not on the maxima, whose 1% headroom is spent only if the price moves. A
+ * change that pays in its caps (paysCap) must hold them whole, and native
+ * value is sent whole, headroom included. A side that pulls nothing is not
+ * read against a balance, so a failed read never blocks a withdrawal.
+ */
+export function liquidityShortfall(
+  plan: {
+    tokenFlow: bigint;
+    tokenFunding: bigint;
+    pairFlow: bigint;
+    pairFunding: bigint;
+    value: bigint;
+  },
+  paysCap: boolean,
+  held: { token: bigint; pair: bigint } | undefined,
+): "unread" | "token" | "pair" | null {
+  const tokenNeed = paysCap ? plan.tokenFunding : plan.tokenFlow;
+  const flowNeed = paysCap ? plan.pairFunding : plan.pairFlow;
+  const pairNeed = plan.value > flowNeed ? plan.value : flowNeed;
+  if (tokenNeed <= 0n && pairNeed <= 0n) return null;
+  if (!held) return "unread";
+  if (tokenNeed > held.token) return "token";
+  if (pairNeed > held.pair) return "pair";
+  return null;
 }

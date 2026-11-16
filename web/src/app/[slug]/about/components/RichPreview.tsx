@@ -10,7 +10,7 @@ export const RichPreview = ({ source }: { source: string }) => {
   try {
     return (
       <ProjectRichText
-        className="break-words [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:decoration-teal-500"
+        className="break-words [&>*+*]:mt-3 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:decoration-teal-500"
         source={source.trim()}
       />
     );

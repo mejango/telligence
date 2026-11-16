@@ -13,6 +13,7 @@ import {
   IndexedBuybackPoolsOperation,
   IndexedLpPositionsOperation,
   IndexedPoolLiquidityEventsOperation,
+  IndexedPoolRangesOperation,
   IndexedPoolSwapsOperation,
   IndexedProjectsOperation,
   IndexedSuckerGroupOperation,
@@ -24,12 +25,14 @@ import {
   PermissionHoldersOperation,
   ProjectAccountingContextOperation,
   ProjectErc20TickersOperation,
-  ProjectMomentsOperation,
   ProjectOperation,
   ProjectOperatorOperation,
   ProjectPayersOperation,
+  ProjectPayNoticeOperation,
   ProjectsByOwnerOperation,
+  ProjectTokenBalanceMomentsOperation,
   ProjectWithPermissionsOperation,
+  RouterPendingCallsOperation,
   ShieldGroupOperation,
   ShieldProjectOperation,
   StoreAutoIssuanceAmountEventsOperation,
@@ -57,6 +60,9 @@ const ACTIVITY_EVENT_FIELDS = `
     from
     txHash
     amountUsd
+    token
+    decimals
+    tokenSymbol
     caller
     distributionFromProjectId
     projectId
@@ -70,11 +76,20 @@ const ACTIVITY_EVENT_FIELDS = `
     beneficiary
     reclaimAmount
     reclaimAmountUsd
+    token
+    decimals
+    tokenSymbol
     cashOutCount
     metadata
+    holder
     project { id projectId handle version }
   }
-  addToBalanceEvent { txHash timestamp from amount memo }
+  bridgeToOutboxEvent { txHash timestamp caller peerChainId projectTokenCount sucker }
+  bridgeClaimEvent { txHash timestamp beneficiary peerChainId projectTokenCount }
+  borrowLoanEvent { txHash timestamp from beneficiary collateral }
+  repayLoanEvent { txHash timestamp caller }
+  liquidateLoanEvent { txHash timestamp caller }
+  addToBalanceEvent { txHash timestamp from amount amountUsd memo token decimals tokenSymbol }
   mintTokensEvent {
     id txHash timestamp from caller beneficiary beneficiaryTokenCount memo
   }
@@ -93,12 +108,13 @@ const ACTIVITY_EVENT_FIELDS = `
     txHash timestamp from caller direction terminalTokenAmount projectTokenAmount
   }
   buybackPoolEvent { txHash timestamp from caller }
+  mintNftEvent { txHash timestamp from beneficiary hook tierId tokenId totalAmountPaid }
   sendPayoutsEvent {
-    txHash timestamp from caller amount amountPaidOut amountPaidOutUsd
+    txHash timestamp from caller amount amountPaidOut amountPaidOutUsd token decimals tokenSymbol
   }
   sendReservedTokensToSplitsEvent { txHash timestamp from tokenCount }
   sendReservedTokensToSplitEvent {
-    id txHash timestamp from tokenCount beneficiary splitProjectId
+    id txHash timestamp from tokenCount beneficiary splitProjectId hook
   }
 `;
 
@@ -128,15 +144,18 @@ const INDEXED_PROJECT_FIELDS = `
   name
   handle
   logoUri
+  metadataUri
   projectTagline
   tokenSymbol
   decimals
   currency
   isRevnet
   createdAt
-  volume
+  volumeUsd
+  accountingTokenCount
   trendingScore
   trendingVolume
+  trendingVolumeUsd
   trendingPaymentsCount
 `;
 
@@ -146,6 +165,17 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
     query: `query Project($projectId: Float!, $chainId: Float!, $version: Float!) {
       project(projectId: $projectId, chainId: $chainId, version: $version) {
         ${PROJECT_FIELDS}
+      }
+    }`,
+  },
+  [ProjectPayNoticeOperation.id]: {
+    operationName: "ProjectPayNotice",
+    query: `query ProjectPayNotice($projectId: Float!, $chainId: Float!, $version: Float!) {
+      project(projectId: $projectId, chainId: $chainId, version: $version) {
+        chainId
+        projectId
+        version
+        payDisclosure
       }
     }`,
   },
@@ -214,6 +244,8 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
             tokenSymbol
             version
             suckerGroupId
+            accountingTokenCount
+            projectTokenBalances { items { token tokenSymbol decimals balance balanceUsd } }
           }
         }
       }
@@ -273,7 +305,7 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
           timestamp
           txHash
           project {
-            id projectId chainId handle version name logoUri projectTagline
+            id projectId chainId handle version name logoUri metadataUri projectTagline
             tokenSymbol decimals isRevnet suckerGroupId
           }
           ${ACTIVITY_EVENT_FIELDS}
@@ -328,6 +360,9 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
           from
           txHash
           amountUsd
+          token
+          decimals
+          tokenSymbol
           caller
           distributionFromProjectId
           projectId
@@ -351,6 +386,9 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
           beneficiary
           reclaimAmount
           reclaimAmountUsd
+          token
+          decimals
+          tokenSymbol
           cashOutCount
           metadata
           project { projectId handle version chainId name tokenSymbol decimals }
@@ -672,7 +710,7 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
         limit: 1000
         after: $after
       ) {
-        items { timestamp balance volume tokenSupply suckerGroupId version accountingTokenUsdRate }
+        items { timestamp balance balanceUsd volumeUsd tokenSupply suckerGroupId version accountingTokenUsdRate }
         pageInfo { hasNextPage endCursor }
       }
     }`,
@@ -687,27 +725,27 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
         limit: 1000
         after: $after
       ) {
-        items { suckerGroupId timestamp amount }
+        items { suckerGroupId timestamp amountUsd }
         pageInfo { hasNextPage endCursor }
       }
     }`,
   },
-  [ProjectMomentsOperation.id]: {
-    operationName: "ProjectMoments",
-    query: `query ProjectMoments(
+  [ProjectTokenBalanceMomentsOperation.id]: {
+    operationName: "ProjectTokenBalanceMoments",
+    query: `query ProjectTokenBalanceMoments(
       $projectId: Int!
       $chainId: Int!
       $version: Int!
       $after: String
     ) {
-      projectMoments(
+      projectTokenBalanceMoments(
         where: { projectId: $projectId, chainId: $chainId, version: $version }
         orderBy: "timestamp"
         orderDirection: "asc"
         limit: 1000
         after: $after
       ) {
-        items { projectId chainId version timestamp balance }
+        items { projectId chainId version token decimals timestamp balance tokenUsdRate }
         pageInfo { hasNextPage endCursor }
       }
     }`,
@@ -724,20 +762,19 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
       ) {
         totalCount
         items {
-          id balance volume
+          id balanceUsd volumeUsd
           projects(limit: 8, orderBy: "chainId", orderDirection: "asc") {
             items {
-              balance
-              decimals
-              currency
+              balanceUsd
               chainId
               name
               projectTagline
-              tokenSymbol
               logoUri
+              metadataUri
               projectId
               version
               isRevnet
+              projectTokenBalances { items { token tokenSymbol decimals balance balanceUsd usdRate } }
             }
           }
         }
@@ -808,7 +845,7 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
     query: `query V6AutoIssueEvents($where: autoIssueEventFilter, $limit: Int, $offset: Int) {
       autoIssueEvents(where: $where, limit: $limit, offset: $offset) {
         totalCount
-        items { id chainId projectId version stageId beneficiary count }
+        items { id chainId projectId version stageId beneficiary count txHash }
       }
     }`,
   },
@@ -848,6 +885,7 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
         totalCount
         items {
           chainId
+          poolId
           tokenId
           owner
           tickLower
@@ -918,6 +956,36 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
           liquidityDelta
           liquidityAfter
           sqrtPriceX96
+        }
+      }
+    }`,
+  },
+  [IndexedPoolRangesOperation.id]: {
+    operationName: "IndexedPoolRanges",
+    query: `query IndexedPoolRanges(
+      $projectId: Int!
+      $chainId: Int!
+      $version: Int!
+      $poolId: String!
+      $limit: Int!
+      $offset: Int!
+    ) {
+      buybackPoolRanges(
+        where: { projectId: $projectId, chainId: $chainId, version: $version, poolId: $poolId }
+        orderBy: "tickLower"
+        orderDirection: "asc"
+        limit: $limit
+        offset: $offset
+      ) {
+        totalCount
+        items {
+          chainId
+          projectId
+          version
+          poolId
+          tickLower
+          tickUpper
+          liquidity
         }
       }
     }`,
@@ -1016,8 +1084,7 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
     operationName: "ShieldGroup",
     query: `query ShieldGroup($id: String!) {
       suckerGroup(id: $id) {
-        balance
-        volume
+        balanceUsd
         volumeUsd
         projects {
           items {
@@ -1027,10 +1094,10 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
             id
             name
             volumeUsd
-            volume
             token
             tokenSymbol
             decimals
+            projectTokenBalances { items { token tokenSymbol decimals balance balanceUsd usdRate } }
             participants(limit: 100) {
               totalCount
               items { address chainId projectId lastPaidTimestamp balance }
@@ -1040,6 +1107,25 @@ export const BENDYSTRAW_QUERY_REGISTRY: Readonly<Record<string, RegisteredQuery>
         }
       }
     }`,
+  },
+  // The complete original calldata is needed to authenticate each permissionless retry.
+  [RouterPendingCallsOperation.id]: {
+    operationName: "RouterPendingCalls",
+    query: `query RouterPendingCalls($chainId: Int!, $projectId: Int!, $gateway: String!, $limit: Int!, $offset: Int!) {
+    routerPendingCalls(
+      where: { chainId: $chainId, projectId: $projectId, gateway: $gateway, version: 6, status_in: [queued, retried] }
+      orderBy: "pendingCallId"
+      orderDirection: "asc"
+      limit: $limit
+      offset: $offset
+    ) {
+      totalCount
+      items {
+        chainId version gateway pendingCallId projectId sourceProjectId token amount retainedAmount
+        preferAddToBalance shouldReturnHeldFees beneficiary refundTo memo metadata callCommitment status
+      }
+    }
+  }`,
   },
 };
 

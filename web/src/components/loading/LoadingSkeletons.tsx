@@ -2,6 +2,7 @@ import { IpfsImage } from "@/components/IpfsImage";
 import { Revalidating } from "@/components/ui/Revalidating";
 import { Skeleton, SkeletonLines, SkeletonTable } from "@/components/ui/skeleton";
 import { type ProjectNavigationHint } from "@/lib/project-navigation";
+import { CardSkeleton } from "./CardSkeleton";
 
 function ActivityRows({ rows = 5 }: { rows?: number }) {
   return (
@@ -204,20 +205,6 @@ export function ProjectContentSkeleton({ segment }: { segment: string | null }) 
   }
 }
 
-export function CardSkeleton({ rows = 3, className = "" }: { rows?: number; className?: string }) {
-  return (
-    <div
-      role="status"
-      aria-label="Loading content"
-      className={`border border-melon-100 bg-melon-50 p-4 ${className}`}
-    >
-      <span className="sr-only">Loading content</span>
-      <Skeleton className="mb-4 h-4 w-28" />
-      <SkeletonLines lines={rows} />
-    </div>
-  );
-}
-
 export function TableSkeleton({ rows = 4, columns = 4 }: { rows?: number; columns?: number }) {
   return (
     <div role="status" aria-label="Loading table" className="bg-melon-50 p-4">
@@ -241,6 +228,60 @@ function NavigationSkeleton() {
   );
 }
 
+export function ProjectHeaderSkeleton({ hint }: { hint?: ProjectNavigationHint | null }) {
+  return (
+    <div className="mb-4 flex flex-col items-start gap-4 sm:mb-6 sm:flex-row sm:items-center">
+      {hint ? (
+        <>
+          <Revalidating as="div" pending className="w-fit shrink-0">
+            <IpfsImage
+              src={hint.logoUri}
+              alt=""
+              width={144}
+              height={144}
+              className="h-[120px] w-[120px] object-cover sm:size-36"
+              fallback={
+                <div className="flex h-[120px] w-[120px] items-center justify-center bg-zinc-100 text-3xl font-bold sm:size-36">
+                  {hint.name.slice(0, 1).toUpperCase()}
+                </div>
+              }
+            />
+          </Revalidating>
+          <div className="min-w-0 flex-1">
+            <Revalidating as="div" pending className="w-fit max-w-full">
+              <h1 className="break-words font-mono text-3xl font-bold">
+                {hint.ticker ? `${hint.ticker} ` : ""}
+                <span className="font-medium">{hint.name}</span>
+              </h1>
+            </Revalidating>
+            {hint.tagline ? (
+              <Revalidating as="div" pending className="mt-2 w-fit max-w-full">
+                <p className="text-sm text-zinc-600">{hint.tagline}</p>
+              </Revalidating>
+            ) : null}
+            <div className="mt-3 flex flex-wrap gap-4">
+              <Skeleton className="h-5 w-32" />
+              <Skeleton className="h-5 w-24" />
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <Skeleton className="h-[120px] w-[120px] shrink-0 sm:size-36" />
+          <div className="min-w-0 flex-1 space-y-3">
+            <Skeleton className="h-8 w-72 max-w-[75%]" />
+            <div className="flex flex-wrap gap-4">
+              <Skeleton className="h-5 w-32" />
+              <Skeleton className="h-5 w-24" />
+            </div>
+            <Skeleton className="h-4 w-96 max-w-[85%]" />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function ProjectPageSkeleton({ hint }: { hint?: ProjectNavigationHint | null }) {
   return (
     <div className="min-h-screen" role="status" aria-label="Loading project">
@@ -248,55 +289,7 @@ export function ProjectPageSkeleton({ hint }: { hint?: ProjectNavigationHint | n
       <NavigationSkeleton />
 
       <div className="w-full px-4 pt-6 sm:container">
-        <div className="mb-4 flex flex-col items-start gap-4 sm:mb-6 sm:flex-row sm:items-center">
-          {hint ? (
-            <>
-              <Revalidating as="div" pending className="w-fit shrink-0">
-                <IpfsImage
-                  src={hint.logoUri}
-                  alt=""
-                  width={144}
-                  height={144}
-                  className="h-[120px] w-[120px] object-cover sm:size-36"
-                  fallback={
-                    <div className="flex h-[120px] w-[120px] items-center justify-center bg-zinc-100 text-3xl font-bold sm:size-36">
-                      {hint.name.slice(0, 1).toUpperCase()}
-                    </div>
-                  }
-                />
-              </Revalidating>
-              <div className="min-w-0 flex-1">
-                <Revalidating as="div" pending className="w-fit max-w-full">
-                  <h1 className="break-words font-mono text-3xl font-bold">
-                    {hint.ticker ? `${hint.ticker} ` : ""}
-                    <span className="font-medium">{hint.name}</span>
-                  </h1>
-                </Revalidating>
-                {hint.tagline ? (
-                  <Revalidating as="div" pending className="mt-2 w-fit max-w-full">
-                    <p className="text-sm text-zinc-600">{hint.tagline}</p>
-                  </Revalidating>
-                ) : null}
-                <div className="mt-3 flex flex-wrap gap-4">
-                  <Skeleton className="h-5 w-32" />
-                  <Skeleton className="h-5 w-24" />
-                </div>
-              </div>
-            </>
-          ) : (
-            <>
-              <Skeleton className="h-[120px] w-[120px] shrink-0 sm:size-36" />
-              <div className="min-w-0 flex-1 space-y-3">
-                <Skeleton className="h-8 w-72 max-w-[75%]" />
-                <div className="flex flex-wrap gap-4">
-                  <Skeleton className="h-5 w-32" />
-                  <Skeleton className="h-5 w-24" />
-                </div>
-                <Skeleton className="h-4 w-96 max-w-[85%]" />
-              </div>
-            </>
-          )}
-        </div>
+        <ProjectHeaderSkeleton hint={hint} />
       </div>
 
       <div className="flex w-full flex-col gap-6 px-4 pb-5 md:flex-row md:gap-10 sm:container">

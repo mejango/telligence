@@ -1,8 +1,7 @@
 import type { RawRuleset } from "@/lib/nana/rulesets";
-import type { ExpectedPayoutReceipt } from "@/lib/payout-receipts";
+import { isStickyHook, stickyRecipientLabel } from "@/lib/sticky";
 import { getViemPublicClient } from "@/lib/wagmiTransports";
 import {
-  jbContractAddress,
   jbControllerAbi,
   JBCoreContracts,
   jbDirectoryAbi,
@@ -13,7 +12,9 @@ import {
   jbRulesetsAbi,
   jbSplitsAbi,
   jbTerminalStoreAbi,
+  jbV6ContractAddress,
 } from "@bananapus/nana-sdk-core";
+import type { ExpectedPayoutReceipt } from "@bananapus/nana-sdk-core/v6";
 import {
   type Abi,
   type Address,
@@ -93,7 +94,7 @@ export async function readPayoutOptions(
     return decodeFunctionResult({ abi, functionName, data: expected }) as T;
   };
   const directory = requiredAddress(
-    jbContractAddress[6][JBCoreContracts.JBDirectory][chainId] as Address,
+    jbV6ContractAddress[JBCoreContracts.JBDirectory][chainId] as Address,
     "Project directory",
   );
   const controller = requiredAddress(
@@ -265,8 +266,9 @@ export function payoutTokenAmount(option: PayoutOption, amount: bigint): bigint 
 
 export function payoutRecipients(option: PayoutOption, account: Address): string[] {
   const recipients = option.splits.map((split) => {
-    const destination =
-      split.hook !== zeroAddress
+    const destination = isStickyHook(split.hook, option.chainId)
+      ? stickyRecipientLabel(split, split.beneficiary)
+      : split.hook !== zeroAddress
         ? `hook ${split.hook}`
         : split.projectId !== 0n
           ? `project #${split.projectId} (${split.preferAddToBalance ? "add to balance" : "pay"}; tokens to ${split.beneficiary === zeroAddress ? account : split.beneficiary})`
@@ -296,7 +298,6 @@ export function buildPayoutCall(
   if (minTokensPaidOut > payoutTokenAmount(option, amount))
     throw new Error("The minimum exceeds the expected payout in terminal tokens.");
   const expectedPayout: ExpectedPayoutReceipt = {
-    kind: "payout",
     terminal: option.terminal,
     projectId: String(option.projectId),
     rulesetId: String(option.rulesetId),

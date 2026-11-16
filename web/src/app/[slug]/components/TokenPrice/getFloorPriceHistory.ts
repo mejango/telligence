@@ -4,19 +4,24 @@ import {
   SuckerGroupMomentsOperation,
 } from "@/lib/bendystraw/operations";
 import { queryBendystraw } from "@/lib/bendystraw/query.server";
+import { fetchProjectTokenBalanceMoments } from "@/lib/bendystraw/tokenBalanceMoments.server";
 import type { CashOutTaxSnapshot, SuckerGroupMoment } from "@/lib/bendystraw/types";
+import { groupMixesTokens } from "@/lib/tokenUtils";
 import {
   downsampleTimeSeries,
   getTokenCashOutQuoteEth,
   JB_TOKEN_DECIMALS,
 } from "@bananapus/nana-sdk-core";
 import { formatUnits, parseUnits } from "viem";
+import { getSuckerGroup } from "../../getSuckerGroup";
 import { explainCashOutChange } from "./explainCashOutChange";
 import type { PriceDataPoint } from "./getTokenPriceChartData";
 
 type FloorPriceOptions = {
   suckerGroupId: string;
   chainId: number;
+  projectId: number;
+  baseToken: string;
   baseTokenDecimals: number;
   currentCashOutTax?: number;
   projectStart: number;
@@ -81,12 +86,28 @@ async function fetchAllMoments(
 }
 
 export async function getFloorPriceHistory(options: FloorPriceOptions): Promise<PriceDataPoint[]> {
-  const { suckerGroupId, chainId, baseTokenDecimals, currentCashOutTax, projectStart } = options;
+  const { suckerGroupId, chainId, projectId, baseToken, baseTokenDecimals } = options;
+  const { currentCashOutTax, projectStart } = options;
 
-  const [taxSnapshots, moments] = await Promise.all([
+  const [taxSnapshots, moments, group] = await Promise.all([
     fetchAllTaxSnapshots(chainId, suckerGroupId),
     fetchAllMoments(chainId, suckerGroupId),
+    getSuckerGroup(suckerGroupId, chainId, projectId),
   ]);
+  // A group holding more than one token (or one whose tokens could not be read) may have a raw
+  // balance that adds unlike units. Its floor
+  // comes from the USD balance, expressed in the accounting token at that token's own indexed
+  // rate in force at each moment; a moment before any such rate is left out.
+  const accountingRates =
+    !group || groupMixesTokens(group.projects?.items ?? [])
+      ? (await fetchProjectTokenBalanceMoments(chainId, { projectId, chainId, version: 6 }))
+          .filter(
+            (moment) =>
+              moment.token.toLowerCase() === baseToken.toLowerCase() &&
+              usdRateOf(moment.tokenUsdRate) !== null,
+          )
+          .sort((a, b) => a.timestamp - b.timestamp)
+      : null;
 
   const dataPoints: PriceDataPoint[] = [];
   const orderedMoments = [...moments].sort((a, b) => a.timestamp - b.timestamp);
@@ -117,7 +138,15 @@ export async function getFloorPriceHistory(options: FloorPriceOptions): Promise<
 
     if (cashOutTax === undefined) continue;
 
-    const balance = BigInt(moment.balance);
+    let balance = BigInt(moment.balance);
+    let usdRate = moment.accountingTokenUsdRate;
+    if (accountingRates) {
+      usdRate =
+        accountingRates.findLast((rate) => rate.timestamp <= moment.timestamp)?.tokenUsdRate ??
+        null;
+      if (usdRate === null || moment.balanceUsd == null) continue;
+      balance = (BigInt(moment.balanceUsd) * 10n ** BigInt(baseTokenDecimals)) / BigInt(usdRate);
+    }
     const tokenSupply = BigInt(moment.tokenSupply);
     const floorPrice = calculateFloorPrice(balance, tokenSupply, cashOutTax, baseTokenDecimals);
     const current = {
@@ -132,9 +161,9 @@ export async function getFloorPriceHistory(options: FloorPriceOptions): Promise<
       floorPrice,
       cashOutChangeReason: explainCashOutChange(previous, current),
       totalSupply: String(moment.tokenSupply),
-      totalBalance: String(moment.balance),
+      totalBalance: String(balance),
       cashOutTaxRate: cashOutTax,
-      accountingTokenUsdRate: usdRateOf(moment.accountingTokenUsdRate),
+      accountingTokenUsdRate: usdRateOf(usdRate),
     });
     previous = current;
   }

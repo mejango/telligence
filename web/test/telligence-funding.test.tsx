@@ -9,15 +9,11 @@ const m = vi.hoisted(() => ({
   address: "0x1111111111111111111111111111111111111111",
   gateway: vi.fn(),
   read: vi.fn(),
-  write: vi.fn(),
-  receipt: vi.fn(),
+  run: vi.fn(),
+  following: false,
+  dismiss: vi.fn(),
   preview: vi.fn(),
   refresh: vi.fn(),
-  reverify: undefined as undefined | (() => Promise<void>),
-  beforeSubmission: undefined as undefined | (() => Promise<void>),
-  requireExecution: vi.fn(),
-  activity: vi.fn(),
-  updateActivity: vi.fn(),
 }));
 vi.mock("wagmi", () => ({ useAccount: () => ({ address: m.address }), useConfig: () => ({}) }));
 vi.mock("wagmi/actions", () => ({ getAccount: () => ({ address: m.address }) }));
@@ -37,34 +33,19 @@ vi.mock("@/components/ButtonWithWallet", () => ({
     </button>
   ),
 }));
-vi.mock("@/hooks/useReviewedWriteContract", () => ({
-  useWriteContract: (options: {
-    reverify: () => Promise<void>;
-    beforeSubmission: () => Promise<void>;
-  }) => {
-    m.reverify = options.reverify;
-    m.beforeSubmission = options.beforeSubmission;
-    return {
-      writeContractAsync: async (tx: unknown) => {
-        await m.reverify?.();
-        return m.write(tx);
-      },
-    };
-  },
-  requireOnchainExecution: (...args: unknown[]) => m.requireExecution(...args),
+vi.mock("@/hooks/useReviewedAction", () => ({
+  SAFE_PROPOSAL_PENDING_LINE: "This proposal is waiting in your Safe. Finish it there first.",
+  failedLine: (result: { error: string }) => result.error,
+  // The request and its hold options stand for the reviewed call.
+  reviewedCall: (request: object, options: object) => ({ ...request, ...options }),
+  useReviewedAction: () => ({ run: m.run, following: m.following, dismiss: m.dismiss }),
 }));
+vi.mock("@/lib/safe-connector", () => ({ isSafeConnection: () => false }));
 vi.mock("@/lib/telligence/api", () => ({
   gatewayRequest: (...args: unknown[]) => m.gateway(...args),
 }));
 vi.mock("@/lib/wagmiTransports", () => ({
   getViemPublicClient: () => ({ readContract: (...args: unknown[]) => m.read(...args) }),
-}));
-vi.mock("@/lib/waitForReceipt", () => ({
-  waitForReceiptWithRetry: (...args: unknown[]) => m.receipt(...args),
-}));
-vi.mock("@/lib/transaction-activity", () => ({
-  transactionActivityForHash: (...args: unknown[]) => m.activity(...args),
-  updateTransactionActivity: (...args: unknown[]) => m.updateActivity(...args),
 }));
 vi.mock("@/lib/view-as", () => ({ requireNoViewAs: vi.fn() }));
 vi.mock("@bananapus/nana-sdk-core/v6", async (original) => ({
@@ -151,10 +132,10 @@ function contribute() {
 beforeEach(() => {
   localStorage.clear();
   m.address = project.creatorAddress;
-  m.reverify = undefined;
   m.gateway.mockResolvedValue(config);
-  m.write.mockResolvedValue(hash);
-  m.receipt.mockResolvedValue(paidReceipt());
+  m.following = false;
+  m.run.mockReset();
+  m.run.mockResolvedValue({ status: "done", hashes: [hash, hash], receipts: [{}, paidReceipt()] });
   m.preview.mockResolvedValue({
     beneficiaryTokenCount: 12n * 10n ** 18n,
     reservedTokenCount: 8n * 10n ** 18n,
@@ -172,34 +153,62 @@ beforeEach(() => {
       })[functionName as "state"],
   );
 });
-describe("wallet-action:telligence-funding reviewed compute contributions", () => {
+type Action = {
+  account: string;
+  calls: { address: string; functionName: string; args: unknown[]; dependsOnPrior?: boolean }[];
+  scope?: string;
+  reverify: () => Promise<void>;
+  assertWriteState: () => void;
+};
+const action = () => m.run.mock.calls[0][0] as Action;
+
+describe("reviewed compute contributions", () => {
   it.each(["1", "2"])(
-    "approves exactly the amount and pays the stock terminal for policy version %s",
+    "reviews the exact approval and the stock terminal payment as one action for policy version %s",
     async (policyVersion) => {
       m.gateway.mockResolvedValue({ ...config, policyVersion });
       render(<FundComputeProject project={project} />);
       contribute();
       await screen.findByText(/Contribution confirmed/);
-      expect(m.write).toHaveBeenCalledTimes(2);
-      expect(m.write.mock.calls[0][0]).toMatchObject({
+      expect(m.run).toHaveBeenCalledTimes(1);
+      const { account, calls, scope } = action();
+      expect(account).toBe(project.creatorAddress);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({
         address: VVV_ADDRESS,
         functionName: "approve",
         args: [terminal, 2n * 10n ** 18n],
       });
-      expect(m.write.mock.calls[1][0]).toMatchObject({ address: terminal, functionName: "pay" });
-      expect(m.preview.mock.invocationCallOrder[0]).toBeGreaterThan(
-        m.receipt.mock.invocationCallOrder[0],
-      );
+      expect(calls[1]).toMatchObject({
+        address: terminal,
+        functionName: "pay",
+        dependsOnPrior: true,
+      });
+      // A two-step action resumes by its scope: the payment's own intent.
+      expect(scope).toBeTruthy();
+      expect(m.refresh).toHaveBeenCalled();
     },
   );
-  it("rejects a substituted terminal before any token approval", async () => {
+  it("wallet-action:telligence-funding sends the payment alone when the allowance already covers it", async () => {
+    const original = m.read.getMockImplementation()!;
+    m.read.mockImplementation(async (arg) =>
+      arg.functionName === "allowance" ? 2n * 10n ** 18n : original(arg),
+    );
+    m.run.mockResolvedValue({ status: "done", hashes: [hash], receipts: [paidReceipt()] });
+    render(<FundComputeProject project={project} />);
+    contribute();
+    await screen.findByText(/Contribution confirmed/);
+    expect(action().calls.map((call) => call.functionName)).toEqual(["pay"]);
+    expect(action().scope).toBeUndefined();
+  });
+  it("rejects a substituted terminal before any review", async () => {
     m.gateway.mockResolvedValue({ ...config, canonicalTerminal: factory });
     render(<FundComputeProject project={project} />);
     contribute();
     await screen.findByRole("alert");
-    expect(m.write).not.toHaveBeenCalled();
+    expect(m.run).not.toHaveBeenCalled();
   });
-  it("does not ask for a wallet transaction after navigating away during preparation", async () => {
+  it("does not ask for a review after navigating away during preparation", async () => {
     let resolve!: (value: unknown) => void;
     m.gateway.mockReturnValue(
       new Promise((done) => {
@@ -214,90 +223,70 @@ describe("wallet-action:telligence-funding reviewed compute contributions", () =
       resolve(config);
       await new Promise((done) => setTimeout(done, 0));
     });
-    expect(m.write).not.toHaveBeenCalled();
+    expect(m.run).not.toHaveBeenCalled();
   });
-  it("stops before payment if the connected wallet changes after approval", async () => {
-    m.receipt.mockImplementation(async () => {
-      m.address = factory;
-      return { status: "success" };
-    });
+  it("refuses each step once the connected wallet changes", async () => {
     render(<FundComputeProject project={project} />);
     contribute();
-    await screen.findByRole("alert");
-    expect(m.write).toHaveBeenCalledTimes(1);
-    expect(m.preview).not.toHaveBeenCalled();
-  });
-  it("keeps an uncertain submitted payment and confirms it without paying again", async () => {
-    m.receipt
-      .mockResolvedValueOnce({ status: "success" })
-      .mockRejectedValueOnce(new Error("Receipt temporarily unavailable"));
-    render(<FundComputeProject project={project} />);
-    contribute();
-    await screen.findByRole("alert");
-    expect(m.write).toHaveBeenCalledTimes(2);
-    m.receipt.mockResolvedValue(paidReceipt());
-    fireEvent.click(screen.getByRole("button", { name: "Resume contribution" }));
     await screen.findByText(/Contribution confirmed/);
-    expect(m.write).toHaveBeenCalledTimes(2);
+    m.address = factory;
+    expect(() => action().assertWriteState()).toThrow(/wallet changed/i);
+    await expect(action().reverify()).rejects.toThrow(/wallet changed/i);
   });
-  it("retains a Safe outer success with no matching Pay event for recovery", async () => {
-    m.receipt
-      .mockResolvedValueOnce({ status: "success", logs: [] })
-      .mockResolvedValueOnce({ status: "success", logs: [] });
+  it("refuses each step once the backing starts winding down", async () => {
+    render(<FundComputeProject project={project} />);
+    contribute();
+    await screen.findByText(/Contribution confirmed/);
+    const original = m.read.getMockImplementation()!;
+    m.read.mockImplementation(async (arg) => (arg.functionName === "state" ? 1 : original(arg)));
+    await expect(action().reverify()).rejects.toThrow(/winding down/i);
+  });
+  it("does not confirm a Safe outer success with no matching Pay event", async () => {
+    m.run.mockResolvedValue({
+      status: "done",
+      hashes: [hash],
+      receipts: [{ status: "success", logs: [] }],
+    });
     render(<FundComputeProject project={project} />);
     contribute();
     await screen.findByRole("alert");
     expect(screen.queryByText(/Contribution confirmed/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Resume contribution" })).toBeInTheDocument();
-    expect(localStorage.getItem(`telligence:fund:8453:${project.id}:${m.address}`)).not.toBeNull();
+    expect(m.refresh).not.toHaveBeenCalled();
   });
-
-  it("never ignores an empty saved contribution record", async () => {
-    localStorage.setItem(`telligence:fund:8453:${project.id}:${m.address}`, "");
+  it("keeps a Safe proposal pending instead of confirming the contribution", async () => {
+    m.run.mockResolvedValue({ status: "proposed", step: 0, safeTxHash: hash });
     render(<FundComputeProject project={project} />);
     contribute();
-    await screen.findByRole("alert");
-    expect(m.write).not.toHaveBeenCalled();
-    expect(localStorage.getItem(`telligence:fund:8453:${project.id}:${m.address}`)).toBe("");
+    await screen.findByText(/waiting in your Safe/);
+    expect(screen.queryByText(/Contribution confirmed/)).not.toBeInTheDocument();
   });
-
-  it("confirms a saved payment from immutable onchain policy while the gateway is unavailable", async () => {
-    localStorage.setItem(
-      `telligence:fund:8453:${project.id}:${m.address}`,
-      JSON.stringify({
-        hash,
-        step: "payment",
-        amount: "2",
-        creator: m.address,
-        projectId: project.id,
-      }),
+  it("lets a supporter stop waiting on a sent payment without calling it confirmed or unsent", async () => {
+    const wait = Promise.withResolvers<null>();
+    m.following = true;
+    m.run.mockImplementation(
+      async (running: { onSubmitted: (call: object, step: number) => void }) => {
+        running.onSubmitted({}, 1);
+        return wait.promise;
+      },
     );
-    m.gateway.mockRejectedValue(new Error("Gateway unavailable"));
-    render(<FundComputeProject project={project} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Resume contribution" }));
-    await screen.findByText(/Contribution confirmed/);
-    expect(m.gateway).not.toHaveBeenCalled();
-    expect(m.write).not.toHaveBeenCalled();
-    expect(m.read).toHaveBeenCalledWith(
-      expect.objectContaining({ address: policy, functionName: "TERMINAL" }),
-    );
-  });
-
-  it("keeps an asynchronous Safe approval and resumes without another approval", async () => {
-    m.requireExecution.mockImplementationOnce(() => {
-      throw new Error("Safe approval awaiting execution");
-    });
     render(<FundComputeProject project={project} />);
     contribute();
-    await screen.findByRole("alert");
-    expect(m.write).toHaveBeenCalledTimes(1);
-    const original = m.read.getMockImplementation()!;
-    m.read.mockImplementation(async (arg) =>
-      arg.functionName === "allowance" ? 2n * 10n ** 18n : original(arg),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Resume contribution" }));
-    await screen.findByText(/Contribution confirmed/);
-    expect(m.write).toHaveBeenCalledTimes(2);
-    expect(m.write.mock.calls[1][0]).toMatchObject({ functionName: "pay" });
+    fireEvent.click(await screen.findByRole("button", { name: "Stop waiting" }));
+    expect(m.dismiss).toHaveBeenCalled();
+    // Core ends the wait with null and keeps following the payment.
+    await act(async () => wait.resolve(null));
+    expect(await screen.findByText(/Your contribution was sent/)).toBeInTheDocument();
+    expect(screen.queryByText(/Contribution confirmed/)).not.toBeInTheDocument();
+  });
+  it("shows a failed run's own line, and nothing for a closed review", async () => {
+    m.run.mockResolvedValueOnce({ status: "failed", error: "Nothing was sent.", failure: null });
+    render(<FundComputeProject project={project} />);
+    contribute();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Nothing was sent.");
+    m.run.mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByRole("button", { name: "Fund compute" }));
+    await waitFor(() => expect(m.run).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.queryByText(/Contribution confirmed/)).not.toBeInTheDocument();
   });
 });

@@ -17,11 +17,10 @@ vi.mock("@/components/EtherscanLink", () => ({
   default: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }));
 vi.mock("@/components/ui/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
-vi.mock("@/hooks/useReviewedWriteContract", () => ({
-  isSafeConnection: () => false,
-  submittedViaSafe: () => false,
-  requireOnchainExecution: vi.fn(),
-  useWriteContract: () => ({ writeContractAsync: vi.fn() }),
+vi.mock("@/lib/safe-connector", () => ({ useSafeConnection: () => false }));
+vi.mock("@/hooks/useReviewedAction", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useReviewedAction")>()),
+  useReviewedAction: () => ({ run: vi.fn() }),
 }));
 vi.mock("@/hooks/useReviewedRelayr", () => ({
   useGetRelayrTxQuote: () => ({ getRelayrTxQuote: vi.fn(), reset: vi.fn() }),
@@ -37,6 +36,8 @@ vi.mock("wagmi/actions", () => ({
   getAccount: () => ({ address: undefined, chainId: 1 }),
   getPublicClient: () => ({ readContract: () => new Promise(() => {}) }),
 }));
+
+vi.mock("@/lib/nana/groupWriteGate", () => import("./support/group-write-gate"));
 
 import { V6TokenPanel } from "@/app/[slug]/components/v6/owners/V6TokenPanel";
 import { installQueryPersistence, PERSIST, serializeState } from "@/lib/query-persist";

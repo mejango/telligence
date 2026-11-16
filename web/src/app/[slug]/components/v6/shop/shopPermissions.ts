@@ -74,7 +74,7 @@ export async function canSet721Metadata(
 }
 
 /** Mirrors `mintFor` authorization for owner/operator free mints. */
-export async function canMint721Tiers(
+async function canMint721Tiers(
   client: PublicClient,
   {
     chainId,

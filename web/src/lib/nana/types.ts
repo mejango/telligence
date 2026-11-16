@@ -60,7 +60,7 @@ type TransactionRequest = {
   data: `0x${string}`;
   value: `0x${string}`;
   gas_limit: `0x${string}`;
-  virtual_nonce: null | number;
+  virtual_nonce?: number;
 };
 
 type TransactionStatus =
@@ -82,20 +82,10 @@ type RelayrTransaction = {
   status: TransactionStatus;
 };
 
-type PerTransaction = {
-  gas_cost: number;
-  priced_in: {
-    asset: string;
-    type: string;
-  };
-  value: number;
-};
-
+/** A Relayr quote bound to the signed calls: its bundle and the payment options for it. */
 export type RelayrPostBundleResponse = {
   bundle_uuid: string;
   payment_info: ChainPayment[];
-  per_txn: PerTransaction[];
-  txn_uuids: string[];
 };
 
 export type RelayrGetBundleResponse = {

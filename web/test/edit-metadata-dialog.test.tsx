@@ -1,10 +1,15 @@
+import { SAFE_PROPOSAL_PENDING_LINE } from "@/lib/reviewed-call";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectEveryWayOutRefused } from "./support/confirm";
+import { groupGateState } from "./support/group-write-gate";
 
 const mocks = vi.hoisted(() => ({
   pinProjectMetadata: vi.fn(),
   refetch: vi.fn(),
+  refreshDisplay: vi.fn(),
+  refreshRoute: vi.fn(),
   writeContractAsync: vi.fn(),
   switchChainAsync: vi.fn(),
   getRelayrTxQuote: vi.fn(),
@@ -14,8 +19,11 @@ const mocks = vi.hoisted(() => ({
   waitForRelayrBundle: vi.fn(),
   simulateContract: vi.fn(),
   waitForReceipt: vi.fn(),
-  requireOnchainExecution: vi.fn(),
+  /** A Safe connection's step goes to the Safe as a proposal. */
+  proposed: false,
   safe: false,
+  /** The Relayr payment the wallet sent went to a Safe as a proposal. */
+  paymentViaSafe: false,
   connectedChainId: 11155111,
   verifyMetadataSource: vi.fn(),
   peerMetadata: {} as Record<number, Record<string, unknown>>,
@@ -26,6 +34,10 @@ const mocks = vi.hoisted(() => ({
     isLoading: boolean;
     refetch?: () => Promise<{ data?: unknown }>;
   },
+}));
+
+vi.mock("@/app/[slug]/invalidateProjectDisplay", () => ({
+  refreshProjectDisplay: mocks.refreshDisplay,
 }));
 
 vi.mock("@/app/create/helpers/pinProjectMetaData", () => ({
@@ -79,17 +91,31 @@ vi.mock("@/components/ButtonWithWallet", () => ({
   ),
 }));
 
-vi.mock("@/hooks/useReviewedWriteContract", () => ({
-  isSafeConnector: () => mocks.safe,
-  requireOnchainExecution: mocks.requireOnchainExecution,
-  submittedViaSafe: () => false,
-  useWaitForTransactionReceipt: () => ({ isLoading: false, isSuccess: false }),
-  useWriteContract: () => ({
-    data: undefined,
-    isPending: false,
-    writeContractAsync: mocks.writeContractAsync,
-  }),
+vi.mock("@/lib/held-rows", () => ({ submittedViaSafe: () => mocks.paymentViaSafe }));
+vi.mock("@/lib/safe-connector", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/safe-connector")>()),
+  useSafeConnection: () => mocks.safe,
 }));
+/** Core's run, after its review: each step sent, then its receipt (or its Safe proposal). */
+vi.mock("@/hooks/useReviewedAction", async (importOriginal) => {
+  const { reviewedActionState } = await import("./support/reviewed-action");
+  const run = vi.fn(async (action: import("@bananapus/nana-sdk-core/review").ReviewedAction) => {
+    const hashes: `0x${string}`[] = [];
+    for (const [step, call] of action.calls.entries()) {
+      await action.reverify?.(call, step, undefined);
+      await action.beforeWallet?.(call, step);
+      const hash = await mocks.writeContractAsync({ ...call, address: call.to }, action);
+      if (mocks.proposed) return { status: "proposed" as const, step, safeTxHash: hash };
+      await mocks.waitForReceipt(call.chainId, hash);
+      hashes.push(hash);
+    }
+    return { status: "done" as const, hashes, receipts: [] };
+  });
+  return {
+    ...(await importOriginal<typeof import("@/hooks/useReviewedAction")>()),
+    useReviewedAction: () => reviewedActionState(run),
+  };
+});
 
 vi.mock("@/hooks/useReviewedRelayr", () => ({
   requireRelayrRecoveryScopeAvailable: mocks.requireRelayrRecoveryScopeAvailable,
@@ -120,12 +146,15 @@ vi.mock("wagmi/actions", () => ({
 vi.mock("wagmi", () => ({
   useAccount: () => ({ address: `0x${"22".repeat(20)}`, chainId: mocks.connectedChainId }),
   useChainId: () => 11155111,
+  useConfig: () => ({}),
   useSwitchChain: () => ({ switchChainAsync: mocks.switchChainAsync }),
 }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn() }),
+  useRouter: () => ({ refresh: mocks.refreshRoute }),
 }));
+
+vi.mock("@/lib/nana/groupWriteGate", () => import("./support/group-write-gate"));
 
 import { EditMetadataDialog } from "@/app/[slug]/about/components/EditMetadataDialog";
 
@@ -137,7 +166,9 @@ const CURRENT_METADATA = {
   tags: ["defi"],
 };
 
-const PROJECTS = [{ chainId: 11155111, projectId: 4, token: `0x${"33".repeat(20)}` }] as any;
+const PROJECTS = [
+  { chainId: 11155111, projectId: 4, token: `0x${"33".repeat(20)}`, suckerGroupId: "group" },
+] as any;
 
 function renderDialog(projects = PROJECTS) {
   return render(
@@ -167,6 +198,13 @@ async function prefilledAdvancedTextarea() {
   return advancedTextarea();
 }
 
+/** The confirm, which replaces the editor's content in its dialog. */
+function confirmPanel() {
+  const panel = document.querySelector<HTMLElement>("[data-tx-confirm]");
+  expect(panel).not.toBeNull();
+  return panel!;
+}
+
 async function save() {
   fireEvent.click(screen.getByRole("button", { name: /^save changes$/i }));
 }
@@ -177,6 +215,7 @@ async function pinnedMetadata() {
 }
 
 beforeEach(() => {
+  groupGateState.reset();
   mocks.requireRelayrRecoveryScopeAvailable.mockImplementation(() => undefined);
   mocks.peerMetadata = {};
   mocks.controllers = {};
@@ -191,15 +230,28 @@ beforeEach(() => {
   mocks.metadata.refetch = mocks.refetch;
   mocks.connectedChainId = 11155111;
   mocks.safe = false;
+  mocks.paymentViaSafe = false;
   mocks.switchChainAsync.mockImplementation(async ({ chainId }: { chainId: number }) => {
     mocks.connectedChainId = chainId;
   });
   mocks.simulateContract.mockResolvedValue({});
   mocks.waitForReceipt.mockResolvedValue({ status: "success" });
-  mocks.requireOnchainExecution.mockImplementation(() => undefined);
+  mocks.proposed = false;
   mocks.sendRelayrTx.mockResolvedValue(`0x${"cd".repeat(32)}`);
   mocks.waitForRelayrBundle.mockResolvedValue(undefined);
+  mocks.refreshDisplay.mockResolvedValue(undefined);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
+});
+
+describe("EditMetadataDialog onchain group check", () => {
+  it("keeps Save off with one line when a listed project isn't linked onchain", async () => {
+    groupGateState.unverified = ["11155111:4"];
+    await openDialog();
+    await prefilledAdvancedTextarea();
+    expect(screen.getByRole("button", { name: /^save changes$/i })).toBeDisabled();
+    expect(screen.getByText("A project listed here isn't linked onchain.")).toBeInTheDocument();
+    expect(mocks.pinProjectMetadata).not.toHaveBeenCalled();
+  });
 });
 
 describe("EditMetadataDialog Relayr payment choice", () => {
@@ -216,6 +268,7 @@ describe("EditMetadataDialog Relayr payment choice", () => {
   const quote = { bundle_uuid: "metadata-bundle", payment_info: payments };
 
   it("relays all four testnet metadata destinations and waits for a testnet funding choice", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
     const chainIds = [11155111, 11155420, 84532, 421614];
     const testnetPayments = payments.map((payment, index) => ({
       ...payment,
@@ -247,12 +300,30 @@ describe("EditMetadataDialog Relayr payment choice", () => {
     expect(mocks.writeContractAsync).not.toHaveBeenCalled();
     expect(mocks.sendRelayrTx).not.toHaveBeenCalled();
     fireEvent.click(picker);
-    fireEvent.click(screen.getByRole("option", { name: /ETH on Base Sepolia/ }));
+    fireEvent.click(screen.getByRole("option", { name: "Base Sepolia (1 ETH)" }));
     fireEvent.click(confirm);
     await waitFor(() =>
       expect(mocks.sendRelayrTx).toHaveBeenCalledExactlyOnceWith(testnetPayments[1]),
     );
     expect(mocks.waitForRelayrBundle).toHaveBeenCalledExactlyOnceWith(quote.bundle_uuid);
+    await waitFor(() => expect(timers.mock.calls.some(([, delay]) => delay === 5000)).toBe(true));
+    const delayedRefresh = timers.mock.calls.findIndex(([, delay]) => delay === 5000);
+    clearTimeout(timers.mock.results[delayedRefresh].value);
+    const callback = timers.mock.calls[delayedRefresh][0];
+    expect(typeof callback).toBe("function");
+    let finishEviction!: () => void;
+    mocks.refreshDisplay.mockReturnValueOnce(
+      new Promise<void>((resolve) => (finishEviction = resolve)),
+    );
+    await act(async () => {
+      if (typeof callback === "function") callback();
+    });
+    expect(mocks.refreshDisplay).toHaveBeenCalledWith(
+      chainIds.map((chainId, index) => ({ chainId, projectId: index + 41, groupId: "group" })),
+    );
+    expect(mocks.refreshRoute).not.toHaveBeenCalled();
+    finishEviction();
+    await waitFor(() => expect(mocks.refreshRoute).toHaveBeenCalledOnce());
   });
 
   it("requires an explicit funding choice when the connected chain is not quoted", async () => {
@@ -272,15 +343,32 @@ describe("EditMetadataDialog Relayr payment choice", () => {
     const confirm = screen.getByRole("button", { name: "Pay and submit" });
     expect(picker).toHaveTextContent("Select chain");
     expect(confirm).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Back" })).not.toBeDisabled();
+    // Its way back stays open while the funding choice is missing.
+    expect(within(confirmPanel()).getByRole("button", { name: "Close" })).toBeEnabled();
     fireEvent.click(confirm);
     expect(mocks.sendRelayrTx).not.toHaveBeenCalled();
 
     fireEvent.click(picker);
-    fireEvent.click(screen.getByRole("option", { name: /1\.00000000 ETH on Base/ }));
+    fireEvent.click(screen.getByRole("option", { name: "Base (1 ETH)" }));
     expect(confirm).not.toBeDisabled();
-    expect(confirm).toHaveAttribute("data-target-chain", "8453");
     expect(screen.getByText("Pay 1.00000000 ETH to relay")).toBeInTheDocument();
+    fireEvent.click(confirm);
+    // The payment names Base; the Relayr payment switches the wallet to its chain.
+    await waitFor(() => expect(mocks.sendRelayrTx).toHaveBeenCalledWith(payments[1]));
+    expect(mocks.sendRelayrTx.mock.calls[0][0].chain).toBe(8453);
+  });
+
+  it("preselects a lone quote when the connected chain is not quoted", async () => {
+    mocks.connectedChainId = 10;
+    mocks.getRelayrTxQuote.mockResolvedValue({ ...quote, payment_info: [payments[1]] });
+    await openDialog(projects);
+    await prefilledAdvancedTextarea();
+    await save();
+
+    const picker = await screen.findByRole("combobox");
+    await waitFor(() => expect(picker).toHaveTextContent("Base (1 ETH)"));
+    const confirm = screen.getByRole("button", { name: "Pay and submit" });
+    expect(confirm).not.toBeDisabled();
     fireEvent.click(confirm);
     await waitFor(() => expect(mocks.sendRelayrTx).toHaveBeenCalledWith(payments[1]));
   });
@@ -300,16 +388,43 @@ describe("EditMetadataDialog Relayr payment choice", () => {
     await save();
 
     const picker = await screen.findByRole("combobox");
-    await waitFor(() => expect(picker).toHaveTextContent("1.00000000 ETH on Base"));
+    await waitFor(() => expect(picker).toHaveTextContent("Base (1 ETH)"));
     const confirm = screen.getByRole("button", { name: "Pay and submit" });
     expect(confirm).not.toBeDisabled();
-    expect(confirm).toHaveAttribute("data-target-chain", "8453");
     fireEvent.click(confirm);
+    // The payment names Base, the chain connected before signing moved the wallet.
     await waitFor(() => expect(mocks.sendRelayrTx).toHaveBeenCalledWith(payments[1]));
+    expect(mocks.sendRelayrTx.mock.calls[0][0].chain).toBe(8453);
+  });
+
+  it("ends on Done when the relay payment went to a Safe as a proposal", async () => {
+    mocks.connectedChainId = 8453;
+    mocks.paymentViaSafe = true;
+    mocks.getRelayrTxQuote.mockResolvedValue(quote);
+    await openDialog(projects);
+    await prefilledAdvancedTextarea();
+    await save();
+
+    const picker = await screen.findByRole("combobox");
+    await waitFor(() => expect(picker).toHaveTextContent("Base (1 ETH)"));
+    fireEvent.click(screen.getByRole("button", { name: "Pay and submit" }));
+
+    // Nothing is left to pay from here: Done, not the payment again.
+    const done = await within(confirmPanel()).findByRole("button", { name: "Done" });
+    expect(confirmPanel()).toHaveTextContent("Payment proposed to Safe.");
+    expect(within(confirmPanel()).queryByRole("button", { name: "Pay and submit" })).toBeNull();
+    expect(mocks.sendRelayrTx).toHaveBeenCalledExactlyOnceWith(payments[1]);
+    expect(mocks.waitForRelayrBundle).not.toHaveBeenCalled();
+
+    fireEvent.click(done);
+    await waitFor(() => expect(document.querySelector("[data-tx-confirm]")).toBeNull());
+    // Back on the editor, whose own Save is reachable again.
+    expect(screen.getByRole("button", { name: /^save changes$/i })).toBeVisible();
+    expect(mocks.sendRelayrTx).toHaveBeenCalledOnce();
   });
 });
 
-describe("wallet-action:metadata — EditMetadataDialog direct routing", () => {
+describe("EditMetadataDialog direct routing", () => {
   it.each([
     { route: "testnet Safe", chainIds: [11155111, 84532], safe: true },
     { route: "mixed mainnet and testnet EOA", chainIds: [1, 84532], safe: false },
@@ -335,10 +450,6 @@ describe("wallet-action:metadata — EditMetadataDialog direct routing", () => {
     await save();
     await screen.findByText("Confirm metadata");
     expect(mocks.getRelayrTxQuote).not.toHaveBeenCalled();
-    expect(mocks.writeContractAsync).not.toHaveBeenCalled();
-    const confirm = screen.getByRole("button", { name: "Save changes" });
-    await waitFor(() => expect(confirm).not.toBeDisabled());
-    fireEvent.click(confirm);
 
     await waitFor(() => expect(mocks.waitForReceipt).toHaveBeenCalledTimes(1));
     expect(mocks.writeContractAsync).toHaveBeenCalledTimes(1);
@@ -346,8 +457,8 @@ describe("wallet-action:metadata — EditMetadataDialog direct routing", () => {
       chainId: chainIds[0],
       functionName: "setUriOf",
     });
-    expect(confirm).toBeDisabled();
     expect(screen.getByText("Confirm metadata")).toBeInTheDocument();
+    expectEveryWayOutRefused(confirmPanel());
 
     await act(async () => resolveFirst({ status: "success" }));
     await waitFor(() => expect(mocks.waitForReceipt).toHaveBeenCalledTimes(2));
@@ -360,34 +471,32 @@ describe("wallet-action:metadata — EditMetadataDialog direct routing", () => {
       mocks.writeContractAsync.mock.calls[0][0].args,
     );
     expect(screen.getByText("Confirm metadata")).toBeInTheDocument();
-    expect(confirm).toBeDisabled();
 
     await act(async () => resolveSecond({ status: "success" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(mocks.sendRelayrTx).not.toHaveBeenCalled();
   });
 
-  it("stops before the next chain when a Safe write is still a proposal", async () => {
+  it("stops before the next chain when a Safe write is still a proposal, and ends on Done", async () => {
     mocks.safe = true;
     mocks.connectedChainId = 1;
-    mocks.requireOnchainExecution.mockImplementation(() => {
-      throw new Error("This metadata update was proposed to Safe. Execute it before continuing.");
-    });
+    mocks.proposed = true;
     await openDialog([1, 8453].map((chainId) => ({ ...PROJECTS[0], chainId })));
     await prefilledAdvancedTextarea();
     await save();
     await screen.findByText("Confirm metadata");
-    const confirm = screen.getByRole("button", { name: "Save changes" });
-    await waitFor(() => expect(confirm).not.toBeDisabled());
-    fireEvent.click(confirm);
 
-    await screen.findByText(
-      "This metadata update was proposed to Safe. Execute it before continuing.",
-    );
+    await screen.findByText(SAFE_PROPOSAL_PENDING_LINE);
     expect(mocks.writeContractAsync).toHaveBeenCalledTimes(1);
     expect(mocks.waitForReceipt).not.toHaveBeenCalled();
     expect(mocks.getRelayrTxQuote).not.toHaveBeenCalled();
     expect(screen.getByText("Confirm metadata")).toBeInTheDocument();
+    // Nothing is left to send from here: Done, not Save changes again.
+    const done = within(confirmPanel()).getByRole("button", { name: "Done" });
+    expect(within(confirmPanel()).queryByRole("button", { name: "Save changes" })).toBeNull();
+    fireEvent.click(done);
+    await waitFor(() => expect(document.querySelector("[data-tx-confirm]")).toBeNull());
+    expect(mocks.writeContractAsync).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -401,7 +510,7 @@ describe("metadata edits across distinct destinations", () => {
     payment_info: [{ chain: 1, amount: "0x10", target: `0x${"44".repeat(20)}`, calldata: "0x" }],
   };
 
-  it("pins each preserved document and signs its active controller and destination project ID", async () => {
+  it("wallet-action:metadata pins each preserved document and signs its active controller and destination project ID", async () => {
     mocks.connectedChainId = 1;
     mocks.peerMetadata[1] = CURRENT_METADATA;
     mocks.peerMetadata[8453] = {
@@ -499,12 +608,10 @@ describe("metadata edits across distinct destinations", () => {
   it("does not bypass an unresolved relay by changing to a direct metadata update", async () => {
     await openDialog();
     await prefilledAdvancedTextarea();
-    await save();
-    await screen.findByText("Confirm metadata");
     mocks.requireRelayrRecoveryScopeAvailable.mockImplementation(() => {
       throw new Error("Previous relay requires reconciliation");
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await save();
     await screen.findByText("Previous relay requires reconciliation");
     expect(mocks.writeContractAsync).not.toHaveBeenCalled();
   });
@@ -512,12 +619,11 @@ describe("metadata edits across distinct destinations", () => {
   it("rejects a source pointer that changes while the direct review is open", async () => {
     await openDialog();
     await prefilledAdvancedTextarea();
+    // The source is read at save and again just before the write: the second read differs.
+    mocks.verifyMetadataSource
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error("The source metadata changed. Reopen the editor."));
     await save();
-    await screen.findByText("Confirm metadata");
-    mocks.verifyMetadataSource.mockRejectedValue(
-      new Error("The source metadata changed. Reopen the editor."),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await screen.findByText("The source metadata changed. Reopen the editor.");
     expect(mocks.writeContractAsync).not.toHaveBeenCalled();
   });
@@ -590,12 +696,7 @@ describe("EditMetadataDialog advanced custom properties", () => {
     expect(pinned.tags).toEqual(["defi"]);
     expect(pinned.name).toBe("Current name");
 
-    // Nothing is written until the confirm dialog's action is pressed.
-    expect(mocks.writeContractAsync).not.toHaveBeenCalled();
-    // The confirm opens at once and its action enables once the pin lands.
-    const confirm = await screen.findByRole("button", { name: /^save changes$/i });
-    await waitFor(() => expect(confirm).not.toBeDisabled());
-    fireEvent.click(confirm);
+    // The write's one review opens once the pin lands.
     await waitFor(() => expect(mocks.writeContractAsync).toHaveBeenCalledTimes(1));
     expect(mocks.writeContractAsync.mock.calls[0][0]).toMatchObject({
       functionName: "setUriOf",

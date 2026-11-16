@@ -2,9 +2,10 @@ import {
   JBBuybackHookContracts,
   JBCoreContracts,
   JBRouterTerminalContracts,
+  JBSuckerContracts,
+  MAX_RESERVED_PERCENT,
   RevnetCoreContracts,
   jbBuybackHookRegistryAbi,
-  jbContractAddress,
   jbControllerAbi,
   jbDirectoryAbi,
   jbMultiTerminalAbi,
@@ -14,10 +15,14 @@ import {
   jbRouterTerminalRegistryAbi,
   jbRulesetsAbi,
   jbSplitsAbi,
+  jbSuckerRegistryAbi,
   jbTerminalStoreAbi,
   jbTokensAbi,
+  jbV6ContractAddress,
+  revDeployerAbi,
   revOwnerAbi,
 } from "@bananapus/nana-sdk-core";
+import { buildUserPayMetadata } from "@bananapus/nana-sdk-core/v6";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import {
@@ -27,12 +32,17 @@ import {
   encodeFunctionResult,
   erc20Abi,
   getAddress,
+  keccak256,
   multicall3Abi,
   namehash,
+  parseAbi,
   toFunctionSelector,
   zeroAddress,
+  zeroHash,
 } from "viem";
 import { base, mainnet } from "viem/chains";
+import protocolRollout from "../src/lib/protocol-rollout.json" with { type: "json" };
+import { routerGatewayAbi } from "../src/lib/router-gateway-abi.ts";
 import browserProject from "../test/fixtures/browser-project.json" with { type: "json" };
 
 const port = browserProject.fixturePort;
@@ -164,7 +174,9 @@ if (computedFixtureCid !== fixtureCid) {
   throw new Error(`Fixture metadata CID mismatch: expected ${computedFixtureCid}`);
 }
 
-const addressOf = (contract) => getAddress(jbContractAddress[6][contract][chainId]);
+const routerDeployments = protocolRollout.chains[chainId];
+const addressOf = (contract) =>
+  getAddress(routerDeployments.contracts[contract] ?? jbV6ContractAddress[contract][chainId]);
 const addresses = {
   buybackRegistry: addressOf(JBBuybackHookContracts.JBBuybackHookRegistry),
   controller: addressOf(JBCoreContracts.JBController),
@@ -180,13 +192,92 @@ const addresses = {
   projectHandles: getAddress("0x726f4a3dfd2fb8297f8ab98d215b42a92d8eefe8"),
   rulesets: addressOf(JBCoreContracts.JBRulesets),
   splits: addressOf(JBCoreContracts.JBSplits),
+  suckerRegistry: addressOf(JBSuckerContracts.JBSuckerRegistry),
   terminal: addressOf(JBCoreContracts.JBMultiTerminal),
   terminalStore: addressOf(JBCoreContracts.JBTerminalStore),
   tokens: addressOf(JBCoreContracts.JBTokens),
   revOwner: addressOf(RevnetCoreContracts.REVOwner),
   routerRegistry: addressOf(JBRouterTerminalContracts.JBRouterTerminalRegistry),
   routerTerminal: addressOf(JBRouterTerminalContracts.JBRouterTerminal),
+  routerGateway: addressOf("JBRouterTerminalGateway"),
 };
+
+const routingTimestamp = 1_789_200_000;
+const routingSourceProjectId = 6;
+const routingCallParameter = routerGatewayAbi.find(
+  (entry) => entry.type === "function" && entry.name === "processPendingCall",
+).inputs[1];
+const pendingRoutingRows = [
+  { amount: 10_000_000_000_000_000n, token: nativeToken, count: 0, lastFailureAt: 0 },
+  { amount: 12_500_000n, token: usdc, count: 1, lastFailureAt: routingTimestamp - 3_600 },
+  {
+    amount: 30_000_000_000_000_000n,
+    token: nativeToken,
+    count: 3,
+    lastFailureAt: routingTimestamp - 86_400,
+  },
+].map(({ amount, token, count, lastFailureAt }, index) => {
+  const call = {
+    amount,
+    preferAddToBalance: false,
+    shouldReturnHeldFees: false,
+    beneficiary: fixtureOwner,
+    projectId: 1n,
+    refundTo: addresses.terminal,
+    sourceProjectId: BigInt(routingSourceProjectId),
+    token,
+  };
+  const memo = "Fixture retained routing payment";
+  const metadata = "0x";
+  return {
+    indexed: {
+      ...call,
+      amount: amount.toString(),
+      projectId,
+      sourceProjectId: routingSourceProjectId,
+      chainId,
+      version: 6,
+      gateway: addresses.routerGateway,
+      pendingCallId: `0x${(index + 1).toString(16).padStart(64, "0")}`,
+      memo,
+      metadata,
+      callCommitment: keccak256(
+        encodeAbiParameters(
+          [routingCallParameter, { type: "string" }, { type: "bytes" }],
+          [call, memo, metadata],
+        ),
+      ),
+      retainedAmount: amount.toString(),
+      status: count ? "retried" : "queued",
+    },
+    failure: {
+      count,
+      lastFailureAt,
+      highestGasLimit: count ? 5_000_000n : 0n,
+      errorHash: zeroHash,
+    },
+  };
+});
+const gatewayGenerations = new Set(
+  [
+    routerDeployments.contracts.JBRouterTerminalGateway,
+    ...Object.values(routerDeployments.history.JBRouterTerminalGateway ?? {}),
+  ]
+    .filter(Boolean)
+    .map((address) => address.toLowerCase()),
+);
+const knownTerminalProbes = new Set(
+  [
+    addresses.terminal,
+    routerDeployments.contracts.JBRouterTerminalRegistry,
+    routerDeployments.contracts.JBRouterTerminalGateway,
+    routerDeployments.contracts.JBRouterTerminal,
+    ...Object.values(routerDeployments.history.JBRouterTerminal),
+    ...gatewayGenerations,
+  ]
+    .filter(Boolean)
+    .map((address) => address.toLowerCase()),
+);
 allowedEnsReverseAddresses.add(addresses.revOwner.toLowerCase());
 
 const ruleset = {
@@ -239,11 +330,13 @@ const fixtureProject = {
   currency: "2",
   tokenSymbol: "USDC",
   isRevnet: true,
-  volume: "1250000000",
-  // The discovery documents ask for the trending triple; a project without it fails
+  volumeUsd: "1250000000000000000000",
+  accountingTokenCount: 1,
+  // The discovery documents ask for the trending fields; a project without them fails
   // the client's response contract, which is what left home and discover empty.
   trendingScore: "1250000000",
   trendingVolume: "1250000000",
+  trendingVolumeUsd: "1250000000000000000000",
   trendingPaymentsCount: 2,
   owner: addresses.revOwner,
   permissionHolders: { items: [] },
@@ -254,6 +347,13 @@ const fixtureProject = {
       ],
     },
   },
+};
+const fixtureTokenBalance = {
+  token: usdc,
+  tokenSymbol: "USDC",
+  decimals: 6,
+  balance: "1250000000",
+  balanceUsd: "1250000000000000000000",
 };
 const fixtureSuckerGroup = {
   id: suckerGroupId,
@@ -273,6 +373,8 @@ const fixtureSuckerGroup = {
         tokenSymbol: "USDC",
         version: 6,
         suckerGroupId,
+        accountingTokenCount: 1,
+        projectTokenBalances: { items: [fixtureTokenBalance] },
       },
     ],
   },
@@ -303,6 +405,7 @@ function requireFixture(condition, message) {
 }
 
 const allowedGraphqlOperations = new Set([
+  "RouterPendingCalls",
   "ActivityEvents",
   "AddToBalanceInflows",
   "AutoIssueEvents",
@@ -322,7 +425,8 @@ const allowedGraphqlOperations = new Set([
   "ProjectCreateEvent",
   "ProjectErc20Tickers",
   "ProjectOperator",
-  "ProjectMoments",
+  "ProjectPayNotice",
+  "ProjectTokenBalanceMoments",
   "ProjectWithPermissions",
   "Projects",
   "SuckerGroup",
@@ -370,7 +474,7 @@ const graphqlHandlers = {
     requireFixture(
       [32, 60, 250].includes(variables.limit) &&
         variables.offset === 0 &&
-        ["createdAt", "volume", "trendingScore"].includes(variables.orderBy) &&
+        ["createdAt", "volumeUsd", "trendingScore"].includes(variables.orderBy) &&
         variables.orderDirection === "desc" &&
         variables.where &&
         typeof variables.where === "object",
@@ -383,8 +487,28 @@ const graphqlHandlers = {
     return { suckerGroup: { projects: { items: [fixtureProject] } } };
   },
   Project(variables) {
+    // Pending routing displays the source project's name; its identity stays an exact fixture tuple.
+    if (variables.projectId === routingSourceProjectId) {
+      requireExactVariables("Project", variables, {
+        chainId,
+        projectId: routingSourceProjectId,
+        version: 6,
+      });
+      return {
+        project: {
+          ...fixtureProject,
+          projectId: routingSourceProjectId,
+          name: "Fixture Source Revnet",
+          handle: "fixture-source-revnet",
+        },
+      };
+    }
     requireExactVariables("Project", variables, { chainId, projectId, version: 6 });
     return { project: fixtureProject };
+  },
+  ProjectPayNotice(variables) {
+    requireExactVariables("ProjectPayNotice", variables, { chainId, projectId, version: 6 });
+    return { project: { payDisclosure: null } };
   },
   ProjectAccountingContext(variables) {
     requireExactVariables("ProjectAccountingContext", variables, {
@@ -405,10 +529,14 @@ const graphqlHandlers = {
     requireExactVariables("ProjectOperator", variables, { chainId, projectId, version: 6 });
     return { permissionHolders: { items: [] } };
   },
-  ProjectMoments(variables) {
-    requireExactVariables("ProjectMoments", variables, { projectId, chainId, version: 6 });
+  ProjectTokenBalanceMoments(variables) {
+    requireExactVariables("ProjectTokenBalanceMoments", variables, {
+      projectId,
+      chainId,
+      version: 6,
+    });
     return {
-      projectMoments: {
+      projectTokenBalanceMoments: {
         items: [],
         pageInfo: { hasNextPage: false, endCursor: null },
       },
@@ -476,7 +604,7 @@ const graphqlHandlers = {
   },
   PayEventRates(variables) {
     requireExactVariables("PayEventRates", variables, {
-      where: { chainId, projectId, version: 6 },
+      where: { chainId, projectId, version: 6, token: usdc.toLowerCase() },
       limit: 500,
       offset: 0,
     });
@@ -523,16 +651,22 @@ const graphqlHandlers = {
           {
             timestamp: 1_740_000_000,
             balance: "1000000000",
+            balanceUsd: "1000000000000000000000",
+            volumeUsd: "1000000000000000000000",
             tokenSupply: "800000000000000000000000",
             suckerGroupId,
             version: 6,
+            accountingTokenUsdRate: "1000000000000000000",
           },
           {
             timestamp: 1_770_000_000,
             balance: "1250000000",
+            balanceUsd: "1250000000000000000000",
+            volumeUsd: "1250000000000000000000",
             tokenSupply: "1000000000000000000000000",
             suckerGroupId,
             version: 6,
+            accountingTokenUsdRate: "1000000000000000000",
           },
         ],
         pageInfo: { hasNextPage: false, endCursor: null },
@@ -587,22 +721,23 @@ const graphqlHandlers = {
         items: [
           {
             id: suckerGroupId,
-            balance: "1250000000",
-            volume: "1250000000",
+            balanceUsd: "1250000000000000000000",
+            volumeUsd: "1250000000000000000000",
             projects: {
               items: [
                 {
-                  balance: "1250000000",
+                  balanceUsd: "1250000000000000000000",
                   chainId,
-                  currency: "2",
-                  decimals: 6,
                   isRevnet: true,
                   logoUri: null,
+                  metadataUri: null,
                   name: browserProject.metadata.name,
                   projectId,
                   projectTagline: browserProject.metadata.projectTagline,
-                  tokenSymbol: "USDC",
                   version: 6,
+                  projectTokenBalances: {
+                    items: [{ ...fixtureTokenBalance, usdRate: "1000000000000000000" }],
+                  },
                 },
               ],
             },
@@ -777,6 +912,21 @@ const graphqlHandlers = {
       },
     };
   },
+  RouterPendingCalls(variables) {
+    // The app reads every gateway generation; retired ones hold nothing here.
+    requireFixture(
+      gatewayGenerations.has(variables.gateway),
+      `RouterPendingCalls gateway=${variables.gateway}`,
+    );
+    requireExactVariables("RouterPendingCalls", variables, {
+      chainId,
+      projectId,
+      gateway: variables.gateway,
+      limit: 100,
+      offset: 0,
+    });
+    return { routerPendingCalls: { items: [], totalCount: 0 } };
+  },
   OwnedNfts(variables) {
     requireFixture(
       variables.where?.version === 6 &&
@@ -856,6 +1006,30 @@ function registerCall({ abi, functionName, address, result }) {
   });
 }
 
+for (const functionName of ["pendingCallCommitmentOf", "pendingCallFailureOf"]) {
+  registerCall({
+    abi: routerGatewayAbi,
+    functionName,
+    address: addresses.routerGateway,
+    result: ([id]) => {
+      const row = pendingRoutingRows.find(({ indexed }) => indexed.pendingCallId === id);
+      requireFixture(Boolean(row), `${functionName} id=${id}`);
+      return functionName === "pendingCallCommitmentOf" ? row.indexed.callCommitment : row.failure;
+    },
+  });
+}
+for (const [functionName, result] of [
+  ["RETRY_DELAY", 86_400n],
+  ["maximumQualifiedCallGas", 15_038_509n],
+]) {
+  registerCall({
+    abi: parseAbi([`function ${functionName}() view returns (uint256)`]),
+    functionName,
+    address: addresses.routerGateway,
+    result: () => result,
+  });
+}
+
 // Viem implements native balance reads through Multicall3 when batching is
 // enabled. Keep that standard helper call inside the deterministic fixture
 // instead of treating it as an unknown contract surface.
@@ -931,12 +1105,10 @@ registerCall({
   result: ([requestedProjectId, terminal]) => {
     requireFixture(requestedProjectId === 1n, `isTerminalOf projectId=${requestedProjectId}`);
     requireFixture(
-      [addresses.routerRegistry, addresses.routerTerminal].some(
-        (candidate) => candidate.toLowerCase() === terminal.toLowerCase(),
-      ),
+      knownTerminalProbes.has(terminal.toLowerCase()),
       `isTerminalOf terminal=${terminal}`,
     );
-    return false;
+    return terminal.toLowerCase() === addresses.terminal.toLowerCase();
   },
 });
 for (const [functionName, result] of [
@@ -963,6 +1135,21 @@ for (const functionName of ["FUND_ACCESS_LIMITS", "RULESETS", "TOKENS", "SPLITS"
     result: () => zeroAddress,
   });
 }
+// Every project page reads its sucker group from the registry on mount; the
+// fixture projects live on one chain, matching their indexed groups.
+registerCall({
+  abi: jbSuckerRegistryAbi,
+  functionName: "suckerPairsOf",
+  address: addresses.suckerRegistry,
+  result: ([requestedProjectId]) => {
+    requireFixture(
+      requestedProjectId === BigInt(projectId) ||
+        requestedProjectId === BigInt(routingSourceProjectId),
+      `suckerPairsOf projectId=${requestedProjectId}`,
+    );
+    return [];
+  },
+});
 registerCall({
   abi: jbControllerAbi,
   functionName: "currentRulesetOf",
@@ -1045,6 +1232,31 @@ registerCall({
   },
 });
 registerCall({
+  abi: jbMultiTerminalAbi,
+  functionName: "previewPayFor",
+  address: addresses.terminal,
+  result: ([requestedProjectId, token, amount, beneficiary, metadata]) => {
+    requireFixture(requestedProjectId === 1n, `previewPayFor projectId=${requestedProjectId}`);
+    requireFixture(token === usdc, `previewPayFor token=${token}`);
+    requireFixture(amount === 12_000_000n, `previewPayFor amount=${amount}`);
+    requireFixture(beneficiary === zeroAddress, `previewPayFor beneficiary=${beneficiary}`);
+    // prepareUserPay previews with the pay card's skipSplits metadata.
+    requireFixture(
+      metadata === buildUserPayMetadata({ chainId }),
+      `previewPayFor metadata=${metadata}`,
+    );
+
+    // The unsigned $12 USDC draft uses this fixture's USD-denominated weight,
+    // 6-decimal accounting context, and 20% reserved share. Match the store's
+    // same-currency conversion and the controller's beneficiary-first rounding.
+    const tokenCount = (amount * ruleset.weight) / 10n ** BigInt(fixtureProject.decimals);
+    const beneficiaryTokenCount =
+      (tokenCount * BigInt(MAX_RESERVED_PERCENT - rulesetMetadata.reservedPercent)) /
+      BigInt(MAX_RESERVED_PERCENT);
+    return [ruleset, beneficiaryTokenCount, tokenCount - beneficiaryTokenCount, []];
+  },
+});
+registerCall({
   abi: jbTokensAbi,
   functionName: "tokenOf",
   address: addresses.tokens,
@@ -1073,6 +1285,19 @@ registerCall({
       `isOperatorOf operator=${operator}`,
     );
     return true;
+  },
+});
+// This modeled legacy revnet predates the canonical shop configuration.
+registerCall({
+  abi: revDeployerAbi,
+  functionName: "hashedEncodedConfigurationOf",
+  address: addressOf(RevnetCoreContracts.REVDeployer),
+  result: ([requestedProjectId]) => {
+    requireFixture(
+      requestedProjectId === 1n,
+      `hashedEncodedConfigurationOf projectId=${requestedProjectId}`,
+    );
+    return zeroHash;
   },
 });
 registerCall({
@@ -1283,7 +1508,7 @@ export function executeContractCall(to, data) {
   });
 }
 
-function handleRpc(request) {
+export function handleRpc(request) {
   requireFixture(
     request && typeof request === "object" && !Array.isArray(request),
     "JSON-RPC request must be an object",
@@ -1312,6 +1537,32 @@ function handleRpc(request) {
   } else if (method === "eth_blockNumber") {
     requireFixture(params.length === 0, `eth_blockNumber params=${JSON.stringify(params)}`);
     result = fixtureBlockTag;
+  } else if (method === "eth_getBlockByNumber") {
+    requireFixture(
+      params.length === 2 && params[0] === "latest" && params[1] === false,
+      `eth_getBlockByNumber params=${JSON.stringify(params)}`,
+    );
+    result = {
+      number: fixtureBlockTag,
+      hash: `0x${"44".repeat(32)}`,
+      parentHash: zeroHash,
+      nonce: "0x0000000000000000",
+      sha3Uncles: zeroHash,
+      logsBloom: `0x${"00".repeat(256)}`,
+      transactionsRoot: zeroHash,
+      stateRoot: zeroHash,
+      receiptsRoot: zeroHash,
+      miner: zeroAddress,
+      difficulty: "0x0",
+      extraData: "0x",
+      size: "0x1",
+      gasLimit: "0x1c9c380",
+      gasUsed: "0x0",
+      timestamp: `0x${routingTimestamp.toString(16)}`,
+      transactions: [],
+      uncles: [],
+      baseFeePerGas: "0x1",
+    };
   } else if (method === "eth_call") {
     requireFixture(
       params.length === 2 && ["latest", fixtureBlockTag].includes(params[1]),
@@ -1329,15 +1580,20 @@ function handleRpc(request) {
     );
     const exactEnsTextRead = getAddress(call.to) === addresses.ensTextResolver;
     const exactProjectHandleRead = getAddress(call.to) === addresses.projectHandles;
+    // Queue discovery probes nonce alongside identity; an EOA returns empty data.
+    const exactOwnerNonceRead =
+      getAddress(call.to) === fixtureOwner && call.data === toFunctionSelector("nonce()");
     requireFixture(
       exactEnsTextRead
         ? call.gas === "0x1e848" && getAddress(call.from) === addresses.projectHandles
         : exactProjectHandleRead
           ? call.gas === "0x493e0" && call.from === undefined
-          : call.gas === undefined && call.from === undefined,
+          : exactOwnerNonceRead
+            ? call.gas === "0x186a0" && call.from === undefined && params[1] === "latest"
+            : call.gas === undefined && call.from === undefined,
       `eth_call gas=${String(call.gas)}`,
     );
-    result = executeContractCall(call.to, call.data);
+    result = exactOwnerNonceRead ? "0x" : executeContractCall(call.to, call.data);
   } else if (method === "eth_getLogs") {
     requireFixture(params.length === 1, `eth_getLogs params=${JSON.stringify(params)}`);
     const filter = params[0];
@@ -1385,6 +1641,7 @@ function handleRpc(request) {
       requested === fixtureOwner ||
       requested === projectToken ||
       requested === addresses.multicall ||
+      knownTerminalProbes.has(requested.toLowerCase()) ||
       Object.values(addresses).includes(requested);
     requireFixture(known, `eth_getCode address=${requested}`);
     result = requested === fixtureOwner ? "0x" : "0x60006000";
@@ -1441,6 +1698,24 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === "GET" && url.pathname === "/__fixture/status") {
       sendJson(response, 200, state, true);
+      return;
+    }
+    // A read-only scenario response lets one browser exercise retained custody
+    // without mutating the shared fixture used by parallel empty-state tests.
+    if (request.method === "GET" && url.pathname === "/__fixture/pending-routing") {
+      sendJson(
+        response,
+        200,
+        {
+          data: {
+            routerPendingCalls: {
+              totalCount: pendingRoutingRows.length,
+              items: pendingRoutingRows.map(({ indexed }) => indexed),
+            },
+          },
+        },
+        true,
+      );
       return;
     }
     if (request.method === "OPTIONS" && isApi) {

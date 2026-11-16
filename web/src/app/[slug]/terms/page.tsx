@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 import { V6TermsTab } from "../components/v6/terms/V6TermsTab";
 import { getProjectWithFallback } from "../getProjectFallback";
+import { ProjectPageBoundary } from "../ProjectRouteContext";
+import { projectRouteSnapshot } from "../projectRouteIdentity";
 import { resolveProjectRoute } from "../resolveProjectRoute.server";
 import { getRulesets } from "./getRulesets";
 
@@ -22,5 +24,9 @@ export default async function Terms({ params }: Props) {
 
   const rulesets = await getRulesets(projectId.toString(), chainId);
 
-  return <V6TermsTab rulesets={rulesets} />;
+  return (
+    <ProjectPageBoundary snapshot={projectRouteSnapshot(route)}>
+      <V6TermsTab rulesets={rulesets} />
+    </ProjectPageBoundary>
+  );
 }

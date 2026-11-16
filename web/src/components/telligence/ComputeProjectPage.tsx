@@ -48,7 +48,7 @@ export function ComputeProjectPage({
         <Link href="/discover" className="compute-text-link inline-flex min-h-11 items-center">
           ← All purposes
         </Link>
-        <span className="text-melon-700">Base · Project {project.revnetId}</span>
+        <span className="text-melon-700">Base | Project {project.revnetId}</span>
       </div>
       <div className="grid gap-12 pt-10 lg:grid-cols-[minmax(0,1fr)_23rem] lg:gap-16 lg:pt-16">
         <div className="min-w-0">

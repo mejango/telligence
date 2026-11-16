@@ -120,30 +120,43 @@
  * and inerts everything outside it. That leaves no z-index to manage and no
  * overlay element to render. The dialog spans the viewport so the panel inside
  * it can be centered and so a press on the empty area targets the dialog
- * itself, which is what dismisses it.
+ * itself, which is what dismisses it. These are defaults in the components
+ * layer, so layout utilities on the dialog element itself (a `ModalDialog`'s
+ * `className`) win over them.
  */
-dialog.ui-dialog {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  max-width: 100%;
-  height: 100%;
-  max-height: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background-color: transparent;
-  overflow: hidden;
-}
+@layer components {
+  dialog.ui-dialog {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background-color: transparent;
+    overflow: hidden;
+  }
 
-dialog.ui-dialog[open] {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+  dialog.ui-dialog[open] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 
-dialog.ui-dialog::backdrop {
-  background-color: rgb(0 0 0 / 0.8);
+  dialog.ui-dialog::backdrop {
+    background-color: rgb(0 0 0 / 0.8);
+  }
+
+  /* Phones run every dialog panel edge to edge, whatever width its owner asked for. */
+  @media (max-width: 639.98px) {
+    dialog.ui-dialog > div:not([data-ui-select-portal]) {
+      width: 100% !important;
+      max-width: none !important;
+      border-inline-width: 0 !important;
+    }
+  }
 }
 
 /*
@@ -154,6 +167,14 @@ dialog.ui-dialog::backdrop {
 dialog[data-covered],
 dialog[data-covered]::backdrop {
   visibility: hidden;
+}
+
+/*
+ * A confirm hosted in a dialog replaces the panel's content with its own
+ * header, body and footer, which carry their own padding.
+ */
+dialog.ui-dialog > div:has(> [data-tx-confirm]) {
+  padding: 0;
 }
 
 /*
@@ -515,12 +536,16 @@ body {
   border-radius: 0 !important;
 }
 
-/* Native selection controls appear throughout create, owner, operator, and
-   extras flows. Keep their selected state on the shared Melon accent instead
-   of allowing the browser/forms plugin to fall back to blue. */
+/* Native controls and the browser's own pickers (date and time calendars,
+   select menus) take the shared Melon accent instead of falling back to blue. */
+:root {
+  accent-color: theme("colors.melon.500");
+  color-scheme: light;
+}
+
+/* Checkboxes and radios also need the forms plugin's color and border. */
 input[type="checkbox"],
 input[type="radio"] {
-  accent-color: theme("colors.melon.500");
   color: theme("colors.melon.500");
   border-color: theme("colors.melon.600");
 }
@@ -611,6 +636,67 @@ input[type="range"]::-moz-range-thumb {
 }
 .scroll-row::-webkit-scrollbar {
   display: none;
+}
+
+/* Scrollable tables: an edge shadow appears on whichever side has more content, and the bar stays
+   visible where the platform would otherwise hide it. The melon-50 covers scroll with the
+   content, so the table itself stays transparent. */
+.table-scroll {
+  background:
+    linear-gradient(to right, #ebfaf1 40%, transparent) left / 3rem 100% no-repeat local,
+    linear-gradient(to left, #ebfaf1 40%, transparent) right / 3rem 100% no-repeat local,
+    linear-gradient(to right, rgb(0 0 0 / 0.16), transparent) left / 0.875rem 100% no-repeat scroll,
+    linear-gradient(to left, rgb(0 0 0 / 0.16), transparent) right / 0.875rem 100% no-repeat scroll,
+    #ebfaf1;
+}
+.table-scroll table,
+.table-scroll table > tbody {
+  background: transparent;
+}
+.table-scroll::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.table-scroll::-webkit-scrollbar-thumb {
+  background: rgb(0 0 0 / 0.25);
+}
+@supports not selector(::-webkit-scrollbar) {
+  .table-scroll {
+    scrollbar-width: thin;
+  }
+}
+
+/* Fixed-width dots signal progress without shifting text or repeating announcements. */
+.loading-dots {
+  display: inline-block;
+  width: 3ch;
+  vertical-align: baseline;
+}
+.loading-dots::after {
+  display: inline-block;
+  width: 3ch;
+  content: "...";
+  animation: progress-dots 1.4s steps(1) infinite;
+}
+@keyframes progress-dots {
+  0% {
+    clip-path: inset(0 100% 0 0);
+  }
+  25% {
+    clip-path: inset(0 66.666% 0 0);
+  }
+  50% {
+    clip-path: inset(0 33.333% 0 0);
+  }
+  75%,
+  100% {
+    clip-path: inset(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading-dots::after {
+    animation: none;
+  }
 }
 
 /* Telligence carries Revnet's mono typography, Melon ink, square controls,

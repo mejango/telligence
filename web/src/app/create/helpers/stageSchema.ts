@@ -1,4 +1,10 @@
 import { isRecord, issue, schema, ValidationIssue } from "@/lib/formValidation";
+import {
+  isStickyRow,
+  stickyGroupDraftError,
+  stickyGroupOf,
+  type StickyGroupDraft,
+} from "@/lib/sticky";
 import { isAddress } from "viem";
 import type { StageData } from "../types";
 
@@ -85,26 +91,26 @@ export function validateStage(
   validateRequiredDecimal(
     input.initialIssuance,
     [...prefix, "initialIssuance"],
-    "Initial issuance is required",
+    "Enter the number of tokens created per payment",
     issues,
   );
   validateRequiredDecimal(
     input.priceCeilingIncreasePercentage,
     [...prefix, "priceCeilingIncreasePercentage"],
-    "Price ceiling increase percentage is required",
+    "Enter the percentage cut to the token rate",
     issues,
     { max: 100 },
   );
   validateRequiredDecimal(
     input.priceCeilingIncreaseFrequency,
     [...prefix, "priceCeilingIncreaseFrequency"],
-    "Price ceiling increase frequency is required",
+    "Enter the days between token rate cuts",
     issues,
   );
   validateRequiredDecimal(
     input.priceFloorTaxIntensity,
     [...prefix, "priceFloorTaxIntensity"],
-    "Price floor tax intensity is required",
+    "Choose a cash-out tax",
     issues,
     { max: 100 },
   );
@@ -125,7 +131,9 @@ export function validateStage(
     );
   }
 
-  if (
+  if (input.futureStartTimestamp === null) {
+    issue(issues, [...prefix, "futureStartTimestamp"], "Choose a start date and time");
+  } else if (
     input.futureStartTimestamp !== undefined &&
     (!Number.isSafeInteger(input.futureStartTimestamp) || Number(input.futureStartTimestamp) <= 0)
   ) {
@@ -133,18 +141,18 @@ export function validateStage(
   }
 
   if (!Array.isArray(input.autoIssuance)) {
-    issue(issues, [...prefix, "autoIssuance"], "Invalid auto issuance");
+    issue(issues, [...prefix, "autoIssuance"], "Invalid entry for tokens created at stage start");
   } else {
     input.autoIssuance.forEach((entry, index) => {
       const path = [...prefix, "autoIssuance", index];
       if (!isRecord(entry)) {
-        issue(issues, path, "Invalid auto issuance");
+        issue(issues, path, "Invalid entry for tokens created at stage start");
         return;
       }
       validateRequiredDecimal(entry.amount, [...path, "amount"], "Amount is required", issues);
       validateAddress(entry.beneficiary, [...path, "beneficiary"], issues);
       if (options.requireAutoIssuanceChain && !isChainId(entry.chainId)) {
-        issue(issues, [...path, "chainId"], "Select an auto issuance chain");
+        issue(issues, [...path, "chainId"], "Choose a chain for the tokens created at stage start");
       }
     });
   }
@@ -168,15 +176,21 @@ export function validateStage(
       );
       splitTotal += Number(entry.percentage) || 0;
       validateAddress(entry.defaultBeneficiary, [...path, "defaultBeneficiary"], issues);
+      if (isStickyRow(entry)) {
+        // The token is the beneficiary on every chain; the group must be one the distributor honors.
+        const groupError = stickyGroupDraftError(stickyGroupOf(entry as Partial<StickyGroupDraft>));
+        if (groupError) issue(issues, [...path, "stickyMinWeeks"], groupError);
+        return;
+      }
 
       if (entry.beneficiary !== undefined) {
         if (!Array.isArray(entry.beneficiary)) {
-          issue(issues, [...path, "beneficiary"], "Invalid beneficiaries");
+          issue(issues, [...path, "beneficiary"], "Invalid recipients");
         } else {
           entry.beneficiary.forEach((beneficiary, beneficiaryIndex) => {
             const beneficiaryPath = [...path, "beneficiary", beneficiaryIndex];
             if (!isRecord(beneficiary)) {
-              issue(issues, beneficiaryPath, "Invalid beneficiary");
+              issue(issues, beneficiaryPath, "Invalid recipient");
               return;
             }
             if (!isChainId(beneficiary.chainId)) {

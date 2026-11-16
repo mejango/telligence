@@ -14,6 +14,7 @@ import { useMemo } from "react";
 import { isAddress, type Address } from "viem";
 
 type OperatedProject = {
+  key: string;
   chainId: JBChainId;
   projectId: number;
   name: string | null;
@@ -27,7 +28,8 @@ type OperatedProject = {
 /**
  * Groups permission-holder rows by (chainId, projectId), following the
  * PermissionsCard aggregation: union the granted ids, surface the revnet
- * operator role, and keep every granting account.
+ * operator role, and keep every granting account. Global project 0 grants
+ * remain separate by granting account because each applies to its own projects.
  */
 function aggregateOperatedProjects(items: AccountPermissionHolderRow[]): OperatedProject[] {
   const groups = new Map<string, OperatedProject>();
@@ -35,8 +37,9 @@ function aggregateOperatedProjects(items: AccountPermissionHolderRow[]): Operate
     const permissions = (item.permissions ?? []).map(Number).filter((id) => id > 0);
     if (!permissions.length) continue; // stale/cleared grant — holds nothing
     if (!JB_CHAINS[item.chainId as JBChainId]) continue;
-    const key = `${item.chainId}:${item.projectId}`;
+    const key = `${item.chainId}:${item.projectId}${item.projectId === 0 ? `:${item.account.toLowerCase()}` : ""}`;
     const group = groups.get(key) ?? {
+      key,
       chainId: item.chainId as JBChainId,
       projectId: item.projectId,
       name: item.project?.name ?? item.project?.handle ?? null,
@@ -78,10 +81,13 @@ export function OperatedProjects({ address }: { address: Address }) {
       ) : (
         <div className="divide-y divide-melon-200 bg-melon-50 px-4">
           {projects.map((project) => {
-            const slug = slugFor(project.chainId, project.projectId);
-            const label = project.name ?? `Project #${project.projectId}`;
+            const wildcard = project.projectId === 0;
+            const slug = wildcard ? null : slugFor(project.chainId, project.projectId);
+            const label = wildcard
+              ? "All projects"
+              : (project.name ?? `Project #${project.projectId}`);
             return (
-              <div key={`${project.chainId}:${project.projectId}`} className="py-4">
+              <div key={project.key} className="py-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <ChainLogo chainId={project.chainId} width={16} height={16} standalone />
                   {slug ? (

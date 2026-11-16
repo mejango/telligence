@@ -1,5 +1,6 @@
 "use client";
 
+import { ReviewRefusal } from "@/lib/review-refusal";
 import { useSyncExternalStore } from "react";
 import { getAddress, isAddress, type Address } from "viem";
 
@@ -54,11 +55,11 @@ export function clearViewAs(): void {
 }
 
 export const VIEW_AS_WRITE_ERROR =
-  "You're viewing the site as another account — exit View as to transact.";
+  "You're viewing the site as another account. Exit View as to transact.";
 
 /** Refuse wallet writes and signatures while "View as" impersonation is active. */
 export function requireNoViewAs(): void {
-  if (viewAsSnapshot()) throw new Error(VIEW_AS_WRITE_ERROR);
+  if (viewAsSnapshot()) throw new ReviewRefusal(VIEW_AS_WRITE_ERROR);
 }
 
 export function useViewAs(): {

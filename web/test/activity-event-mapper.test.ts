@@ -231,6 +231,110 @@ describe("mapActivityEvents", () => {
     expect(manualRow?.tokenCount).toBe("17k");
   });
 
+  it("names a buyback buy's tokens once when the revnet reserves none of them", () => {
+    // Base tx 0x8dfa28a2…: the hook burned its 3.32 SBB pool output and reminted
+    // all of it to the payer, indexed as both a mint and a manual mint.
+    const count = "3323155319487796108";
+    const buybackPay = payItem({
+      payEvent: { ...payItem().payEvent!, newlyIssuedTokenCount: "0" },
+    });
+    const swap: ActivityEventItem = {
+      ...payItem({ payEvent: null }),
+      id: "swap-1",
+      swapEvent: {
+        txHash: "0xaaa",
+        timestamp: 1_700_000_000,
+        direction: "buy",
+        terminalTokenAmount: "37304382220177",
+        projectTokenAmount: count,
+        caller: "0x498581ff718922c3f8e6a244956af099b2652b2b",
+        from: "0x1111111111111111111111111111111111111111",
+      },
+    };
+    const remint = {
+      id: "mint-event-1",
+      txHash: "0xaaa",
+      timestamp: 1_700_000_000,
+      from: "0x2222222222222222222222222222222222222222",
+      caller: "0x2222222222222222222222222222222222222222",
+      beneficiary: "0x1111111111111111111111111111111111111111",
+      beneficiaryTokenCount: count,
+      memo: null,
+    };
+
+    const [row] = groupSameTxEvents(
+      mapActivityEvents(
+        [
+          buybackPay,
+          swap,
+          { ...payItem({ payEvent: null }), id: "mint-1", mintTokensEvent: remint },
+          { ...payItem({ payEvent: null }), id: "manual-1", manualMintTokensEvent: remint },
+        ],
+        () => ({ tokenSymbol: "ETH", decimals: 18 }),
+      ),
+    );
+
+    expect(combinedDescription(row, "SBB")).toBe("bought 3.32 SBB via the buyback pool");
+  });
+
+  it("hides the hook's own remint when a cash out sells through the buyback pool", () => {
+    // The terminal burns the holder's tokens, then the hook remints the same
+    // count to itself and sells it. That mint is plumbing, not a receipt.
+    const base = { ...payItem({ payEvent: null }), txHash: "0xccc" };
+    const cashOut: ActivityEventItem = {
+      ...base,
+      id: "cashout-1",
+      cashOutTokensEvent: {
+        id: "cashout-event-1",
+        timestamp: 1_700_000_000,
+        txHash: "0xccc",
+        from: "0x2222222222222222222222222222222222222222",
+        beneficiary: "0x2222222222222222222222222222222222222222",
+        reclaimAmount: "0",
+        reclaimAmountUsd: "0",
+        cashOutCount: "1186973000000000000",
+        metadata: "0x",
+        project: null,
+      },
+    };
+    const sell: ActivityEventItem = {
+      ...base,
+      id: "swap-1",
+      swapEvent: {
+        txHash: "0xccc",
+        timestamp: 1_700_000_000,
+        direction: "sell",
+        terminalTokenAmount: "1000000000000000",
+        projectTokenAmount: "1160000000000000000",
+        caller: "0x498581ff718922c3f8e6a244956af099b2652b2b",
+        from: "0x2222222222222222222222222222222222222222",
+      },
+    };
+    const hookRemint: ActivityEventItem = {
+      ...base,
+      id: "mint-1",
+      manualMintTokensEvent: {
+        id: "mint-event-1",
+        txHash: "0xccc",
+        timestamp: 1_700_000_000,
+        from: "0x3333333333333333333333333333333333333333",
+        beneficiary: "0x3333333333333333333333333333333333333333",
+        beneficiaryTokenCount: "1160000000000000000",
+        memo: null,
+      },
+    };
+
+    const events = mapActivityEvents([cashOut, sell, hookRemint], () => ({
+      tokenSymbol: "ETH",
+      decimals: 18,
+    }));
+
+    expect(events.map((event) => event.id)).toEqual(["cashout-1", "swap-1"]);
+    // The terminal reclaimed nothing: the row's amount is what the sale paid.
+    const [row] = groupSameTxEvents(events);
+    expect(`${row.baseAmount} ${row.baseTokenSymbol}`).toBe("0.001 ETH");
+  });
+
   it("pairs each remint with its own swap when one tx holds two buyback pays", () => {
     const swapOf = (id: string, projectTokenAmount: string): ActivityEventItem => ({
       ...payItem({ payEvent: null }),
@@ -355,6 +459,24 @@ describe("mapActivityEvents", () => {
     expect(row.baseAmount).toBe("0.01");
     expect(combinedDescription(row, "ART")).toBe(
       "0x3333…3333 got 62 ART after the 38% split and 0x2222…2222 got 124 ART after the 38% split",
+    );
+
+    // With no reserve the remints still name who got what: a fan-out hides its swaps.
+    const [unreserved] = groupSameTxEvents(
+      mapActivityEvents(
+        [
+          payOf("pay-1", other, "4000000000000000"),
+          swapOf("swap-1", "100000000000000000000"),
+          mintOf("mint-1", other, "100000000000000000000"),
+          payOf("pay-2", payer, "6000000000000000"),
+          swapOf("swap-2", "200000000000000000000"),
+          mintOf("mint-2", payer, "200000000000000000000"),
+        ],
+        () => ({ tokenSymbol: "ETH", decimals: 18 }),
+      ),
+    );
+    expect(combinedDescription(unreserved, "ART")).toBe(
+      "0x3333…3333 got 100 ART and 0x2222…2222 got 200 ART",
     );
   });
 });
@@ -560,5 +682,132 @@ describe("formatUsd", () => {
     // "$0.00" reads as "nothing happened" for a payment that did happen.
     expect(formatUsd(0.004)).toBe("<$0.01");
     expect(formatUsd(0)).toBe("$0.00");
+  });
+  // A bridge send (`prepare`) cashes the sucker's tokens out inside the same transaction. The
+  // feed says where the tokens are going, once, and never "cashed out" by a contract.
+  describe("a bridge send and the cash out inside it", () => {
+    const SUCKER = "0x66766F2D20a9f4e8a2c51478b1506c07184286b3";
+    const base = { ...payItem({ payEvent: null }), txHash: "0xddd" };
+    const cashOutBy = (id: string, holder: string, txHash = "0xddd"): ActivityEventItem => ({
+      ...base,
+      id,
+      txHash,
+      cashOutTokensEvent: {
+        id: `${id}-event`,
+        timestamp: 1_700_000_000,
+        txHash,
+        from: "0x2222222222222222222222222222222222222222",
+        beneficiary: holder,
+        holder,
+        reclaimAmount: "2481435124398494",
+        reclaimAmountUsd: "0",
+        cashOutCount: "100130000000000000000",
+        metadata: "0x",
+        project: null,
+      },
+    });
+    const send: ActivityEventItem = {
+      ...base,
+      id: "send-1",
+      bridgeToOutboxEvent: {
+        txHash: "0xddd",
+        timestamp: 1_700_000_000,
+        caller: "0x5afe000000000000000000000000000000000000",
+        peerChainId: 8453,
+        projectTokenCount: "100130000000000000000",
+        sucker: SUCKER.toLowerCase(),
+      },
+    };
+    const context = () => ({ tokenSymbol: "ETH", decimals: 18 });
+
+    it("keeps the send, by whoever called the sucker, and drops the sucker's cash out", () => {
+      const events = mapActivityEvents([cashOutBy("inner", SUCKER), send], context);
+      expect(events.map((event) => [event.id, event.type])).toEqual([["send-1", "bridgeSend"]]);
+      expect(events[0]).toMatchObject({
+        beneficiary: "0x5afe000000000000000000000000000000000000",
+        tokenCount: "100.13",
+        detail: "Base",
+      });
+    });
+
+    it("keeps a holder's cash out, in that transaction or another", () => {
+      const events = mapActivityEvents(
+        [
+          cashOutBy("own", "0x2222222222222222222222222222222222222222"),
+          cashOutBy("elsewhere", SUCKER, "0xeee"),
+          send,
+        ],
+        context,
+      );
+      expect(events.map((event) => event.id).sort()).toEqual(["elsewhere", "own", "send-1"]);
+    });
+  });
+
+  describe("loans and bridge claims", () => {
+    const base = { ...payItem({ payEvent: null }), txHash: "0xeee" };
+    const at = { txHash: "0xeee", timestamp: 1_700_000_000 };
+    const BORROWER = "0x3333333333333333333333333333333333333333";
+    const context = () => ({ tokenSymbol: "ETH", decimals: 18 });
+    const row = (item: Partial<ActivityEventItem>) =>
+      mapActivityEvents([{ ...base, id: "row", ...item }], context)[0];
+
+    it("reads a loan by its collateral, for the borrower", () => {
+      const event = row({
+        borrowLoanEvent: {
+          ...at,
+          from: "0xrelayer",
+          beneficiary: BORROWER,
+          collateral: "73214660000000000000",
+        },
+      });
+      expect(event).toMatchObject({ type: "borrowLoan", beneficiary: BORROWER });
+      expect(combinedDescription(event, "REV")).toBe("borrowed against 73.21466 REV");
+    });
+
+    it("reads a repayment and a liquidation", () => {
+      const repaid = row({ repayLoanEvent: { ...at, caller: BORROWER } });
+      const liquidated = row({ liquidateLoanEvent: { ...at, caller: BORROWER } });
+      expect(combinedDescription(repaid, "REV")).toBe("repaid a loan");
+      expect(combinedDescription(liquidated, "REV")).toBe("liquidated a loan");
+      expect([repaid.type, liquidated.type]).toEqual(["repayLoan", "liquidateLoan"]);
+    });
+
+    it("keeps a Safe's repayment the row, by the Safe, when a deposit shares its transaction", () => {
+      const deposit: ActivityEventItem = {
+        ...base,
+        id: "deposit",
+        addToBalanceEvent: {
+          ...at,
+          from: "0x9999999999999999999999999999999999999999",
+          amount: "1000000000000000",
+          amountUsd: "0",
+          memo: "",
+          token: "0x000000000000000000000000000000000000eeee",
+          decimals: 18,
+          tokenSymbol: "ETH",
+        },
+      };
+      const repay: ActivityEventItem = {
+        ...base,
+        id: "repay",
+        repayLoanEvent: { ...at, caller: BORROWER },
+      };
+      const [folded] = groupSameTxEvents(mapActivityEvents([deposit, repay], context));
+      expect(folded).toMatchObject({ type: "repayLoan", beneficiary: BORROWER });
+      expect(folded.also?.map((entry) => entry.type)).toEqual(["addToBalance"]);
+    });
+
+    it("reads a bridge claim from its chain, for the account inside a 32-byte beneficiary", () => {
+      const event = row({
+        bridgeClaimEvent: {
+          ...at,
+          beneficiary: `0x${"0".repeat(24)}${BORROWER.slice(2)}`,
+          peerChainId: 1,
+          projectTokenCount: "100000000000000000000000",
+        },
+      });
+      expect(event).toMatchObject({ type: "bridgeClaim", beneficiary: BORROWER });
+      expect(combinedDescription(event, "REV")).toBe("claimed 100000 REV from Ethereum");
+    });
   });
 });

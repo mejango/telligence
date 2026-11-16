@@ -1,0 +1,30 @@
+{
+  "v": 2,
+  "kind": "revnet",
+  "name": "Example Revnet",
+  "description": "A three-stage example schedule. Replace every value before launching.",
+  "ticker": "EXMPL",
+  "chains": [8453],
+  "stages": [
+    {
+      "issuance": "1000",
+      "cutPercent": "10",
+      "cutDays": "30",
+      "cashOutTax": "0.2",
+      "reserved": [{ "to": "address", "share": "30", "address": "" }]
+    },
+    {
+      "startAfterDays": "365",
+      "issuance": "",
+      "cutPercent": "5",
+      "cutDays": "90",
+      "cashOutTax": "0.5",
+      "reserved": [{ "to": "address", "share": "10", "address": "" }]
+    },
+    {
+      "startAfterDays": "1460",
+      "issuance": "0",
+      "cashOutTax": "0.5"
+    }
+  ]
+}

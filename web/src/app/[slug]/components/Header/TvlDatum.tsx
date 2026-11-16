@@ -1,9 +1,13 @@
 "use client";
 
+import { chainDisplayName } from "@/app/constants";
+import { ChainLogo } from "@/components/ChainLogo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useHydrated } from "@/hooks/useHydrated";
 import type { Project } from "@/lib/bendystraw/types";
 import { PERSIST } from "@/lib/query-persist";
 import { formatTokenAmount } from "@/lib/token";
+import { cn } from "@/lib/utils";
 import {
   getJBContractAddress,
   JBCoreContracts,
@@ -94,19 +98,26 @@ async function readChainTreasury(
   }
 }
 
+/**
+ * The priced tokens' USD total, and the symbols of held tokens with no USD price, which it
+ * leaves out. Null while any chain is unread: its holdings are unknown, not unpriced.
+ */
 export function treasuryUsdTotal(
   chainResults: readonly ChainTreasury[],
   expectedChains: number,
-): bigint | null {
-  const rows = chainResults.flatMap((result) => result.rows);
-  if (
-    chainResults.length !== expectedChains ||
-    chainResults.some((result) => !result.verified) ||
-    rows.some((row) => row.balance !== 0n && row.usd == null)
-  ) {
+): { usd: bigint; unpriced: string[] } | null {
+  if (chainResults.length !== expectedChains || chainResults.some((result) => !result.verified)) {
     return null;
   }
-  return rows.reduce((sum, row) => sum + (row.usd ?? 0n), 0n);
+  const rows = chainResults.flatMap((result) => result.rows);
+  return {
+    usd: rows.reduce((sum, row) => sum + (row.usd ?? 0n), 0n),
+    unpriced: [
+      ...new Set(
+        rows.filter((row) => row.balance !== 0n && row.usd == null).map((row) => row.symbol),
+      ),
+    ],
+  };
 }
 
 function formatUsd18(value: bigint): string {
@@ -117,6 +128,7 @@ function formatUsd18(value: bigint): string {
 
 export function TvlDatum({ projects }: Props) {
   const config = useConfig();
+  const hydrated = useHydrated();
   const query = useQuery({
     queryKey: [
       "revnet",
@@ -130,10 +142,16 @@ export function TvlDatum({ projects }: Props) {
     retry: 1,
   });
 
-  const chainResults = query.data ?? [];
+  // A restored treasury may be available before this streamed component hydrates.
+  const chainResults = hydrated ? (query.data ?? []) : [];
   const rows = chainResults.flatMap((result) => result.rows);
-  const totalUsd = treasuryUsdTotal(chainResults, projects.length);
-  const total = query.isLoading ? "…" : totalUsd == null ? "—" : formatUsd18(totalUsd);
+  const treasury = treasuryUsdTotal(chainResults, projects.length);
+  const loading = hydrated ? query.isLoading : projects.length > 0;
+  const total = loading
+    ? "…"
+    : treasury == null || treasury.unpriced.length
+      ? "—"
+      : formatUsd18(treasury.usd);
 
   return (
     <Tooltip>
@@ -143,31 +161,59 @@ export function TvlDatum({ projects }: Props) {
           <span className="text-zinc-500">balance</span>
         </span>
       </TooltipTrigger>
-      <TooltipContent className="w-72">
-        {rows.map((row) => (
-          <div key={`${row.chainId}:${row.token}`} className="flex justify-between gap-2">
-            <span>
-              Chain {row.chainId} | {row.symbol}
-            </span>
-            <span className="font-medium">
-              {formatTokenAmount(row.balance, row)} {row.symbol}
-              {row.usd == null ? " | USD unavailable" : ` | ${formatUsd18(row.usd)}`}
-            </span>
-          </div>
-        ))}
-        {chainResults
-          .filter((result) => !result.verified)
-          .map((result) => (
-            <div key={result.chainId} className="flex justify-between gap-2">
-              <span>Chain {result.chainId}</span>
-              <span className="font-medium">Unavailable</span>
+      <TooltipContent
+        side="bottom"
+        align="start"
+        className="w-80 max-w-[calc(100vw-2rem)] p-3 text-xs"
+      >
+        <p className="mb-2 font-medium uppercase tracking-wide text-zinc-500">Balance by chain</p>
+        <div className="space-y-2">
+          {rows.map((row) => (
+            <div
+              key={`${row.chainId}:${row.token}`}
+              className={cn(
+                "flex items-start justify-between gap-4",
+                row.balance === 0n && "opacity-50",
+              )}
+            >
+              <span className="inline-flex min-w-0 items-center gap-1.5 text-zinc-600">
+                <ChainLogo chainId={row.chainId} width={17} height={17} />
+                <span className="truncate">{chainDisplayName(row.chainId)}</span>
+              </span>
+              <span className="shrink-0 text-right tabular-nums">
+                <span className="block">
+                  {formatTokenAmount(row.balance, row)} {row.symbol}
+                </span>
+                <span className="block text-[11px] text-zinc-500">
+                  {row.usd == null ? "No USD price" : formatUsd18(row.usd)}
+                </span>
+              </span>
             </div>
           ))}
-        <hr className="py-1" />
-        <div className="flex justify-between gap-2">
-          <span>[All chains]</span>
-          <span className="font-medium">{total}</span>
+          {chainResults
+            .filter((result) => !result.verified)
+            .map((result) => (
+              <div
+                key={result.chainId}
+                className="flex items-center justify-between gap-4 text-zinc-500"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <ChainLogo chainId={result.chainId} width={17} height={17} />
+                  {chainDisplayName(result.chainId)}
+                </span>
+                <span>Unavailable</span>
+              </div>
+            ))}
         </div>
+        <div className="mt-2 flex items-center justify-between gap-4 border-t border-zinc-200 pt-2 font-medium">
+          <span>All chains</span>
+          <span className="tabular-nums">{total}</span>
+        </div>
+        {treasury?.unpriced.length ? (
+          <div className="mt-1 text-zinc-500">
+            Excludes {treasury.unpriced.join(", ")}: no USD price
+          </div>
+        ) : null}
       </TooltipContent>
     </Tooltip>
   );

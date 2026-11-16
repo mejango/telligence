@@ -1,5 +1,6 @@
 "use client";
 
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { topLayerHost } from "@/lib/topLayer";
 import { cn } from "@/lib/utils";
 import * as React from "react";
@@ -69,26 +70,6 @@ function useTooltip(component: string) {
   const context = React.useContext(TooltipContext);
   if (!context) throw new Error(`${component} must be used inside Tooltip`);
   return context;
-}
-
-function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState(false);
-
-  React.useEffect(() => {
-    if (typeof window.matchMedia !== "function") {
-      const update = () => setIsMobile(window.innerWidth < 768);
-      update();
-      window.addEventListener("resize", update);
-      return () => window.removeEventListener("resize", update);
-    }
-    const query = window.matchMedia("(max-width: 767px)");
-    const update = () => setIsMobile(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-
-  return isMobile;
 }
 
 interface TooltipProps {
@@ -292,7 +273,8 @@ const TooltipContent = React.forwardRef<HTMLDivElement, TooltipContentProps>(
   ) => {
     const context = useTooltip("TooltipContent");
     const isMobile = useIsMobile();
-    const side = isMobile ? "top" : (requestedSide ?? "top");
+    const side =
+      requestedSide === "bottom" ? "bottom" : isMobile ? "top" : (requestedSide ?? "top");
     const portal = useTooltipPortal(context.open);
     const localRef = React.useRef<HTMLDivElement>(null);
     const ref = composeRefs(forwardedRef, localRef);

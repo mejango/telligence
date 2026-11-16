@@ -3,10 +3,10 @@
 
 import EtherscanLink from "@/components/EtherscanLink";
 import { useProfile } from "@/components/ProfilesContext";
+import { ensAvatarUrlForAddress } from "@/lib/ensAvatarUrl";
 import { useEffect, useState } from "react";
 import { twMerge } from "tailwind-merge";
 import { Address, Chain } from "viem";
-import { ensAvatarUrlForAddress } from "./EthereumAddress";
 
 export function ProfileAvatar({
   address,

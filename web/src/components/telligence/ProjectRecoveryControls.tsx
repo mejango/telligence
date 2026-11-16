@@ -1,14 +1,21 @@
 "use client";
 
 import { ButtonWithWallet } from "@/components/ButtonWithWallet";
-import { useWaitForTransactionReceipt, useWriteContract } from "@/hooks/useReviewedWriteContract";
+import {
+  failedLine,
+  reviewedCall,
+  ReviewRefusal,
+  SAFE_PROPOSAL_PENDING_LINE,
+  useReviewedAction,
+  type WriteRequest,
+} from "@/hooks/useReviewedAction";
 import { ProjectPolicyAbi as policyAbi } from "@/lib/telligence/generated/ProjectPolicy";
 import { TelligenceComputeVaultAbi as vaultAbi } from "@/lib/telligence/generated/TelligenceComputeVault";
 import { VVV_ADDRESS } from "@/lib/telligence/transactions";
 import { getViemPublicClient } from "@/lib/wagmiTransports";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
-import { isAddress, parseAbi, zeroAddress, type Address, type Hex } from "viem";
+import { isAddress, parseAbi, zeroAddress, type Address } from "viem";
 import { useAccount } from "wagmi";
 
 export type ProjectRecoveryControlsProps = {
@@ -192,6 +199,43 @@ function hasAuthority(snapshot: RecoverySnapshot, account?: Address) {
   );
 }
 
+type RecoveryStep = Pick<WriteRequest, "functionName" | "args">;
+
+/** Refuses a recovery step the project's current onchain state no longer allows `account`. */
+export async function assertRecoveryStep(
+  props: ProjectRecoveryControlsProps,
+  request: RecoveryStep,
+  account: Address,
+): Promise<void> {
+  const fresh = await readRecovery(props);
+  const name = request.functionName;
+  if (
+    name === "announceWinddown" ||
+    name === "setAllocationPaused" ||
+    name === "setAuthenticationEnabled"
+  ) {
+    if (!hasAuthority(fresh, account))
+      throw new ReviewRefusal(
+        "Only the project's creator or recovery wallet has authority for this action.",
+      );
+    if (name === "setAuthenticationEnabled") {
+      if (request.args?.length !== 1 || request.args[0] !== false)
+        throw new ReviewRefusal("This emergency control can only disable API authentication.");
+      if (!fresh.authenticationEnabled)
+        throw new ReviewRefusal(
+          "API authentication is already disabled. Refresh its onchain state.",
+        );
+    } else if (fresh.state !== 0 || fresh.windingDown)
+      throw new ReviewRefusal("Closure has already started. Refresh the recovery state.");
+    if (name === "setAllocationPaused" && request.args?.[0] === fresh.paused)
+      throw new ReviewRefusal("Allocation state changed. Review this action again.");
+  } else {
+    const action = withdrawalAction(fresh);
+    if (!action || name !== action.functionName || !action.ready)
+      throw new ReviewRefusal("This recovery step is not ready on Base. Refresh its cooldown.");
+  }
+}
+
 export function ProjectRecoveryControls(props: ProjectRecoveryControlsProps) {
   const { address } = useAccount();
   const headingId = useId();
@@ -210,103 +254,63 @@ export function ProjectRecoveryControls(props: ProjectRecoveryControlsProps) {
     refetchInterval: 15_000,
     retry: false,
   });
-  const [pending, setPending] = useState<{ scope: string; hash: Hex } | null>(null);
+  const [confirmed, setConfirmed] = useState<{ scope: string; line: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [failure, setFailure] = useState<{ scope: string; message: string } | null>(null);
-  const ownHash = pending?.scope === scope ? pending.hash : undefined;
-  const receipt = useWaitForTransactionReceipt({ hash: ownHash, chainId: 8453 });
-  const { writeContractAsync } = useWriteContract({
-    transactionReview: {
-      title: `Review recovery for revnet ${props.revnetId}`,
-      description:
-        "Disabling API authentication revokes the vault's onchain authentication without moving backing. Closure starts an irreversible winddown, returning backing only to this project's revnet under its rules.",
-    },
-    reverify: async (variables, account) => {
-      if (activeScope.current !== scope)
-        throw new Error("The project changed. Review its recovery again.");
-      const fresh = await readRecovery(props);
-      const name = variables.functionName;
-      if (
-        name === "announceWinddown" ||
-        name === "setAllocationPaused" ||
-        name === "setAuthenticationEnabled"
-      ) {
-        if (!hasAuthority(fresh, account))
-          throw new Error(
-            "Only the project's creator or recovery wallet has authority for this action.",
-          );
-        if (name === "setAuthenticationEnabled") {
-          if (variables.args?.length !== 1 || variables.args[0] !== false)
-            throw new Error("This emergency control can only disable API authentication.");
-          if (!fresh.authenticationEnabled)
-            throw new Error("API authentication is already disabled. Refresh its onchain state.");
-        } else if (fresh.state !== 0 || fresh.windingDown)
-          throw new Error("Closure has already started. Refresh the recovery state.");
-        if (name === "setAllocationPaused" && variables.args?.[0] === fresh.paused)
-          throw new Error("Allocation state changed. Review this action again.");
-      } else {
-        const action = withdrawalAction(fresh);
-        if (!action || name !== action.functionName || !action.ready)
-          throw new Error("This recovery step is not ready on Base. Refresh its cooldown.");
-      }
-      if (activeScope.current !== scope)
-        throw new Error("The project changed. Review its recovery again.");
-    },
-  });
+  const { run, following, dismiss } = useReviewedAction();
+  /** The step is still allowed for this account on the project it was reviewed for. */
+  const reverify = async (request: RecoveryStep, account: Address) => {
+    if (activeScope.current !== scope)
+      throw new ReviewRefusal("The project changed. Review its recovery again.");
+    await assertRecoveryStep(props, request, account);
+    if (activeScope.current !== scope)
+      throw new ReviewRefusal("The project changed. Review its recovery again.");
+  };
   const refetch = query.refetch;
-  useEffect(() => {
-    if (ownHash && receipt.isSuccess) void refetch();
-  }, [ownHash, receipt.isSuccess, refetch]);
   const snapshot = query.data;
   const action = snapshot ? withdrawalAction(snapshot) : null;
   const readyDate =
     action && action.readyAt <= 8_640_000_000_000n ? new Date(Number(action.readyAt) * 1000) : null;
-  const waiting = !!ownHash && !receipt.isSuccess && !receipt.isError;
-  const busy = submitting || waiting;
+  const busy = submitting;
 
   async function submit(
     functionName:
       "announceWinddown" | "setAllocationPaused" | "setAuthenticationEnabled" | WithdrawalFunction,
   ) {
-    if (busy || !snapshot || query.isError) return;
+    if (busy || !snapshot || query.isError || !address) return;
     setSubmitting(true);
     setFailure(null);
+    setConfirmed(null);
+    const policyArgs = {
+      setAuthenticationEnabled: [false],
+      setAllocationPaused: [!snapshot.paused],
+      announceWinddown: [],
+    } as const;
+    const request: WriteRequest =
+      functionName in policyArgs
+        ? {
+            chainId: 8453,
+            address: props.policyAddress,
+            abi: policyAbi,
+            functionName,
+            args: policyArgs[functionName as keyof typeof policyArgs],
+          }
+        : { chainId: 8453, address: props.vaultAddress, abi: vaultAbi, functionName, args: [] };
     try {
-      let hash: Hex;
-      if (functionName === "setAuthenticationEnabled") {
-        hash = await writeContractAsync({
-          chainId: 8453,
-          address: props.policyAddress,
-          abi: policyAbi,
-          functionName,
-          args: [false],
-        });
-      } else if (functionName === "setAllocationPaused") {
-        hash = await writeContractAsync({
-          chainId: 8453,
-          address: props.policyAddress,
-          abi: policyAbi,
-          functionName,
-          args: [!snapshot.paused],
-        });
-      } else if (functionName === "announceWinddown") {
-        hash = await writeContractAsync({
-          chainId: 8453,
-          address: props.policyAddress,
-          abi: policyAbi,
-          functionName,
-          args: [],
-        });
-      } else {
-        hash = await writeContractAsync({
-          chainId: 8453,
-          address: props.vaultAddress,
-          abi: vaultAbi,
-          functionName,
-          args: [],
-        });
+      const result = await run({
+        account: address,
+        title: `Review recovery for revnet ${props.revnetId}`,
+        description:
+          "Disabling API authentication revokes the vault's onchain authentication without moving backing. Closure starts an irreversible winddown, returning backing only to this project's revnet under its rules.",
+        reverify: () => reverify(request, address),
+        calls: [reviewedCall(request)],
+      });
+      if (result?.status === "failed") setFailure({ scope, message: failedLine(result) });
+      if (result?.status === "proposed") setConfirmed({ scope, line: SAFE_PROPOSAL_PENDING_LINE });
+      if (result?.status === "done") {
+        setConfirmed({ scope, line: "Confirmed on Base." });
+        void refetch();
       }
-      setPending({ scope, hash });
     } catch (error) {
       setFailure({
         scope,
@@ -326,8 +330,8 @@ export function ProjectRecoveryControls(props: ProjectRecoveryControlsProps) {
         Project recovery
       </h2>
       <p className="mt-4 text-sm leading-7 text-melon-800">
-        Backing returns to this project&apos;s revnet under its cashout rules. Original contributors
-        are not individually refunded.
+        Backing returns to this project&apos;s revnet under its cash out rules. Original
+        contributors are not individually refunded.
       </p>
       {query.isPending && (
         <p role="status" className="mt-4 text-sm text-melon-700">
@@ -458,17 +462,17 @@ export function ProjectRecoveryControls(props: ProjectRecoveryControlsProps) {
           )}
         </div>
       )}
-      {ownHash && (
-        <p
-          role={receipt.isError ? "alert" : "status"}
-          className={`mt-4 text-sm leading-7 ${receipt.isError ? "text-red-700" : "text-melon-700"}`}
-        >
-          {receipt.isSuccess
-            ? "Confirmed on Base."
-            : (receipt.statusMessage ??
-              (receipt.isError
-                ? "The transaction failed. Refresh recovery state before trying again."
-                : "Submitted. Waiting for onchain confirmation."))}
+      {following && (
+        <p role="status" className="mt-4 text-sm leading-7 text-melon-700">
+          Waiting for confirmation on Base.{" "}
+          <button type="button" className="compute-text-link" onClick={() => dismiss()}>
+            Stop waiting
+          </button>
+        </p>
+      )}
+      {confirmed?.scope === scope && (
+        <p role="status" className="mt-4 text-sm leading-7 text-melon-700">
+          {confirmed.line}
         </p>
       )}
       {failure?.scope === scope && (

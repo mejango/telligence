@@ -1,18 +1,19 @@
 "use client";
 
 import { useViewedAccount } from "@/hooks/useViewedAccount";
+import { chainRevert } from "@/lib/contract-revert";
 import { payTokenKey, V6PayTokenOption } from "@/lib/v6/pay";
 import {
   jb721TiersHookAbi,
   JBChainId,
-  jbContractAddress,
   JBCoreContracts,
   jbPricesAbi,
+  jbV6ContractAddress,
   NATIVE_TOKEN,
 } from "@bananapus/nana-sdk-core";
 import { BASE_CURRENCY_ETH, BASE_CURRENCY_USD } from "@bananapus/nana-sdk-core/v6";
-import { useQuery } from "@tanstack/react-query";
-import { Address, BaseError, ContractFunctionRevertedError, PublicClient } from "viem";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Address, PublicClient } from "viem";
 import { usePublicClient } from "wagmi";
 import { loadShopInventory } from "../shop/shopLib";
 
@@ -33,6 +34,7 @@ export interface V6PayShopTier {
 
 export interface V6PayShop {
   hook: Address;
+  store: Address;
   /**
    * The metadata id target — the hook's METADATA_ID_TARGET (the shared
    * implementation), NOT the clone. Keying by the clone address makes the
@@ -56,6 +58,7 @@ export interface V6ShopPayRoute {
 /** The project's 721 shop (hook + tiers) on the selected chain, or null. */
 export function usePayShop(chainId: JBChainId, projectId: bigint) {
   const publicClient = usePublicClient({ chainId });
+  const queryClient = useQueryClient();
 
   return useQuery({
     queryKey: ["v6PayShop", chainId, projectId.toString()],
@@ -67,10 +70,15 @@ export function usePayShop(chainId: JBChainId, projectId: bigint) {
       // Share the Shop tab's bounded, non-resolving inventory read. Asking the
       // store to resolve every token URI in one RPC call can revert for larger
       // collections and used to make the pay-card strip disappear entirely.
-      const resolved = await loadShopInventory(client, chainId, projectId);
+      const resolved = await queryClient.fetchQuery({
+        queryKey: ["v6Shop721", chainId, projectId.toString()],
+        staleTime: 60_000,
+        queryFn: () => loadShopInventory(client, chainId, projectId),
+      });
       if (!resolved) return null;
       return {
         hook: resolved.hook,
+        store: resolved.store,
         idTarget: resolved.idTarget,
         pricingCurrency: resolved.pricing.currency,
         pricingDecimals: resolved.pricing.decimals,
@@ -138,7 +146,7 @@ export function usePayShopRoutes(
     staleTime: 60_000,
     retry: 1,
     queryFn: async (): Promise<Record<string, V6ShopPayRoute>> => {
-      const prices = jbContractAddress[6][JBCoreContracts.JBPrices][chainId];
+      const prices = jbV6ContractAddress[JBCoreContracts.JBPrices][chainId];
       const entries = await Promise.all(
         tokens.map(async (payToken) => {
           const key = payTokenKey(payToken);
@@ -228,10 +236,7 @@ export function usePayShopRoutes(
 /** A revert (as opposed to a transport failure) means the chain answered — so the absence of
  *  a feed is a fact about the protocol, not about the network. */
 function contractReverted(error: unknown): boolean {
-  return (
-    error instanceof BaseError &&
-    !!error.walk((cause) => cause instanceof ContractFunctionRevertedError)
-  );
+  return chainRevert(error) !== null;
 }
 
 export { BASE_CURRENCY_ETH, BASE_CURRENCY_USD };

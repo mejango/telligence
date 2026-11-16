@@ -1,5 +1,5 @@
 /** Browser requests share the gateway's HttpOnly session; secrets never enter URLs. */
-export function gatewayOrigin(): string {
+function gatewayOrigin(): string {
   const configured = process.env.NEXT_PUBLIC_TELLIGENCE_GATEWAY_URL;
   if (!configured) return "/api/telligence";
   let url: URL;

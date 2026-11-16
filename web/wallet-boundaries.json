@@ -1,0 +1,145 @@
+{
+  "format": "juice-sdk-wallet-boundaries-1",
+  "sites": [
+    {
+      "file": "src/app/[slug]/components/Value/RepayDialog.tsx",
+      "line": 104,
+      "api": "useWalletClient",
+      "boundary": "Reads the connected wallet client only to require a connected wallet; it never signs or sends. Writes go through the reviewed write hook.",
+      "test": "test/value-send-hold.test.tsx"
+    },
+    {
+      "file": "src/app/[slug]/components/Value/hooks/useBorrowDialog.tsx",
+      "line": 173,
+      "api": "useWalletClient",
+      "boundary": "Reads the connected wallet client only to require a connected wallet; it never signs or sends. Writes go through the reviewed write hook.",
+      "test": "test/borrow-review-cancel.test.tsx"
+    },
+    {
+      "file": "src/app/[slug]/components/v6/operator/SafeQueueCard.tsx",
+      "line": 984,
+      "api": "sendTransaction",
+      "boundary": "The reviewed Safe execution's own wallet send, wrapped so the queue rechecks its live transaction, then the reviewed account, the wallet connection and view-as at the wallet, and journals the send under the reviewed account; core reviews, simulates and holds it first.",
+      "test": "test/safe-queue-card.test.tsx"
+    },
+    {
+      "file": "src/components/TransactionReviewProvider.tsx",
+      "line": 86,
+      "api": "registerReviewHandler",
+      "boundary": "The one review dialog answers core's prompts: it returns core's confirmation for the model it showed, or null. It never signs or sends.",
+      "test": "test/transaction-review-provider.test.tsx"
+    },
+    {
+      "file": "src/components/TransactionReviewProvider.tsx",
+      "line": 87,
+      "api": "request",
+      "boundary": "Core's review dialog queue (createReviewQueue) shows a review; it resolves the person's answer and never signs, sends or calls a wallet RPC.",
+      "test": "test/transaction-review-provider.test.tsx"
+    },
+    {
+      "file": "src/components/TransactionReviewProvider.tsx",
+      "line": 99,
+      "api": "request",
+      "boundary": "Core's review dialog queue (createReviewQueue) shows a flow choice; it resolves the person's answer and never signs, sends or calls a wallet RPC.",
+      "test": "test/transaction-review-provider.test.tsx"
+    },
+    {
+      "file": "src/components/TransactionReviewProvider.tsx",
+      "line": 109,
+      "api": "request",
+      "boundary": "Core's review dialog queue (createReviewQueue) shows a funding chain choice; it resolves the person's answer and never signs, sends or calls a wallet RPC.",
+      "test": "test/transaction-review-provider.test.tsx"
+    },
+    {
+      "file": "src/components/TransactionReviewProvider.tsx",
+      "line": 124,
+      "api": "request",
+      "boundary": "Core's review dialog queue (createReviewQueue) shows a Safe nonce choice; it resolves the person's answer and never signs, sends or calls a wallet RPC.",
+      "test": "test/transaction-review-provider.test.tsx"
+    },
+    {
+      "file": "src/components/telligence/LaunchComputeProjectButton.tsx",
+      "line": 297,
+      "api": "request",
+      "boundary": "The SDK's browserLocks().request (Web Locks) holds one launch per creator across tabs, never a wallet RPC.",
+      "test": "test/telligence-launch-lifecycle.test.tsx"
+    },
+    {
+      "file": "src/hooks/useMarkee.ts",
+      "line": 485,
+      "api": "request",
+      "boundary": "navigator.locks.request (Web Locks) for cross-tab coordination, never a wallet RPC.",
+      "test": "test/use-markee.test.tsx"
+    },
+    {
+      "file": "src/hooks/useMultichainBatch.ts",
+      "line": 417,
+      "api": "request",
+      "boundary": "navigator.locks.request (Web Locks) for cross-tab coordination, never a wallet RPC.",
+      "test": "test/multichain-batch.test.tsx"
+    },
+    {
+      "file": "src/hooks/useMultichainBatch.ts",
+      "line": 1131,
+      "api": "request",
+      "boundary": "navigator.locks.request (Web Locks) for cross-tab coordination, never a wallet RPC.",
+      "test": "test/multichain-batch.test.tsx"
+    },
+    {
+      "file": "src/hooks/useReviewedRelayr.ts",
+      "line": 318,
+      "api": "request",
+      "boundary": "navigator.locks.request (Web Locks) for cross-tab coordination, never a wallet RPC.",
+      "test": "test/reviewed-relayr-hooks.test.tsx"
+    },
+    {
+      "file": "src/hooks/useReviewedRelayr.ts",
+      "line": 2744,
+      "api": "request",
+      "boundary": "navigator.locks.request (Web Locks) for cross-tab coordination, never a wallet RPC.",
+      "test": "test/reviewed-relayr-hooks.test.tsx"
+    },
+    {
+      "file": "src/lib/reviewed-send-deps.ts",
+      "line": 77,
+      "api": "signMessage",
+      "boundary": "Core's viemWalletAdapter over the current wagmi connector: as each sending or signing request reaches the provider it rechecks the account, chain, Safe route, connector and revnet's check (view-as, the reviewed wallet, the operation's final check and shop-voting policy). Only core's WalletNotInvokedError, raised before any request went out, releases an unsent hold; wallet errors keep their certainty. Core's lock fence (WalletRequestOptions) is forwarded to the wallet request.",
+      "test": "test/safe-batch.test.tsx"
+    },
+    {
+      "file": "src/lib/reviewed-send-deps.ts",
+      "line": 81,
+      "api": "sendTransaction",
+      "boundary": "Core's viemWalletAdapter over the current wagmi connector: as each sending or signing request reaches the provider it rechecks the account, chain, Safe route, connector and revnet's check (view-as, the reviewed wallet, the operation's final check and shop-voting policy). Only core's WalletNotInvokedError, raised before any request went out, releases an unsent hold; wallet errors keep their certainty. Core's lock fence (WalletRequestOptions) is forwarded to the wallet request.",
+      "test": "test/safe-batch.test.tsx"
+    },
+    {
+      "file": "src/lib/reviewed-send-deps.ts",
+      "line": 86,
+      "api": "signTypedData",
+      "boundary": "Core's viemWalletAdapter over the current wagmi connector: as each sending or signing request reaches the provider it rechecks the account, chain, Safe route, connector and revnet's check (view-as, the reviewed wallet, the operation's final check and shop-voting policy). Only core's WalletNotInvokedError, raised before any request went out, releases an unsent hold; wallet errors keep their certainty. Core's lock fence (WalletRequestOptions) is forwarded to the wallet request.",
+      "test": "test/safe-batch.test.tsx"
+    },
+    {
+      "file": "src/lib/reviewed-send-deps.ts",
+      "line": 101,
+      "api": "sendCalls",
+      "boundary": "Core's viemWalletAdapter over the current wagmi connector: as each sending or signing request reaches the provider it rechecks the account, chain, Safe route, connector and revnet's check (view-as, the reviewed wallet, the operation's final check and shop-voting policy). Only core's WalletNotInvokedError, raised before any request went out, releases an unsent hold; wallet errors keep their certainty. Core's lock fence (WalletRequestOptions) is forwarded to the wallet request.",
+      "test": "test/safe-batch.test.tsx"
+    },
+    {
+      "file": "src/lib/reviewed-send-deps.ts",
+      "line": 197,
+      "api": "signTypedData",
+      "boundary": "announcingSign forwards unchanged to the guarded adapter it wraps, after telling the caller the wallet is opening. It adds no request of its own.",
+      "test": "test/safe-batch-signer-proposal.test.ts"
+    },
+    {
+      "file": "src/lib/safe-relayr.ts",
+      "line": 415,
+      "api": "request",
+      "boundary": "navigator.locks.request (Web Locks) for cross-tab coordination, never a wallet RPC.",
+      "test": "test/reviewed-relayr-hooks.test.tsx"
+    }
+  ]
+}

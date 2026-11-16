@@ -1,7 +1,8 @@
+import { mapActivityEvents } from "@/app/[slug]/components/ActivityFeed/mapActivityEvents";
 import { mergeAccountActivity } from "@/lib/bendystraw/accountActivity";
 import { AccountActivityEventsOperation } from "@/lib/bendystraw/operations";
 import { BENDYSTRAW_QUERY_REGISTRY } from "@/lib/bendystraw/registry.server";
-import type { AccountActivityEventsQuery } from "@/lib/bendystraw/types";
+import type { AccountActivityEventItem, AccountActivityEventsQuery } from "@/lib/bendystraw/types";
 import { describe, expect, it } from "vitest";
 
 const ME = "0x1111111111111111111111111111111111111111";
@@ -153,6 +154,40 @@ describe("mergeAccountActivity", () => {
     const mint = merged.find((item) => item.id === "mint-9");
     expect(mint?.mintTokensEvent?.beneficiary).toBe(ME);
     expect(mint?.project?.tokenSymbol).toBe("TEST");
+  });
+
+  it("labels a received payment in its own token, not the project's accounting token", () => {
+    // Every beneficiary-root document names the token the event moved.
+    const query = BENDYSTRAW_QUERY_REGISTRY[AccountActivityEventsOperation.id].query;
+    for (const root of ["beneficiaryPayEvents", "beneficiaryCashOutEvents"]) {
+      const block = query.slice(query.indexOf(`${root}:`)).split("project {")[0];
+      expect(block).toMatch(/\btoken\s+decimals\s+tokenSymbol\b/u);
+    }
+    const data = {
+      activityEvents: { items: [] },
+      beneficiaryPayEvents: {
+        items: [
+          {
+            ...payEvent("pay-3", {
+              from: OTHER,
+              token: "0x000000000000000000000000000000000000eeee",
+              decimals: 18,
+              tokenSymbol: "ETH",
+            }),
+            chainId: 1,
+            project: { ...PROJECT, tokenSymbol: "USDC", decimals: 6 },
+          },
+        ],
+      },
+    } as unknown as AccountActivityEventsQuery;
+
+    const [row] = mapActivityEvents(mergeAccountActivity(data), (event) => ({
+      tokenSymbol: (event as AccountActivityEventItem).project?.tokenSymbol,
+      decimals: (event as AccountActivityEventItem).project?.decimals,
+      denominateInUsd: true,
+    }));
+
+    expect([row?.baseAmount, row?.baseTokenSymbol]).toEqual(["1", "ETH"]);
   });
 
   it("tolerates responses without the beneficiary roots", () => {

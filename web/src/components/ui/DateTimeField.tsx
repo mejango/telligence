@@ -104,7 +104,6 @@ export function DateTimeField({
         className={inputClassName}
       />
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-sm text-zinc-500">
-        <span>Time shown in</span>
         <select
           value={timeZone}
           onChange={(event) => setTimeZone(event.target.value)}

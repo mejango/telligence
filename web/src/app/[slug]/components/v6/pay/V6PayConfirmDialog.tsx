@@ -1,6 +1,6 @@
 "use client";
 
-import { ButtonWithWallet } from "@/components/ButtonWithWallet";
+import { AllowedDecreaseField } from "@/components/AllowedDecreaseField";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,29 +9,34 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { SummaryRow } from "@/components/ui/TxConfirmDialog";
+import { SummaryRow } from "@/components/ui/TxProgress";
 import { TxSteps } from "@/components/ui/TxSteps";
-import { type DirectSwapQuote, type Permit2SignatureAuthorization } from "@/lib/directPaySwap";
 import { etherscanLink } from "@/lib/utils";
-import { formatPayAmount, V6PayMode, V6PayTokenOption } from "@/lib/v6/pay";
-import { JB_CHAINS, JBChainId } from "@bananapus/nana-sdk-core";
+import { V6PayMode, V6PayTokenOption } from "@/lib/v6/pay";
+import { JBChainId } from "@bananapus/nana-sdk-core";
+import { useStartOnce } from "@bananapus/nana-sdk-core/review/react";
+import type { Permit2SignatureAuthorization } from "@bananapus/nana-sdk-core/v6";
+import { PAY_MAX_SLIPPAGE_BPS, PAY_QUOTE_FAILED_MESSAGE } from "@bananapus/nana-sdk-core/v6";
 import { Abi, Address, Hex } from "viem";
 import { useAccount } from "wagmi";
 import { useSelectedSucker } from "../../PayCard/SelectedSuckerContext";
+import { payContext } from "./payContext";
+
+export { payContext };
 
 export type V6PayPhase =
   | "preparing"
   | "ready"
+  | "authorizing"
   | "approving-token"
-  | "approving-router"
   | "simulating"
   | "signing"
   | "pending"
   | "safe-proposed"
   | "success";
 
-export interface PreparedV6TransactionAction {
-  kind: "token-approval" | "router-approval" | "payment";
+interface PreparedV6TransactionAction {
+  kind: "token-approval" | "payment";
   label: string;
   request: {
     address: Address;
@@ -43,37 +48,31 @@ export interface PreparedV6TransactionAction {
   calldata: Hex;
 }
 
-interface PreparedV6SignatureAction {
-  kind: "router-signature";
-  label: string;
-  authorization: Permit2SignatureAuthorization;
-}
-
 /** A fully resolved, encodable pay/add-to-balance transaction. */
 export interface PreparedV6Pay {
+  /** The card inputs it was built from; a change means it needs review again. */
+  identity: string;
+  /** The account it was built for: a payment's tokens go to it. */
+  account: Address;
+  /** The project's payment notice as it read when this was prepared. */
+  projectNotice: string;
   mode: V6PayMode;
   chainId: JBChainId;
   token: V6PayTokenOption;
   amount: bigint;
   memo: string;
   terminal: Address;
-  /** True when the resolved route goes through the router registry (swap). */
-  viaRouterRoute: boolean;
-  /** True when payment bypasses the terminal for a better direct pool swap. */
-  directSwapRoute: boolean;
-  /** How a direct swap reaches the project's hooked V4 pool. */
-  swapInputRoute: DirectSwapQuote["inputRoute"] | null;
   /** Fresh previewed token return (null for add-to-balance). */
   expectedTokens: bigint | null;
   reservedTokens: bigint | null;
   minReturned: bigint;
+  /** The pool price was unreadable: `minReturned` is only the mint rate. */
+  quoteFailed: boolean;
   needsApproval: boolean;
-  needsPermit2Approval: boolean;
   tokenApprovalComplete: boolean;
-  routerAuthorizationComplete: boolean;
   tokenApproval: PreparedV6TransactionAction | null;
-  routerApproval: PreparedV6TransactionAction | null;
-  routerSignature: PreparedV6SignatureAction | null;
+  /** The exact Permit2 allowance the payer signs for this payment, free of gas; null when none is needed. */
+  authorization: Permit2SignatureAuthorization | null;
   cartRows: { tierId: number; quantity: number; name: string }[];
   request: {
     address: Address;
@@ -87,19 +86,19 @@ export interface PreparedV6Pay {
 
 const PHASE_LABELS: Record<Exclude<V6PayPhase, "ready" | "safe-proposed" | "success">, string> = {
   preparing: "Preparing…",
+  authorizing: "Sign the payment authorization in your wallet. It is free.",
   "approving-token":
     "Confirm token access in your wallet. The payment will continue automatically…",
-  "approving-router":
-    "Sign or confirm the swap-router authorization in your wallet. The payment will continue automatically…",
-  simulating: "Simulating the transaction…",
+  simulating: "Checking the transaction…",
   signing: "Confirm in your wallet…",
   pending: "Transaction submitted, awaiting confirmation…",
 };
 
 /**
- * The confirm-before-send dialog: a human summary of exactly what will be
- * sent and the wallet-aware action button. The payment card owns route and
- * chain selection; this dialog only confirms the resolved transaction.
+ * The payment's progress: a human summary of what is sent, its wallet steps,
+ * and a recovery button after a failure. It never confirms: the payment's one
+ * review opens as soon as it is prepared. The payment card owns route and chain
+ * selection.
  */
 export function V6PayConfirmDialog({
   open,
@@ -108,10 +107,14 @@ export function V6PayConfirmDialog({
   phase,
   mode,
   error,
+  reviewAgain,
+  retrySlippage,
+  quoteSettled = true,
   projectTokenSymbol,
   txHash,
   onConfirm,
   onDone,
+  following = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -119,29 +122,45 @@ export function V6PayConfirmDialog({
   phase: V6PayPhase;
   mode: V6PayMode;
   error: string | null;
+  /** The payment reverted onchain: the button quotes and reviews it again. */
+  reviewAgain?: boolean;
+  /** After a minimum shortfall: the looser tolerance the payment is reviewed again with. */
+  retrySlippage?: { bps: number; onChange: (bps: number) => void } | null;
+  /** The route quote the payment is checked against has settled; its review waits for it. */
+  quoteSettled?: boolean;
   projectTokenSymbol: string;
   txHash: `0x${string}` | undefined;
   onConfirm: () => void;
   /** Retained for caller compatibility; chain selection belongs to the payment card. */
   onSwitchChain?: (chainId: string) => void;
   onDone: () => void;
+  /** The sent payment is only followed until its hold settles: the confirm can close. */
+  following?: boolean;
 }) {
   const busy =
+    phase === "authorizing" ||
     phase === "approving-token" ||
-    phase === "approving-router" ||
     phase === "simulating" ||
     phase === "signing" ||
     phase === "pending";
   const { address } = useAccount();
   const { selectedSucker } = useSelectedSucker();
   const chainId = prepared?.chainId ?? selectedSucker.peerChainId;
-  const chainMeta = JB_CHAINS[chainId];
+  // The payment's one review opens as soon as it is prepared; the button is only for recovery.
+  const recovering = !!error || !!retrySlippage || !!reviewAgain;
+  useStartOnce(
+    open,
+    false,
+    onConfirm,
+    prepared,
+    phase !== "ready" || !prepared || recovering || !address || !quoteSettled,
+  );
 
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (busy) return;
+        if (busy && !following) return;
         if (!next && phase === "success") onDone();
         onOpenChange(next);
       }}
@@ -166,7 +185,7 @@ export function V6PayConfirmDialog({
                   <p className="text-sm text-zinc-700">
                     {mode === "pay"
                       ? "Your payment went through."
-                      : "The balance grew — no tokens were minted."}
+                      : "The balance grew. No tokens were minted."}
                   </p>
                   {txHash && etherscanLink(txHash, { type: "tx", chainId }) ? (
                     <a
@@ -190,9 +209,8 @@ export function V6PayConfirmDialog({
               ) : phase === "safe-proposed" ? (
                 <div className="py-2">
                   <p className="text-sm leading-relaxed text-zinc-700">
-                    The Safe has accepted this proposal, but the payment has not reached the project
-                    yet. It still needs the required approvals and successful onchain execution.
-                    Track the persistent transaction status and do not submit it again.
+                    The payment is proposed in Safe. It still needs the required approvals and a
+                    successful transaction. Follow its saved status before trying again.
                   </p>
                   {txHash ? (
                     <p className="mt-2 break-all font-mono text-xs text-zinc-500">{txHash}</p>
@@ -214,38 +232,14 @@ export function V6PayConfirmDialog({
                     </div>
                   ) : prepared ? (
                     <div className="flex flex-col gap-3 py-2">
-                      <SummaryRow label="Send">
-                        {formatPayAmount(prepared.amount, prepared.token.decimals)}{" "}
-                        {prepared.token.symbol}
-                      </SummaryRow>
-                      <SummaryRow label="On">
-                        {chainMeta?.name ?? String(prepared.chainId)}
-                      </SummaryRow>
-                      {prepared.mode === "pay" ? (
-                        <SummaryRow
-                          label={prepared.viaRouterRoute ? "You get at least" : "You get"}
-                        >
-                          {formatPayAmount(prepared.minReturned, 18)} {projectTokenSymbol}
+                      {payContext(prepared, projectTokenSymbol).map((row) => (
+                        <SummaryRow key={row.label} label={row.label}>
+                          {row.value}
                         </SummaryRow>
-                      ) : (
-                        <SummaryRow label="Effect">
-                          Adds to the project balance — nothing else.
-                        </SummaryRow>
-                      )}
-                      {prepared.swapInputRoute && prepared.swapInputRoute.kind !== "single-v4" ? (
-                        <SummaryRow label="Route">
-                          {prepared.token.symbol} → {prepared.swapInputRoute.bridgeTokenSymbol} →{" "}
-                          {projectTokenSymbol}
-                        </SummaryRow>
+                      ))}
+                      {prepared.mode === "pay" && prepared.quoteFailed && !busy && !error ? (
+                        <p className="text-xs text-zinc-600">{PAY_QUOTE_FAILED_MESSAGE}</p>
                       ) : null}
-                      {prepared.cartRows.length > 0 ? (
-                        <SummaryRow label="Items">
-                          {prepared.cartRows
-                            .map((row) => `${row.quantity}× ${row.name}`)
-                            .join(", ")}
-                        </SummaryRow>
-                      ) : null}
-                      {prepared.memo ? <SummaryRow label="Note">{prepared.memo}</SummaryRow> : null}
                       {/* Each action's exact payload is reviewed in the one
                           transaction safety check, the same shell every
                           multi-step flow uses. */}
@@ -260,22 +254,39 @@ export function V6PayConfirmDialog({
                         </p>
                       ) : null}
                       {error ? <p className="text-sm text-red-600">{error}</p> : null}
+                      {retrySlippage ? (
+                        <AllowedDecreaseField
+                          className=""
+                          bps={retrySlippage.bps}
+                          onChange={retrySlippage.onChange}
+                          maxBps={Number(PAY_MAX_SLIPPAGE_BPS)}
+                        />
+                      ) : null}
                     </div>
                   ) : error ? (
                     <p className="py-4 text-sm text-red-600">{error}</p>
                   ) : null}
 
-                  <div className="flex justify-end">
-                    <ButtonWithWallet
-                      targetChainId={chainId}
-                      loading={busy || (phase === "preparing" && !!address)}
-                      onClick={onConfirm}
-                      connectWalletText="Connect Wallet"
-                      className="bg-teal-500 text-melon-950 hover:bg-teal-600"
-                    >
-                      {mode === "pay" ? "Pay" : "Add to balance"}
-                    </ButtonWithWallet>
-                  </div>
+                  {recovering || (!prepared && phase !== "preparing") ? (
+                    <div className="flex justify-end">
+                      {/* The pay card asks for a wallet before this opens, and the payment's own
+                        writes switch the wallet to its chain after review. */}
+                      <Button
+                        loading={busy || (phase === "preparing" && !!address)}
+                        disabled={!address}
+                        onClick={onConfirm}
+                        className="bg-teal-500 text-melon-950 hover:bg-teal-600"
+                      >
+                        {retrySlippage || reviewAgain
+                          ? "Review again"
+                          : !prepared
+                            ? "Try again"
+                            : mode === "pay"
+                              ? "Pay"
+                              : "Add to balance"}
+                      </Button>
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>
@@ -288,35 +299,19 @@ export function V6PayConfirmDialog({
 
 function walletActionSteps(prepared: PreparedV6Pay): string[] {
   const steps: string[] = [];
-  if (prepared.needsApproval) {
-    steps.push(`Approve ${prepared.token.symbol} access`);
-  }
-  if (prepared.needsPermit2Approval) {
-    steps.push(
-      prepared.routerSignature
-        ? "Sign the swap authorization"
-        : "Authorize the Uniswap swap router",
-    );
-  }
-  steps.push(
-    prepared.mode === "pay"
-      ? prepared.directSwapRoute
-        ? "Execute the swap"
-        : "Execute the payment"
-      : "Add to the project balance",
-  );
+  if (prepared.authorization) steps.push("Authorize the payment (free signature)");
+  if (prepared.tokenApproval) steps.push(prepared.tokenApproval.label);
+  steps.push(prepared.mode === "pay" ? "Execute the payment" : "Add to the project balance");
   return steps;
 }
 
 function activeStepIndex(prepared: PreparedV6Pay, phase: V6PayPhase): number {
   const steps = walletActionSteps(prepared);
-  if (phase === "approving-token") return 0;
-  if (phase === "approving-router") return prepared.needsApproval ? 1 : 0;
+  if (phase === "authorizing") return 0;
+  if (phase === "approving-token") return steps.length - 2;
   if (phase === "simulating" || phase === "signing" || phase === "pending") return steps.length - 1;
   if (phase === "success") return steps.length;
+  if (prepared.authorization) return 0;
   if (prepared.needsApproval && !prepared.tokenApprovalComplete) return 0;
-  if (prepared.needsPermit2Approval && !prepared.routerAuthorizationComplete) {
-    return prepared.needsApproval ? 1 : 0;
-  }
   return steps.length - 1;
 }

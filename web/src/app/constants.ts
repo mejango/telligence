@@ -14,7 +14,6 @@ import { JB_CHAINS } from "@bananapus/nana-sdk-core";
 export const RESERVED_TOKEN_SPLIT_GROUP_ID = 1n;
 /** JBSplits.FALLBACK_RULESET_ID — the default group `splitsOf` serves when a ruleset's group is empty. */
 export const FALLBACK_RULESET_ID = 0n;
-export const REVNET_CASHOUT_FEE_PERCENT = 0.025;
 
 /**
  * Display order for chain lists. Production chains first, then their testnets, so every
@@ -24,13 +23,13 @@ export const REVNET_CASHOUT_FEE_PERCENT = 0.025;
  */
 const chainSortOrder = new Map<JBChainId, number>([
   [mainnet.id, 0],
-  [optimism.id, 1],
-  [base.id, 2],
-  [arbitrum.id, 3],
+  [base.id, 1],
+  [arbitrum.id, 2],
+  [optimism.id, 3],
   [sepolia.id, 4],
-  [optimismSepolia.id, 5],
-  [baseSepolia.id, 6],
-  [arbitrumSepolia.id, 7],
+  [baseSepolia.id, 5],
+  [arbitrumSepolia.id, 6],
+  [optimismSepolia.id, 7],
 ]);
 
 /**

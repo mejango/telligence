@@ -5,7 +5,6 @@ import { DateRelative } from "@/components/DateRelative";
 import { IpfsImage } from "@/components/IpfsImage";
 import { IssuanceFingerprint } from "@/components/IssuanceFingerprint";
 import { ProjectLink } from "@/components/ProjectLink";
-import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { formatEthAddress } from "@/lib/utils";
 import { JB_CHAINS, type JBChainId } from "@bananapus/nana-sdk-core";
 import { useCallback, useMemo, useState } from "react";
@@ -15,6 +14,8 @@ import {
   type ActivityEventItem,
 } from "./[slug]/components/ActivityFeed/mapActivityEvents";
 import type { HomepageRawActivity } from "./getHomepageActivity";
+import { homepageRowKey } from "./homepageActivityRows";
+import { HomepageLoadMore } from "./HomepageLoadMore";
 
 type HomepageActivity = ReturnType<typeof mapActivityEvents>[number];
 
@@ -40,6 +41,8 @@ function description(event: HomepageActivity, symbol: string) {
       return `swapped ${event.tokenCount} ${symbol} via the buyback pool`;
     case "payout":
       return "sent payouts";
+    case "bridgeSend":
+      return `sending ${event.tokenCount} ${symbol} to ${event.detail}`;
     case "rulesetQueued":
       return "reconfigured the revnet";
     case "projectCreate":
@@ -96,7 +99,7 @@ export function HomepageActivityFeed({
     if (!hasMore || loading) return;
     setLoading(true);
     try {
-      const response = await fetch(`/api/homepage-activity?limit=8&offset=${events.length}`);
+      const response = await fetch(`/api/homepage-activity?rows=8&offset=${events.length}`);
       if (!response.ok) throw new Error("Activity unavailable");
       const data = (await response.json()) as { events: HomepageRawActivity[]; hasMore: boolean };
       setEvents((current) => {
@@ -108,14 +111,13 @@ export function HomepageActivityFeed({
       setLoading(false);
     }
   }, [events.length, hasMore, loading]);
-  const markerRef = useInfiniteScroll(loadMore, hasMore && !loading);
 
   // One line item per transaction (per project): fold same-tx rows together.
   const eventGroups: HomepageRawActivity[][] = [];
   {
     const groups = new Map<string, HomepageRawActivity[]>();
     for (const event of events) {
-      const key = `${event.chainId}:${event.project?.projectId ?? ""}:${event.txHash}`;
+      const key = homepageRowKey(event);
       const group = groups.get(key);
       if (group) group.push(event);
       else {
@@ -182,9 +184,6 @@ export function HomepageActivityFeed({
               </ProjectLink>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2 text-xs text-zinc-500">
-                  <span className="shrink-0 whitespace-nowrap">
-                    <DateRelative timestamp={event.timestamp} />
-                  </span>
                   <div className="flex min-w-0 items-center gap-2">
                     {activity.baseAmount ? (
                       <span className="truncate" title={activity.exactAmount}>
@@ -202,22 +201,27 @@ export function HomepageActivityFeed({
                         out
                       </span>
                     ) : null}
-                    <span className="shrink-0">
-                      <ChainLogo chainId={chainId} width={14} height={14} />
-                    </span>
                   </div>
+                  <span className="shrink-0">
+                    <ChainLogo chainId={chainId} width={14} height={14} />
+                  </span>
                 </div>
-                <ProjectLink
-                  href={href}
-                  projectHint={{
-                    name,
-                    logoUri: project.logoUri ?? null,
-                    tagline: project.projectTagline ?? null,
-                  }}
-                  className="mt-1 block truncate text-sm font-medium text-teal-700 hover:underline"
-                >
-                  {name}
-                </ProjectLink>
+                <div className="mt-1 flex items-baseline justify-between gap-2">
+                  <ProjectLink
+                    href={href}
+                    projectHint={{
+                      name,
+                      logoUri: project.logoUri ?? null,
+                      tagline: project.projectTagline ?? null,
+                    }}
+                    className="block min-w-0 truncate text-sm font-medium text-teal-700 hover:underline"
+                  >
+                    {name}
+                  </ProjectLink>
+                  <span className="shrink-0 whitespace-nowrap text-xs text-zinc-500">
+                    <DateRelative timestamp={event.timestamp} />
+                  </span>
+                </div>
                 <div className="mt-1 line-clamp-2 text-sm">
                   {explorer ? (
                     <a
@@ -231,18 +235,25 @@ export function HomepageActivityFeed({
                   ) : (
                     <span>{formatEthAddress(activity.beneficiary)}</span>
                   )}
-                  <span className="text-zinc-700"> {combinedDescription(activity, symbol)}</span>
+                  <span
+                    className="text-zinc-700"
+                    title={
+                      activities
+                        .filter((entry) => entry.exactTokenCount)
+                        .map((entry) => `${entry.exactTokenCount} ${symbol}`)
+                        .join(", ") || undefined
+                    }
+                  >
+                    {" "}
+                    {combinedDescription(activity, symbol)}
+                  </span>
                 </div>
               </div>
             </div>
           </li>
         );
       })}
-      {hasMore || loading ? (
-        <li className="h-12" aria-hidden>
-          <div ref={markerRef} className="h-px" />
-        </li>
-      ) : null}
+      <HomepageLoadMore loadMore={loadMore} hasMore={hasMore} loading={loading} />
     </ol>
   );
 }

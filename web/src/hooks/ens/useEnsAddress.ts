@@ -1,7 +1,6 @@
 import { mainnet } from "@/lib/chains";
 import { useQuery } from "@tanstack/react-query";
 import { Address, PublicClient } from "viem";
-import { normalize } from "viem/ens";
 import { usePublicClient } from "wagmi";
 
 /**
@@ -9,6 +8,8 @@ import { usePublicClient } from "wagmi";
  * onchain avoids leaking every looked-up name to a third-party API.
  */
 async function resolveName(name: string, { publicClient }: { publicClient: PublicClient }) {
+  // ENS normalization carries a large Unicode table; it loads only for an ENS lookup.
+  const { normalize } = await import("viem/ens");
   const address = await publicClient.getEnsAddress({ name: normalize(name) });
   return { name, address };
 }

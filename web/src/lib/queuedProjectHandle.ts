@@ -1,4 +1,4 @@
-import type { SafeQueuedTransaction } from "@/lib/safe-queue";
+import type { SafeQueuedTransaction } from "@/lib/safe-service-config";
 import {
   JBCoreContracts,
   RevnetCoreContracts,
@@ -22,7 +22,7 @@ import {
   type Hex,
   type PublicClient,
 } from "viem";
-import { readCrossChainHandleAuthority } from "./cross-chain-authority";
+import { readHandleAuthority, unprovenSafeMessage } from "./handle-authority";
 import {
   ENS_REGISTRY_ADDRESS,
   JB_PROJECT_HANDLES_ADDRESS,
@@ -174,7 +174,7 @@ function assertCanonicalHandleSafeEnvelope(tx: SafeQueuedTransaction): void {
     ["gasToken", tx.gasToken],
     ["refundReceiver", tx.refundReceiver],
   ] as const) {
-    if (!isAddress(value)) {
+    if (typeof value !== "string" || !isAddress(value)) {
       throw new Error(`The queued transaction has a malformed ${field}.`);
     }
     if (!isAddressEqual(value, zeroAddress)) {
@@ -347,7 +347,7 @@ async function assertLiveProjectHandleAuthority({
     safe,
   });
 
-  const authority = await readCrossChainHandleAuthority({
+  const authority = await readHandleAuthority({
     sourceChainId: source.chainId,
     sourceClient,
     mainnetClient,
@@ -357,7 +357,9 @@ async function assertLiveProjectHandleAuthority({
   });
   if (!authority.allowed) {
     throw new Error(
-      `The queued handle's cross-chain authority is no longer valid (${authority.status}).`,
+      authority.status === "unproven-creation"
+        ? unprovenSafeMessage(PROJECT_HANDLE_CHAIN_ID)
+        : `The queued handle's cross-chain authority is no longer valid (${authority.status}).`,
     );
   }
 }

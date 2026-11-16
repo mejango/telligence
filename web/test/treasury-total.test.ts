@@ -37,10 +37,10 @@ describe("Revnet treasury total", () => {
         ],
         2,
       ),
-    ).toBe(15_000n * 10n ** 18n);
+    ).toEqual({ usd: 15_000n * 10n ** 18n, unpriced: [] });
   });
 
-  it("fails closed when any nonzero context cannot be priced", () => {
+  it("totals the priced tokens and names the unpriced ones", () => {
     expect(
       treasuryUsdTotal(
         [
@@ -61,6 +61,11 @@ describe("Revnet treasury total", () => {
         ],
         1,
       ),
-    ).toBeNull();
+    ).toEqual({ usd: 0n, unpriced: ["ETH"] });
+  });
+
+  it("is unknown while a chain is unread", () => {
+    expect(treasuryUsdTotal([{ chainId: 1, verified: false, rows: [] }], 1)).toBeNull();
+    expect(treasuryUsdTotal([], 1)).toBeNull();
   });
 });

@@ -1,11 +1,13 @@
 import { V6AutoIssuanceSubtab } from "@/app/[slug]/components/v6/owners/V6AutoIssuanceSubtab";
-import { V6ClaimCreditsDialog } from "@/app/[slug]/components/v6/owners/accounts/V6ClaimCreditsDialog";
 import type { ProjectItem } from "@/app/[slug]/components/v6/shared";
 import { DistributeReservedTokensButton } from "@/app/[slug]/owners/components/DistributeReservedTokensButton";
 import { OwnerDistributionBatchButton } from "@/app/[slug]/owners/components/OwnerDistributionBatchButton";
+import { TransactionReviewCancelledError } from "@bananapus/nana-sdk-core/review";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { confirmIsOpen, expectEveryWayOutRefused, findConfirm } from "./support/confirm";
+import { groupGateState } from "./support/group-write-gate";
 
 const state = vi.hoisted(() => ({
   account: "0x0000000000000000000000000000000000000001",
@@ -26,6 +28,7 @@ vi.mock("@/hooks/useMultichainBatch", () => ({
   useMultichainBatch: () => ({ runBatch: state.runBatch, getPendingBatch: state.getPendingBatch }),
 }));
 vi.mock("@/lib/wagmiConfig", () => ({ wagmiConfig: {} }));
+vi.mock("@/lib/nana/groupWriteGate", () => import("./support/group-write-gate"));
 vi.mock("wagmi", () => ({ useAccount: () => ({ address: state.account, chainId: 10 }) }));
 vi.mock("wagmi/actions", () => ({ getPublicClient: () => ({}) }));
 vi.mock("@tanstack/react-query", () => ({
@@ -35,8 +38,8 @@ vi.mock("@/lib/nana/project", () => ({
   useJBContractContext: () => ({ contractAddress: () => holder }),
   useJBTokenContext: () => ({ token: { data: { symbol: "REV" } } }),
 }));
-vi.mock("@/lib/utils", () => ({
-  cn: (...classes: string[]) => classes.filter(Boolean).join(" "),
+vi.mock("@/lib/utils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/utils")>()),
   formatTokenSymbol: () => "REV",
   formatWalletError: (cause: Error) => cause.message,
 }));
@@ -64,41 +67,12 @@ vi.mock("@/components/ButtonWithWallet", () => ({
     </button>
   ),
 }));
-vi.mock("@/components/ui/TxConfirmDialog", () => ({
-  TxConfirmDialog: ({
-    open,
-    title,
-    children,
-    action,
-    onConfirm,
-    error,
-    onOpenChange,
-  }: {
-    open: boolean;
-    title: string;
-    children: ReactNode;
-    action: string;
-    onConfirm: () => void;
-    error?: string;
-    onOpenChange: (open: boolean) => void;
-  }) =>
-    open ? (
-      <section aria-label={title}>
-        {children}
-        {error ? <p role="alert">{error}</p> : null}
-        <button onClick={onConfirm}>{action}</button>
-        <button onClick={() => onOpenChange(false)}>Close review</button>
-      </section>
-    ) : null,
-  SummaryRow: ({ label, children }: { label: string; children: ReactNode }) => (
-    <div>
-      {label}: {children}
-    </div>
-  ),
-}));
-vi.mock("@/components/ui/dialog", () => {
+// The claim dialog renders its content inline here. The confirm's own dialog
+// shell keeps the real native-dialog mechanics.
+vi.mock("@/components/ui/dialog", async (importOriginal) => {
   const Part = ({ children }: { children: ReactNode }) => <div>{children}</div>;
   return {
+    ...(await importOriginal<typeof import("@/components/ui/dialog")>()),
     Dialog: Part,
     DialogTrigger: Part,
     DialogContent: Part,
@@ -154,6 +128,7 @@ function snapshot(chainId = 10, projectId = 91n, id = `${chainId}:${projectId}`)
   };
 }
 beforeEach(() => {
+  groupGateState.reset();
   vi.clearAllMocks();
   state.account = holder;
   state.stored = [];
@@ -176,8 +151,8 @@ beforeEach(() => {
   );
 });
 
-describe("wallet-action:owner-distributions", () => {
-  it("carries every selected allocation when multiple calls have the same chain", async () => {
+describe("owner distribution batch", () => {
+  it("wallet-action:owner-distributions carries every selected allocation when multiple calls have the same chain", async () => {
     const first = snapshot(10, 91n, "allocation-1");
     const second = snapshot(10, 91n, "allocation-2");
     second.call.args = [92n];
@@ -185,14 +160,13 @@ describe("wallet-action:owner-distributions", () => {
       <OwnerDistributionBatchButton
         label="Distribute"
         scope="test"
+        targets={[]}
+        group={[]}
         tokenSymbol="REV"
         prepare={async () => [first, second]}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Distribute" }));
-    await screen.findByRole("button", { name: "Confirm selected" });
-    expect(state.runBatch).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm selected" }));
     await waitFor(() =>
       expect(state.runBatch).toHaveBeenCalledWith(
         expect.objectContaining({ calls: [first.call, second.call] }),
@@ -205,6 +179,8 @@ describe("wallet-action:owner-distributions", () => {
       <OwnerDistributionBatchButton
         label="Distribute"
         scope="test"
+        targets={[]}
+        group={[]}
         tokenSymbol="REV"
         prepare={async () => {
           throw new Error("Optimism RPC unavailable");
@@ -225,19 +201,58 @@ describe("wallet-action:owner-distributions", () => {
       <OwnerDistributionBatchButton
         label="Distribute"
         scope="test"
+        targets={[]}
+        group={[]}
         tokenSymbol="REV"
         disabled
         prepare={prepare}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Resume saved batch (2/3 confirmed)" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() =>
       expect(state.runBatch).toHaveBeenCalledWith(
         expect.objectContaining({ calls: [], scope: "test" }),
       ),
     );
     expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("wallet-action:owner-distributions will not resume a saved batch while a group pair is not linked onchain", () => {
+    groupGateState.unverified = ["8453:12"];
+    state.getPendingBatch.mockReturnValue({ label: "Distribute", total: 3, completed: 2 });
+    render(
+      <OwnerDistributionBatchButton
+        label="Distribute"
+        scope="test"
+        targets={[]}
+        group={[
+          { chainId: 10, projectId: 91n },
+          { chainId: 8453, projectId: 12n },
+        ]}
+        tokenSymbol="REV"
+        prepare={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Resume saved batch (2/3 confirmed)" }),
+    ).toBeDisabled();
+    expect(screen.getByText("A project listed here isn't linked onchain.")).toBeInTheDocument();
+    expect(state.runBatch).not.toHaveBeenCalled();
+  });
+
+  it("shows a loading, not a line, while the registry read is pending", () => {
+    groupGateState.unverified = ["8453:12"];
+    groupGateState.pending = true;
+    render(
+      <DistributeReservedTokensButton
+        projects={[{ chainId: 8453, projectId: 12n, pending: 20n }]}
+        tokenSymbol="REV"
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Distribute selected pending splits" }),
+    ).toBeDisabled();
+    expect(screen.queryByText("A project listed here isn't linked onchain.")).toBeNull();
   });
 
   it("retries the frozen calls after a pending result", async () => {
@@ -247,33 +262,39 @@ describe("wallet-action:owner-distributions", () => {
       <OwnerDistributionBatchButton
         label="Distribute"
         scope="test"
+        targets={[]}
+        group={[]}
         tokenSymbol="REV"
         prepare={prepare}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Distribute" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm selected" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
     await waitFor(() => expect(state.runBatch).toHaveBeenCalledTimes(2));
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(state.runBatch.mock.calls[1][0].calls).toEqual(state.runBatch.mock.calls[0][0].calls);
   });
 
   it("requires the original account after review", async () => {
+    state.runBatch.mockResolvedValueOnce({ status: "pending", hashes: [] });
     const props = {
       label: "Distribute",
       scope: "test",
+      targets: [],
+      group: [],
       tokenSymbol: "REV",
       prepare: async () => [snapshot()],
     };
     const view = render(<OwnerDistributionBatchButton {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "Distribute" }));
-    await screen.findByRole("button", { name: "Confirm selected" });
+    const retry = await screen.findByRole("button", { name: "Try again" });
     state.account = beneficiary;
     view.rerender(<OwnerDistributionBatchButton {...props} />);
-    fireEvent.click(screen.getByRole("button", { name: "Confirm selected" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("connected account changed");
-    expect(state.runBatch).not.toHaveBeenCalled();
+    fireEvent.click(retry);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("connected account changed"),
+    );
+    expect(state.runBatch).toHaveBeenCalledTimes(1);
   });
 
   it("reprepares changed state after an untouched draft is safely discarded", async () => {
@@ -283,21 +304,82 @@ describe("wallet-action:owner-distributions", () => {
       <OwnerDistributionBatchButton
         label="Distribute"
         scope="test"
+        targets={[]}
+        group={[]}
         tokenSymbol="REV"
         prepare={prepare}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Distribute" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm selected" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("reviewed balance changed");
-    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Distribute" }));
-    await screen.findByRole("button", { name: "Confirm selected" });
-    expect(prepare).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("owner distribution confirm", () => {
+  function renderButton() {
+    render(
+      <OwnerDistributionBatchButton
+        label="Distribute"
+        scope="test"
+        targets={[]}
+        group={[]}
+        tokenSymbol="REV"
+        prepare={async () => [snapshot()]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Distribute" }));
+    return findConfirm();
+  }
+
+  it("closes when its review is closed, and says nothing failed", async () => {
+    let close!: (cause: unknown) => void;
+    state.runBatch.mockReturnValue(new Promise((_, reject) => (close = reject)));
+    await renderButton();
+    close(new TransactionReviewCancelledError());
+
+    await waitFor(() => expect(confirmIsOpen()).toBe(false));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(state.runBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses every way out while the batch runs, then closes once it is confirmed", async () => {
+    let finish!: (result: unknown) => void;
+    state.runBatch.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    const confirm = await renderButton();
+    await waitFor(() => expect(state.runBatch).toHaveBeenCalledTimes(1));
+
+    expectEveryWayOutRefused(confirm);
+
+    finish({ status: "success", hashes: [] });
+    await waitFor(() => expect(confirmIsOpen()).toBe(false));
+    expect(state.runBatch).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("selected owner action destinations", () => {
+  it("wallet-action:owner-distributions will not prepare a destination the registry does not list", () => {
+    groupGateState.unverified = ["8453:12"];
+    render(
+      <DistributeReservedTokensButton
+        projects={[
+          { chainId: 10, projectId: 91n, pending: 10n },
+          { chainId: 8453, projectId: 12n, pending: 20n },
+        ]}
+        tokenSymbol="REV"
+      />,
+    );
+    expect(screen.getByText("A project listed here isn't linked onchain.")).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Distribute selected pending splits" });
+    expect(button).toBeDisabled();
+    fireEvent.click(screen.getAllByRole("checkbox")[1]);
+    expect(screen.queryByText("A project listed here isn't linked onchain.")).toBeNull();
+    expect(button).not.toBeDisabled();
+    expect(state.prepareReserved).not.toHaveBeenCalled();
+  });
+
   it("prepares only the checked reserve destinations with their own project IDs", async () => {
     render(
       <DistributeReservedTokensButton
@@ -310,53 +392,13 @@ describe("selected owner action destinations", () => {
     );
     fireEvent.click(screen.getAllByRole("checkbox")[0]);
     fireEvent.click(screen.getByRole("button", { name: "Distribute selected pending splits" }));
-    await screen.findByRole("button", { name: "Confirm selected" });
+    await waitFor(() => expect(state.runBatch).toHaveBeenCalled());
     expect(state.prepareReserved).toHaveBeenCalledTimes(1);
     expect(state.prepareReserved).toHaveBeenCalledWith(
       {},
       expect.objectContaining({ chainId: 8453, projectId: 12n }),
       holder,
     );
-  });
-
-  it("prepares only selected credit holders and keeps the stable project-group scope", async () => {
-    render(
-      <V6ClaimCreditsDialog
-        batchScope="10:91|8453:12"
-        creditRows={[
-          { chainId: 10, projectId: 91n, credit: 20n },
-          { chainId: 8453, projectId: 12n, credit: 30n },
-        ]}
-        tokenSymbol="REV"
-      >
-        <button>Open claims</button>
-      </V6ClaimCreditsDialog>,
-    );
-    fireEvent.click(screen.getAllByRole("checkbox")[1]);
-    fireEvent.click(screen.getByRole("button", { name: "Claim selected credits" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm selected" }));
-    expect(state.prepareCredit).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({ chainId: 10, projectId: 91n }),
-      holder,
-    );
-    await waitFor(() =>
-      expect(state.runBatch).toHaveBeenCalledWith(
-        expect.objectContaining({ scope: "claim-credits:10:91|8453:12" }),
-      ),
-    );
-  });
-
-  it("keeps saved credit recovery reachable with no new balances", () => {
-    state.getPendingBatch.mockReturnValue({ label: "Claim", total: 2, completed: 1 });
-    render(
-      <V6ClaimCreditsDialog batchScope="10:91|8453:12" creditRows={[]} tokenSymbol="REV">
-        <button>Open claims</button>
-      </V6ClaimCreditsDialog>,
-    );
-    expect(
-      screen.getByRole("button", { name: "Resume saved batch (1/2 confirmed)" }),
-    ).toBeEnabled();
   });
 
   it("retains two distinct beneficiaries on one chain and combines duplicate stored allocation events", async () => {
@@ -392,7 +434,7 @@ describe("selected owner action destinations", () => {
     render(<V6AutoIssuanceSubtab projects={[{ chainId: 10, projectId: 91 }] as ProjectItem[]} />);
     expect(screen.getAllByRole("checkbox")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Distribute selected auto issuances" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm selected" }));
+    await waitFor(() => expect(state.runBatch).toHaveBeenCalled());
     expect(state.prepareAuto).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(state.runBatch.mock.calls[0][0].calls).toHaveLength(2));
   });

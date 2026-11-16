@@ -4,6 +4,8 @@ import { projectItemsWithFallback } from "../components/v6/shared";
 import { getProjectWithFallback } from "../getProjectFallback";
 import { getProjectOperator } from "../getProjectOperator";
 import { getSuckerGroup } from "../getSuckerGroup";
+import { ProjectPageBoundary } from "../ProjectRouteContext";
+import { projectRouteSnapshot } from "../projectRouteIdentity";
 import { resolveProjectRoute } from "../resolveProjectRoute.server";
 
 interface Props {
@@ -23,7 +25,7 @@ export default async function OperatorPage(props: Props) {
   if (!resolved) notFound();
   const { project } = resolved;
 
-  const suckerGroup = await getSuckerGroup(project.suckerGroupId, chainId);
+  const suckerGroup = await getSuckerGroup(project.suckerGroupId, chainId, projectId);
   const projects = projectItemsWithFallback(
     suckerGroup?.projects?.items,
     project,
@@ -38,10 +40,12 @@ export default async function OperatorPage(props: Props) {
     (await getProjectOperator(Number(projectId), chainId).catch(() => undefined))?.address;
 
   return (
-    <V6OperatorTab
-      projects={projects}
-      operator={operator}
-      handleProject={{ chainId, projectId: Number(projectId) }}
-    />
+    <ProjectPageBoundary snapshot={projectRouteSnapshot(route)}>
+      <V6OperatorTab
+        projects={projects}
+        operator={operator}
+        handleProject={{ chainId, projectId: Number(projectId) }}
+      />
+    </ProjectPageBoundary>
   );
 }

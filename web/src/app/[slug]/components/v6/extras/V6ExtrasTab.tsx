@@ -28,6 +28,7 @@ import { formatTokenSymbol } from "@/lib/utils";
 import { wagmiConfig } from "@/lib/wagmiConfig";
 import { useMemo, useState } from "react";
 import { getPublicClient } from "wagmi/actions";
+import { CheckDeploymentButton } from "../../CheckDeploymentButton";
 import { ProjectItem } from "../shared";
 import { PayerAddressList } from "./PayerAddressList";
 import { PayerDeployForm } from "./PayerDeployForm";
@@ -72,6 +73,27 @@ export function V6ExtrasTab({ projects }: { projects: ProjectItem[] }) {
   );
   const [exportBusy, setExportBusy] = useState(false);
   const [exportStatus, setExportStatus] = useState("");
+  /** A verified export whose warnings still need a yes before it downloads. */
+  const [warnedExport, setWarnedExport] = useState<Awaited<
+    ReturnType<typeof buildRevnetDraft>
+  > | null>(null);
+
+  const download = async (file: Awaited<ReturnType<typeof buildRevnetDraft>>["file"]) => {
+    let text: string;
+    try {
+      text = (await import("@/lib/jb-draft")).writeJbDraftFile(file.data);
+    } catch (error) {
+      setExportStatus(error instanceof Error ? error.message : "Export failed.");
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = revnetDraftFileName(file.data.name);
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setExportStatus("Exported .jb. Import it from Create a revnet to review and edit.");
+  };
 
   const exportDraft = async () => {
     if (exportBusy || !operator || !chainId) return;
@@ -105,22 +127,12 @@ export function V6ExtrasTab({ projects }: { projects: ProjectItem[] }) {
               ];
         }),
       });
-      if (
-        result.warnings.length &&
-        !window.confirm(`${result.warnings.join("\n\n")}\n\nExport this editable .jb anyway?`)
-      ) {
-        setExportStatus("Cancelled");
+      if (result.warnings.length) {
+        setExportStatus("");
+        setWarnedExport(result);
         return;
       }
-      const url = URL.createObjectURL(
-        new Blob([JSON.stringify(result.file, null, 2)], { type: "application/json" }),
-      );
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = revnetDraftFileName(result.file.data.name);
-      anchor.click();
-      URL.revokeObjectURL(url);
-      setExportStatus("Exported .jb. Import it from Create a revnet to review and edit.");
+      await download(result.file);
     } catch (error) {
       setExportStatus(
         error instanceof Error ? error.message : "Could not safely reconstruct this revnet.",
@@ -137,29 +149,58 @@ export function V6ExtrasTab({ projects }: { projects: ProjectItem[] }) {
   return (
     <div className="flex flex-col min-w-0 gap-8">
       <section className="max-w-screen-sm">
-        <h3 className="mb-2 text-base font-semibold text-zinc-700">Export deployment</h3>
+        <h3 className="mb-2 text-base font-semibold text-zinc-700">Export settings</h3>
         <p className="text-sm text-zinc-500">
-          Download this revnet&apos;s deployed stages, splits, reserve asset, and details as a .jb
-          file. Import it from Create a revnet to review and change it before deploying.
+          Download this revnet&apos;s settings as a .jb file. Import it from Create a revnet to
+          review and edit a copy before launching.
         </p>
         {exportStatus ? <p className="mt-3 text-sm text-zinc-600">{exportStatus}</p> : null}
-        <Button
-          className="mt-4"
-          variant="outline"
-          disabled={
-            exportBusy ||
-            !operator ||
-            !chainId ||
-            autoIssuancesQuery.isLoading ||
-            rulesetsQuery.isLoading
-          }
-          onClick={() => void exportDraft()}
-        >
-          {exportBusy ? "Verifying…" : "Export .jb"}
-        </Button>
+        {warnedExport ? (
+          <div role="alert" className="mt-3 space-y-3 text-sm text-zinc-900">
+            {warnedExport.warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+            <p>Export this editable .jb anyway?</p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void download(warnedExport.file);
+                  setWarnedExport(null);
+                }}
+              >
+                Export anyway
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setWarnedExport(null);
+                  setExportStatus("Cancelled");
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button
+            className="mt-4"
+            variant="outline"
+            disabled={
+              exportBusy ||
+              !operator ||
+              !chainId ||
+              autoIssuancesQuery.isLoading ||
+              rulesetsQuery.isLoading
+            }
+            onClick={() => void exportDraft()}
+          >
+            {exportBusy ? "Verifying…" : "Export .jb"}
+          </Button>
+        )}
         {!operator && !operatorQuery.isLoading ? (
           <p className="mt-2 text-xs text-zinc-500">
-            The operator must be indexed before this deployment can be exported.
+            The operator&apos;s records must load before these settings can be exported.
           </p>
         ) : null}
       </section>
@@ -201,6 +242,15 @@ export function V6ExtrasTab({ projects }: { projects: ProjectItem[] }) {
             isError={payersQuery.isError}
           />
         </div>
+      </section>
+      <section className="max-w-screen-sm">
+        <h3 className="mb-2 text-base font-semibold text-zinc-700">Deployment</h3>
+        <p className="text-sm text-zinc-500">
+          Check this project&apos;s deployment and data availability.
+        </p>
+        <Button variant="outline" className="mt-4" asChild>
+          <CheckDeploymentButton />
+        </Button>
       </section>
     </div>
   );

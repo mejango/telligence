@@ -5,31 +5,29 @@ import { ChainLogo } from "@/components/ChainLogo";
 import { EthereumAddress } from "@/components/EthereumAddress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { SkeletonLines } from "@/components/ui/skeleton";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { ErrorNote } from "@/components/ui/TxError";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { useToast } from "@/components/ui/use-toast";
-import { isSafeProposalPendingError } from "@/hooks/useReviewedWriteContract";
-import { readAuthorityIdentity } from "@/lib/cross-chain-authority";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
+import { isSafeProposalPendingError, reviewClosed } from "@/lib/reviewed-call";
+import { addStepsToBatch, stepFromWrite } from "@/lib/safe-batch";
 import { formatWalletError } from "@/lib/utils";
 import { JB_CHAINS, RevnetCoreContracts, revOwnerAbi } from "@bananapus/nana-sdk-core";
-import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Address, isAddress, zeroAddress } from "viem";
 import { useAccount } from "wagmi";
-import {
-  ChainProjectRow,
-  ChainWrite,
-  chainName,
-  publicClientFor,
-  v6ContractAddress,
-} from "./operatorLib";
+import { invalidateProjectRouteProofs } from "../../../projectRouteQuery";
+import { authorityIdentityQuery } from "./authorityIdentityQuery";
+import { ChainProjectRow, ChainWrite, chainName, v6ContractAddress } from "./operatorLib";
 import { OperatorSection } from "./OperatorSection";
 import { useLiveRevnetOperators } from "./useLiveRevnetOperators";
 import { useOperatorWrites } from "./useOperatorWrites";
 
 type AccountRow = ChainProjectRow & {
   operator: Address | null;
-  accountType: "EOA" | "Safe multisig" | "Contract" | "Unknown";
+  accountType:
+    "Wallet" | "Safe multisig" | "Contract" | "Unknown" | "Checking…" | "Could not verify";
   safe: { owners: readonly Address[]; threshold: number } | null;
 };
 
@@ -85,51 +83,52 @@ export function OperatorAccountCard({
     ...fallbackProject,
     address: fallbackOperator,
   });
-  const { operatorByChain } = operators;
-
-  const operatorKey = rows
-    .map((row) => `${row.chainId}:${operatorByChain.get(row.chainId) ?? ""}`)
-    .join(",");
-
-  const accountQuery = useQuery({
-    queryKey: ["v6-operator-account-types", operatorKey],
-    enabled: !operators.isLoading,
-    staleTime: 30_000,
-    queryFn: async (): Promise<AccountRow[]> =>
-      Promise.all(
-        rows.map(async (row): Promise<AccountRow> => {
-          const operator = operatorByChain.get(row.chainId) ?? null;
-          if (!operator) return { ...row, operator, accountType: "Unknown", safe: null };
-          try {
-            const client = publicClientFor(row.chainId);
-            // The shared identity probe uses raw, gas-capped, return-bounded
-            // calls for every proxy policy read. Never decode getOwners from an
-            // arbitrary live operator contract in this display surface.
-            const identity = await readAuthorityIdentity(client, operator);
-            if (!identity) {
-              return { ...row, operator, accountType: "Unknown", safe: null };
-            }
-            if (identity.kind === "eoa") {
-              return { ...row, operator, accountType: "EOA", safe: null };
-            }
-            if (identity.kind === "safe") {
-              return {
-                ...row,
-                operator,
-                accountType: "Safe multisig",
-                safe: { owners: identity.owners, threshold: identity.threshold },
-              };
-            }
-            return { ...row, operator, accountType: "Contract", safe: null };
-          } catch {
-            return { ...row, operator, accountType: "Unknown", safe: null };
-          }
-        }),
-      ),
+  const operatorByChain = operators.discoveredOperatorByChain ?? operators.operatorByChain;
+  const discovered = rows.flatMap((row) => {
+    const operator = operatorByChain.get(row.chainId);
+    return operator ? [{ ...row, operator }] : [];
   });
-
-  const accountRows = useMemo(() => accountQuery.data ?? [], [accountQuery.data]);
-  const groups = useMemo(() => groupRows(accountRows), [accountRows]);
+  const identities = useQueries({
+    queries: discovered.map((row) => authorityIdentityQuery(row.chainId, row.operator)),
+  });
+  const accountRows: AccountRow[] = rows.map((row) => {
+    const operator = operatorByChain.get(row.chainId) ?? null;
+    const query = identities[discovered.findIndex((item) => item.chainId === row.chainId)];
+    const identity = query?.isError ? undefined : query?.data;
+    if (!identity) {
+      return {
+        ...row,
+        operator,
+        accountType:
+          query?.isFetching || (!operator && operators.isLoading)
+            ? "Checking…"
+            : query?.isError
+              ? "Could not verify"
+              : "Unknown",
+        safe: null,
+      };
+    }
+    if (identity.kind === "safe") {
+      return {
+        ...row,
+        operator,
+        accountType: "Safe multisig",
+        safe: {
+          owners: identity.owners,
+          threshold: identity.threshold,
+        },
+      };
+    }
+    return {
+      ...row,
+      operator,
+      accountType:
+        identity.kind === "eoa" || identity.kind === "delegated-eoa" ? "Wallet" : "Contract",
+      safe: null,
+    };
+  });
+  const groups = groupRows(accountRows);
+  const refreshAccounts = () => Promise.all(identities.map((query) => query.refetch()));
   const known = accountRows.filter((row) => row.operator);
   const differs =
     known.length > 1 &&
@@ -142,85 +141,101 @@ export function OperatorAccountCard({
           Revnets have no owner. The revnet operator holds only the permissions granted at launch,
           and can pass the role on.
         </p>
-        {operators.isLoading || accountQuery.isLoading ? (
-          <SkeletonLines lines={4} className="mt-3" />
-        ) : (
-          <div className="mt-3 space-y-3">
-            {differs ? (
-              <div className="border border-amber-300 bg-amber-50 text-amber-800 text-xs p-3 rounded">
-                The revnet operator differs by chain. The transfer action below is scoped to each
-                matching group so a change cannot silently target the wrong account.
+        <div className="mt-3 space-y-3">
+          {differs ? (
+            <div className="border border-amber-300 text-amber-800 text-xs p-3">
+              The revnet operator differs by chain. The transfer action below is scoped to each
+              matching group so a change cannot silently target the wrong account.
+            </div>
+          ) : null}
+          {groups.map((group) => (
+            <div key={group.key} className="border-t border-melon-200 pt-3">
+              <div className="flex flex-wrap items-center gap-3">
+                {group.rows.map((row) => (
+                  <span
+                    key={row.chainId}
+                    className="inline-flex items-center gap-1.5 text-sm text-zinc-700"
+                  >
+                    <ChainLogo chainId={row.chainId} width={16} height={16} />
+                    {chainName(row.chainId)}
+                  </span>
+                ))}
               </div>
-            ) : null}
-            {groups.map((group) => (
-              <div key={group.key} className="bg-melon-50 p-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  {group.rows.map((row) => (
-                    <span
-                      key={row.chainId}
-                      className="inline-flex items-center gap-1.5 text-sm text-zinc-700"
-                    >
-                      <ChainLogo chainId={row.chainId} width={16} height={16} />
-                      {chainName(row.chainId)}
-                    </span>
-                  ))}
-                </div>
-                <dl className="mt-3 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[7rem_1fr]">
-                  <dt className="text-zinc-500">Revnet operator</dt>
-                  <dd>
-                    {group.operator ? (
-                      <EthereumAddress
-                        address={group.operator}
-                        short
-                        withEnsName
-                        chain={JB_CHAINS[group.rows[0].chainId]?.chain}
-                      />
-                    ) : (
-                      <span className="text-zinc-500">Unknown</span>
-                    )}
-                  </dd>
-                  <dt className="text-zinc-500">Type</dt>
-                  <dd>{group.accountType}</dd>
-                  {group.safe ? (
-                    <>
-                      <dt className="text-zinc-500">Policy</dt>
-                      <dd>
-                        Requires {group.safe.threshold} of {group.safe.owners.length} signatures
-                      </dd>
-                      <dt className="text-zinc-500">Signers</dt>
-                      <dd className="flex flex-wrap gap-x-3 gap-y-1">
-                        {group.safe.owners.map((owner) => (
-                          <EthereumAddress
-                            key={owner}
-                            address={owner}
-                            short
-                            withEnsName
-                            chain={JB_CHAINS[group.rows[0].chainId]?.chain}
-                          />
-                        ))}
-                      </dd>
-                    </>
-                  ) : null}
-                </dl>
-                {group.operator ? (
-                  <TransferOperatorFlow
-                    group={group}
-                    onDone={() => {
-                      operators.refetch();
-                      accountQuery.refetch();
-                    }}
-                  />
+              <dl className="mt-3 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[7rem_1fr]">
+                <dt className="text-zinc-500">Revnet operator</dt>
+                <dd>
+                  {group.operator ? (
+                    <EthereumAddress
+                      showSafe
+                      address={group.operator}
+                      short
+                      withEnsName
+                      chain={JB_CHAINS[group.rows[0].chainId]?.chain}
+                    />
+                  ) : (
+                    <span className="text-zinc-500">Unknown</span>
+                  )}
+                </dd>
+                <dt className="text-zinc-500">Type</dt>
+                <dd>{group.accountType}</dd>
+                {group.safe ? (
+                  <>
+                    <dt className="text-zinc-500">Policy</dt>
+                    <dd>
+                      Requires {group.safe.threshold} of {group.safe.owners.length} signatures
+                    </dd>
+                    <dt className="text-zinc-500">Signers</dt>
+                    <dd className="flex flex-wrap gap-x-3 gap-y-1">
+                      {group.safe.owners.map((owner) => (
+                        <EthereumAddress
+                          key={owner}
+                          address={owner}
+                          short
+                          withEnsName
+                          chain={JB_CHAINS[group.rows[0].chainId]?.chain}
+                        />
+                      ))}
+                    </dd>
+                  </>
                 ) : null}
-              </div>
-            ))}
-          </div>
-        )}
+              </dl>
+              {group.accountType === "Could not verify" || group.accountType === "Unknown" ? (
+                <button
+                  type="button"
+                  className="mt-3 text-sm underline"
+                  onClick={() => {
+                    void operators.refetch();
+                    for (const row of group.rows) {
+                      const index = discovered.findIndex((item) => item.chainId === row.chainId);
+                      if (index >= 0) void identities[index].refetch();
+                    }
+                  }}
+                >
+                  Retry account checks
+                </button>
+              ) : null}
+              {group.operator &&
+              group.accountType !== "Checking…" &&
+              group.accountType !== "Could not verify" &&
+              group.accountType !== "Unknown" ? (
+                <TransferOperatorFlow
+                  group={group}
+                  onDone={() => {
+                    operators.refetch();
+                    void refreshAccounts();
+                  }}
+                />
+              ) : null}
+            </div>
+          ))}
+        </div>
       </div>
     </OperatorSection>
   );
 }
 
 function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: () => void }) {
+  const queryClient = useQueryClient();
   const { address } = useAccount();
   const { runWrites } = useOperatorWrites();
   const { toast } = useToast();
@@ -229,7 +244,11 @@ function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: 
   const [destination, setDestination] = useState("");
   const [ack, setAck] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The rows come from the server sucker-group list: only chain-verified pairs are written.
+  const gate = useGroupWriteGate(group.rows);
   const [review, setReview] = useState(false);
+  // A send that went to the Safe as a proposal: nothing more to send from here.
+  const [proposed, setProposed] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -237,6 +256,16 @@ function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: 
     !!address && !!group.operator && address.toLowerCase() === group.operator.toLowerCase();
   const relinquishing = destination.trim().toLowerCase() === zeroAddress;
   const chains = group.rows.map((row) => chainName(row.chainId)).join(", ");
+  const context = [
+    {
+      label: "Operator becomes",
+      value: relinquishing ? "No one (relinquished)" : destination.trim(),
+      mono: !relinquishing,
+      strong: true,
+    },
+    { label: "Replaces", value: group.operator ?? "Unknown", mono: !!group.operator },
+    { label: "On", value: chains },
+  ];
 
   const beginReview = () => {
     if (busy || !ack) return;
@@ -246,13 +275,48 @@ function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: 
     }
     setError(null);
     setStatus(null);
+    setProposed(false);
     setReview(true);
+  };
+
+  const buildWrites = (): ChainWrite[] => {
+    const to = destination.trim();
+    if (!isAddress(to)) throw new Error("Enter a valid destination address.");
+    gate.assertVerified(group.rows);
+    return group.rows.map((row) => {
+      const target = v6ContractAddress(RevnetCoreContracts.REVOwner, row.chainId);
+      if (!target) throw new Error(`REVOwner isn't deployed on ${chainName(row.chainId)}.`);
+      return {
+        chainId: row.chainId,
+        address: target,
+        abi: revOwnerAbi,
+        functionName: "setOperatorOf",
+        args: [BigInt(row.projectId), to as Address],
+        contractName: "REVOwner",
+        authority: (group.operator as Address | null) ?? undefined,
+      };
+    });
+  };
+
+  // The same calls the submit would send, queued in each chain's tray instead.
+  const addToBatch = () => {
+    if (busy) return;
+    setError(null);
+    try {
+      const chainIds = addStepsToBatch(buildWrites().map(stepFromWrite));
+      toast({
+        title: "Added to the batch",
+        description: `Added to the batch for ${chainIds.map(chainName).join(", ")}.`,
+      });
+      setOpen(false);
+    } catch (e) {
+      setError(formatWalletError(e) || "Could not add the transfer to the batch.");
+    }
   };
 
   const submit = async () => {
     if (busy || !address) return;
-    const to = destination.trim();
-    if (!isAddress(to)) {
+    if (!isAddress(destination.trim())) {
       setError("Enter a valid destination address.");
       return;
     }
@@ -260,23 +324,11 @@ function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: 
     setBusy(true);
     setError(null);
     try {
-      const writes: ChainWrite[] = group.rows.map((row) => {
-        const target = v6ContractAddress(RevnetCoreContracts.REVOwner, row.chainId);
-        if (!target) throw new Error(`REVOwner isn't deployed on ${chainName(row.chainId)}.`);
-        return {
-          chainId: row.chainId,
-          address: target,
-          abi: revOwnerAbi,
-          functionName: "setOperatorOf",
-          args: [BigInt(row.projectId), to as Address],
-          contractName: "REVOwner",
-          authority: (group.operator as Address | null) ?? undefined,
-        };
-      });
       const result = await runWrites({
-        writes,
+        writes: buildWrites(),
         account: address,
         label: "Transfer revnet operator",
+        context,
         onProgress: setStatus,
       });
       if (result.safeQueued || result.safeConfirmed) {
@@ -293,16 +345,20 @@ function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: 
         toast({ title: "Revnet operator transferred" });
         setOpen(false);
       }
+      await invalidateProjectRouteProofs(queryClient);
       setReview(false);
       onDone();
     } catch (e) {
       const message = formatWalletError(e) || "Could not transfer the revnet operator.";
-      setError(message);
-      toast(
-        isSafeProposalPendingError(e)
-          ? { title: "Safe proposal submitted", description: message }
-          : { variant: "destructive", title: "Error", description: message },
-      );
+      if (reviewClosed(e)) setReview(false);
+      else if (isSafeProposalPendingError(e)) {
+        setStatus(message);
+        setProposed(true);
+        toast({ title: "Safe proposal submitted", description: message });
+      } else {
+        setError(message);
+        toast({ variant: "destructive", title: "Error", description: message });
+      }
     } finally {
       setBusy(false);
     }
@@ -326,7 +382,7 @@ function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: 
   }
 
   return (
-    <div className="mt-3 bg-melon-100 p-3">
+    <div className="mt-3 border-t border-melon-200 pt-3">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm font-medium">Transfer revnet operator</p>
         <button
@@ -340,12 +396,12 @@ function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: 
       </div>
       {!isCurrentOperator ? (
         <p className="text-xs text-amber-700 mt-2">
-          Only the current revnet operator ({group.operator}) can transfer this role — connect that
-          account, or one of its signers if it is a Safe, and the change is proposed to the Safe.
-          The transaction is simulated first and will not send otherwise.
+          Only the current revnet operator ({group.operator}) can transfer this role. Connect that
+          account, or one of its signers if it is a Safe.
         </p>
       ) : null}
-      <div className="mt-2">
+      <label className="mt-2 block text-xs text-zinc-600">
+        New revnet operator
         <Input
           value={destination}
           onChange={(e) => {
@@ -353,12 +409,16 @@ function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: 
             setError(null);
           }}
           disabled={busy}
-          placeholder="0x… new revnet operator (zero address relinquishes)"
+          placeholder="0x…"
           aria-label="New revnet operator"
+          className="mt-1"
         />
-      </div>
-      <p className="text-xs text-zinc-500 mt-1">Applies on {chains}.</p>
-      <label className="mt-3 flex items-start gap-2 border border-red-300 bg-red-50 rounded p-3">
+      </label>
+      <p className="text-xs text-zinc-500 mt-1">
+        Applies on {chains}. The zero address relinquishes the role.
+      </p>
+      {gate.line ? <p className="text-xs text-zinc-600 mt-1">{gate.line}</p> : null}
+      <label className="mt-3 flex items-start gap-2 border border-red-300 p-3">
         <input
           type="checkbox"
           checked={ack}
@@ -372,12 +432,21 @@ function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: 
             : "I verified the new revnet operator. They receive every power attached to this role."}
         </span>
       </label>
-      <div className="mt-3 flex justify-end">
+      <div className="mt-3 flex justify-end gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-11"
+          disabled={busy || gate.blocked || !destination.trim()}
+          onClick={addToBatch}
+        >
+          Add to batch
+        </Button>
         <ButtonWithWallet
           targetChainId={group.rows[0]?.chainId}
           connectWalletText="Connect wallet to transfer"
-          loading={busy}
-          disabled={busy || !ack || !destination.trim()}
+          loading={busy || gate.pending}
+          disabled={busy || gate.blocked || !ack || !destination.trim()}
           onClick={beginReview}
           className="bg-teal-500 text-melon-950 hover:bg-teal-600"
         >
@@ -385,43 +454,32 @@ function TransferOperatorFlow({ group, onDone }: { group: AccountGroup; onDone: 
         </ButtonWithWallet>
       </div>
       {status && !review ? <p className="text-xs text-zinc-500 mt-2">{status}</p> : null}
-      {error && !review ? <p className="text-xs text-red-600 mt-2">{error}</p> : null}
+      {error && !review ? <ErrorNote message={error} /> : null}
       {review ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(next) => {
-            if (!next) setReview(false);
+          onClose={() => {
+            setReview(false);
+            setProposed(false);
           }}
           title="Confirm transfer"
-          chainId={group.rows[0].chainId}
           steps={[
             {
               title: "Transfer revnet operator",
               detail:
                 group.rows.length > 1
-                  ? "Use an operator wallet with Relayr across supported mainnets or across supported testnets. With Safe or other networks, transfer and confirm one chain at a time."
+                  ? "Use an operator wallet across supported mainnets or across supported testnets. With Safe or other networks, transfer and confirm one chain at a time."
                   : "From the operator wallet, or proposed to the operator Safe from a signer.",
             },
           ]}
           activeIndex={busy ? 0 : -1}
-          action="Transfer revnet operator"
-          onConfirm={() => void submit()}
+          start={() => void submit()}
           busy={busy}
           status={status}
+          complete={proposed}
           error={error}
-        >
-          <SummaryRow label="Operator becomes">
-            {relinquishing ? (
-              "No one (relinquished)"
-            ) : (
-              <span className="break-all font-mono text-xs">{destination.trim()}</span>
-            )}
-          </SummaryRow>
-          <SummaryRow label="Replaces">
-            <span className="break-all font-mono text-xs">{group.operator}</span>
-          </SummaryRow>
-          <SummaryRow label="On">{chains}</SummaryRow>
-        </TxConfirmDialog>
+          rows={context}
+        />
       ) : null}
     </div>
   );

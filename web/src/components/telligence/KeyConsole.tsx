@@ -402,8 +402,8 @@ function AuthenticatedKeys({
                       })}{" "}
                       / day
                       {key.expiresAt
-                        ? ` · Expires ${new Date(key.expiresAt).toLocaleString()}`
-                        : " · No expiration"}
+                        ? ` | Expires ${new Date(key.expiresAt).toLocaleString()}`
+                        : " | No expiration"}
                     </p>
                   </div>
                   {key.revokedAt ? (

@@ -11,9 +11,9 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { projectId } = await params;
   const project = await readComputeProject(projectId);
-  if (!project) return { title: "A purpose worth funding · Telligence" };
+  if (!project) return { title: "A purpose worth funding | Telligence" };
   return {
-    title: `${project.name} · Telligence`,
+    title: `${project.name} | Telligence`,
     description: project.purpose.slice(0, 180),
     alternates: { canonical: `/compute/${encodeURIComponent(project.id)}` },
   };

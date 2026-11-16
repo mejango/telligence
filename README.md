@@ -41,11 +41,12 @@ docs/                      Architecture, evidence, and implementation records
 
 The frontend history starts at Revnet Money commit
 `e23a69e7ce060672d131bee461778179bcb026bf`; its files were moved under `web/`.
+It was last merged with Revnet Money `6dc9564e` on 2026-11-16.
 The separate `plugin/` application is outside this repository.
 
 ## Develop
 
-Use Node **26.12.1**, npm **12.0.1**, Foundry **v1.7.0**, and Docker Compose v2.
+Use Node **26.13.1**, npm **12.0.1**, Foundry **v1.7.0**, and Docker Compose v2.
 Solidity is pinned to **0.8.28** in `contracts/foundry.toml`. Service images use
 Node 22.23.4; the services are also tested on the repository's Node 26 toolchain.
 

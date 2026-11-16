@@ -379,10 +379,12 @@ export function useCompleteProjectPermissions(where: PermissionHolderFilter, ena
 export function useCompleteActivityEvents(
   variables: Omit<ActivityEventsQueryVariables, "limit" | "offset">,
   chainId: number,
+  enabled = true,
 ) {
   return useQuery({
     queryKey: ["complete-activity-events", variables, chainId],
     queryFn: () => completeActivityEvents(variables, chainId),
+    enabled,
     refetchInterval: 15_000,
   });
 }

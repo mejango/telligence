@@ -129,7 +129,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("wallet-action:payouts — live multichain payouts", () => {
+describe("live multichain payouts", () => {
   it("resolves migrated controllers and terminal dependencies at one block, preserving chain project IDs and cycles", async () => {
     const { client, requests } = fixture();
     const [option] = await readPayoutOptions(client, project);
@@ -247,7 +247,7 @@ describe("wallet-action:payouts — live multichain payouts", () => {
     },
   );
 
-  it("builds the exact forwarded destination, protected minimum and source guards", async () => {
+  it("wallet-action:payouts builds the exact forwarded destination, protected minimum and source guards", async () => {
     const { client } = fixture();
     const [option] = await readPayoutOptions(client, project);
     const call = buildPayoutCall(option, "12.5", "12.375", caller);

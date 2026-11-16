@@ -11,7 +11,7 @@ interface Props {
 }
 
 export async function generateMetadata(): Promise<Metadata> {
-  return { title: "Account | Revnet" };
+  return { title: "Account | Telligence" };
 }
 
 export default async function AccountLayout({ children, params }: PropsWithChildren<Props>) {

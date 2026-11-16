@@ -3,7 +3,7 @@
 import { useCompleteProjectPermissions } from "@/hooks/useCompleteBendystrawLists";
 import { findCurrentRevnetOperator, revnetOperatorCandidates } from "@/lib/revnetOperator";
 import { getJBContractAddress, RevnetCoreContracts } from "@bananapus/nana-sdk-core";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { isAddress, type Address } from "viem";
 import {
@@ -53,36 +53,41 @@ export function useLiveRevnetOperators(
     [fallback, holders.data, rows],
   );
 
-  const live = useQuery({
-    queryKey: ["v6-live-revnet-operators", candidates],
-    enabled: !holders.isLoading && rows.length > 0,
-    staleTime: 15_000,
-    queryFn: async () =>
-      Promise.all(
-        candidates.map(async ({ row, values }) => {
-          const operator = await findCurrentRevnetOperator(values, (candidate) =>
-            isLiveRevnetOperator(publicClientFor(row.chainId), row, candidate),
-          );
-          return [row.chainId, operator] as const;
-        }),
-      ),
+  const live = useQueries({
+    queries: candidates.map(({ row, values }) => ({
+      queryKey: ["v6-live-revnet-operator", row.chainId, row.projectId, values],
+      enabled: !holders.isLoading,
+      staleTime: 15_000,
+      queryFn: async () => {
+        const operator = await findCurrentRevnetOperator(values, (candidate) =>
+          isLiveRevnetOperator(publicClientFor(row.chainId), row, candidate),
+        );
+        return [row.chainId, operator] as const;
+      },
+    })),
   });
 
-  const operatorByChain = useMemo(() => {
+  const discoveredOperatorByChain = useMemo(() => {
     const map = new Map<number, Address>();
-    for (const [chainId, operator] of live.data ?? []) {
+    for (const query of live) {
+      if (!query.data) continue;
+      const [chainId, operator] = query.data;
       if (operator) map.set(chainId, operator);
     }
     return map;
-  }, [live.data]);
+  }, [live]);
+  const isLoading = holders.isLoading || live.some((query) => query.isLoading);
 
   return {
-    operatorByChain,
-    isLoading: holders.isLoading || live.isLoading,
-    isError: holders.isError || live.isError,
+    // Existing write consumers expect a complete map. Only display consumers opt
+    // into partial discovery, so a slow chain cannot shrink an action's scope.
+    operatorByChain: isLoading ? new Map<number, Address>() : discoveredOperatorByChain,
+    discoveredOperatorByChain,
+    isLoading,
+    isError: holders.isError || live.some((query) => query.isError),
     refetch: async () => {
       await holders.refetch();
-      await live.refetch();
+      await Promise.all(live.map((query) => query.refetch()));
     },
   };
 }

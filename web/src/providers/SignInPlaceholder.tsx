@@ -31,6 +31,7 @@ export function SignInPlaceholder({
     const dialog = document.createElement("dialog");
     dialog.className = "ui-modal-host";
     dialog.dataset.uiModalPortal = "";
+    dialog.setAttribute("aria-label", "Sign in");
     return dialog;
   });
 

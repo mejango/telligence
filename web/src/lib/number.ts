@@ -1,3 +1,5 @@
+import { formatUnits } from "viem";
+
 export function formatDecimals(value: number, maxDecimals: number = 6): string {
   return parseFloat(value.toFixed(maxDecimals)).toString();
 }
@@ -77,9 +79,34 @@ export function formatCompact(value: string | number, maxDecimals: number = 4): 
 
 /** The unabbreviated value, grouped — what a hover reveals. */
 export function exactNumber(value: string | number, maxDecimals: number = 18): string {
+  // A decimal string already holds every digit; going through a float would invent new ones.
+  if (typeof value === "string" && /^-?\d+(\.\d*)?$/u.test(value)) {
+    const fraction = value.split(".")[1] ?? "";
+    if (fraction.length <= maxDecimals) return commaNumber(trimZeros(value));
+  }
   const num = typeof value === "string" ? parseFloat(value) : value;
   if (!Number.isFinite(num)) return String(value);
   return commaNumber(trimZeros(num.toFixed(maxDecimals)));
+}
+
+/** A dense-list token amount: the abbreviated label and the exact value for its `title`. */
+export function compactTokenAmount(value: bigint, decimals: number, symbol?: string) {
+  const exact = formatUnits(value, decimals);
+  const suffix = symbol ? ` ${symbol}` : "";
+  const maxDecimals = Math.abs(Number(exact)) >= 1 ? 2 : 4;
+  return {
+    text: `${formatCompact(exact, maxDecimals)}${suffix}`,
+    title: `${exactNumber(exact)}${suffix}`,
+  };
+}
+
+/** A price with no exponent; a real price below the display range keeps three significant figures. */
+export function formatPriceValue(price: number): string {
+  if (!Number.isFinite(price) || price <= 0) return "0";
+  if (price >= 0.0001) {
+    return Intl.NumberFormat("en", { maximumFractionDigits: price >= 1 ? 4 : 8 }).format(price);
+  }
+  return trimZeros(price.toFixed(Math.ceil(-Math.log10(price)) + 2));
 }
 
 function trimZeros(fixed: string): string {

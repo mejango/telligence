@@ -4,14 +4,13 @@ const mocks = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("next/cache", () => ({ unstable_cache: (fn: unknown) => fn }));
 vi.mock("@/lib/bendystraw/query.server", () => ({ queryBendystraw: mocks.query }));
 
-import { getSuckerGroup } from "@/app/[slug]/getSuckerGroup";
+let getSuckerGroup: typeof import("@/app/[slug]/getSuckerGroup").getSuckerGroup;
 
 describe("Telligence project group boundary", () => {
-  beforeEach(() => mocks.query.mockResolvedValue({ suckerGroup: null }));
-
-  it.each([1, 10, 42161, 84532])("never queries project groups on chain %s", async (chainId) => {
-    await expect(getSuckerGroup("group", chainId)).resolves.toBeNull();
-    expect(mocks.query).not.toHaveBeenCalled();
+  // A fresh module per test: successful group reads are cached for display.
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ getSuckerGroup } = await import("@/app/[slug]/getSuckerGroup"));
   });
 
   it("only passes Base deployments to project tabs and financial controls", async () => {

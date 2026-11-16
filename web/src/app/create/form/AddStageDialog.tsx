@@ -1,6 +1,8 @@
 import { chainDisplayName } from "@/app/constants";
 import { ChainLogo } from "@/components/ChainLogo";
 import { ChainSelector } from "@/components/ChainSelector";
+import { StickyGroupFields } from "@/components/sticky/StickyGroupFields";
+import { StickyTokenStatus } from "@/components/sticky/StickyTokenStatus";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,14 +12,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Trash2 as TrashIcon } from "@/components/ui/icons";
+import { X as XIcon } from "@/components/ui/icons";
 import { toast } from "@/components/ui/use-toast";
+import { useHydrated } from "@/hooks/useHydrated";
 import { withSchema } from "@/lib/formValidation";
 import { FieldArray, Form, FormProvider } from "@/lib/forms";
 import { commaNumber } from "@/lib/number";
+import { isStickyRow, stickyGroupOf, stickyUnavailableReason } from "@/lib/sticky";
 import { cn, sortChains } from "@/lib/utils";
 import { JBChainId } from "@bananapus/nana-sdk-core";
-import { cloneElement, useState, useSyncExternalStore } from "react";
+import { cloneElement, useState } from "react";
 import { defaultStageData, PERMANENTLY_DISABLED_OPERATOR } from "../constants";
 import { getResolvedIssuance } from "../helpers/calculatePickupIssuance";
 import { formatFormErrors } from "../helpers/formatFormErrors";
@@ -29,7 +33,7 @@ import { PickupFromPreviousStage } from "./PickupFromPreviousStage";
 import { StartTimeField } from "./StartTimeField";
 import { useCreateForm } from "./useCreateForm";
 
-export function NotesSection({
+function NotesSection({
   title = "[ ? ]",
   children,
 }: {
@@ -63,10 +67,6 @@ export function NotesSection({
     </div>
   );
 }
-
-const subscribeToHydration = () => () => {};
-const clientIsHydrated = () => true;
-const serverIsHydrated = () => false;
 
 export function AddStageDialog({
   stageIdx,
@@ -103,12 +103,15 @@ export function AddStageDialog({
   // Chains are picked in the form's first section, so every chain-dependent
   // input in this dialog can specialize per selected chain inline.
   const sortedChainIds = sortChains(chainIds);
+  // Sticky is a hook type, offered only where every launch chain has the distributor.
+  // A revnet deploys its ERC-20 at launch, so reserved tokens can always reach it.
+  const stickyReason = stickyUnavailableReason(sortedChainIds);
   const perChainInputClassName =
-    "h-9 flex-1 border-2 border-melon-300 bg-melon-25 px-3 py-1.5 text-md placeholder:text-zinc-500 hover:border-melon-400 focus-visible:border-melon-600 focus-visible:outline-none focus-visible:ring-0";
+    "h-9 min-w-0 flex-1 border-2 border-melon-300 bg-melon-25 px-3 py-1.5 text-md placeholder:text-zinc-500 hover:border-melon-400 focus-visible:border-melon-600 focus-visible:outline-none focus-visible:ring-0";
 
   const [open, setOpen] = useState(false);
   // The server-rendered trigger cannot open a dialog until its handler is attached.
-  const hydrated = useSyncExternalStore(subscribeToHydration, clientIsHydrated, serverIsHydrated);
+  const hydrated = useHydrated();
 
   // The issuance denomination is a single global value (the ruleset's base
   // currency for the whole revnet), edited inline in the first stage's issuance
@@ -120,24 +123,13 @@ export function AddStageDialog({
   const baseCurrencySymbol = customReserve ? reserveAssetSymbol : baseCurrency;
 
   // Move enableCut state to top level
-  const [enableCut, setEnableCut] = useState(
-    Boolean(
-      initialValues &&
-      (Number(initialValues.priceCeilingIncreasePercentage) !== 0 ||
-        Number(initialValues.priceCeilingIncreaseFrequency) !== 0),
-    ),
-  );
+  const [enableCut, setEnableCut] = useState(() => cutControlsFrom(initialValues).enabled);
   const [uiCutPercentage, setUiCutPercentage] = useState(
-    initialValues && Number(initialValues.priceCeilingIncreasePercentage) !== 0
-      ? Number(initialValues.priceCeilingIncreasePercentage)
-      : 10,
+    () => cutControlsFrom(initialValues).percentage,
   );
   const [uiCutFrequency, setUiCutFrequency] = useState(
-    initialValues && Number(initialValues.priceCeilingIncreaseFrequency) !== 0
-      ? Number(initialValues.priceCeilingIncreaseFrequency)
-      : 30,
+    () => cutControlsFrom(initialValues).frequency,
   );
-  const [hasUserSetCut, setHasUserSetCut] = useState(false);
 
   // Discrete values matching your radio options
   const steps = ["no tax", "light", "medium", "heavy", "extreme"];
@@ -149,6 +141,10 @@ export function AddStageDialog({
         // (Re)start the buffers from the parent's current state on every open.
         if (nextOpen) {
           setDraftBaseCurrency(issuanceBaseCurrency);
+          const cut = cutControlsFrom(initialValues);
+          setEnableCut(cut.enabled);
+          setUiCutPercentage(cut.percentage);
+          setUiCutFrequency(cut.frequency);
         }
         setOpen(nextOpen);
       }}
@@ -156,7 +152,7 @@ export function AddStageDialog({
       <DialogTrigger asChild>
         {cloneElement(children, { disabled: !hydrated || children.props.disabled })}
       </DialogTrigger>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-xl p-4 sm:p-6">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-[37rem] p-4 max-sm:w-full max-sm:border-x-0 sm:p-6">
         <DialogHeader className="text-left">
           <DialogTitle className="text-xl">Add stage</DialogTitle>
         </DialogHeader>
@@ -195,18 +191,9 @@ export function AddStageDialog({
             }}
           >
             {({ values, isValid, errors, setFieldValue, submitCount }) => {
-              // Handler for checkbox toggle
+              // Unchecking only hides the fields, so their values come back with the checkbox.
               const handleCutToggle = (e: React.ChangeEvent<HTMLInputElement>) => {
-                const checked = e.target.checked;
-                setEnableCut(checked);
-                if (checked) {
-                  if (!hasUserSetCut) {
-                    setUiCutPercentage(10);
-                    setUiCutFrequency(30);
-                  }
-                  // else: keep last user-entered values
-                }
-                // Do not reset values on uncheck, just hide the fields
+                setEnableCut(e.target.checked);
               };
 
               // Expand a split to per-chain beneficiaries (seeded with the
@@ -247,7 +234,7 @@ export function AddStageDialog({
                         1. {revnetTokenSymbol} issuance
                       </div>
                       <p className="text-md text-zinc-500 mt-3">
-                        How many {revnetTokenSymbol} to issue when receiving 1 {baseCurrencySymbol}.
+                        How many {revnetTokenSymbol} a payment of 1 {baseCurrencySymbol} creates.
                       </p>
 
                       <PickupFromPreviousStage
@@ -256,8 +243,8 @@ export function AddStageDialog({
                         setFieldValue={setFieldValue}
                       />
 
-                      <div className="mt-2 flex flex-col items-start gap-2 text-md text-zinc-600">
-                        <div className="grid h-9 w-full min-w-0 grid-cols-[minmax(6rem,1fr)_max-content] items-center border-2 border-melon-300 bg-melon-25 hover:border-melon-400 focus-within:border-melon-600 sm:w-[260px]">
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-md text-zinc-600">
+                        <div className="grid h-9 w-full min-w-0 grid-cols-[minmax(6rem,1fr)_max-content] items-center border-2 border-melon-300 bg-melon-25 hover:border-melon-400 focus-within:border-melon-600 sm:w-[250px]">
                           <Field
                             id="initialIssuance"
                             name="initialIssuance"
@@ -297,7 +284,7 @@ export function AddStageDialog({
                               </span>
                             ) : (
                               <select
-                                aria-label="Issuance currency"
+                                aria-label="New token pricing currency"
                                 className="inline-caret ml-1 h-7 border-0 bg-transparent py-0 pl-1 text-md text-zinc-600 focus:outline-none focus:ring-0"
                                 value={draftBaseCurrency}
                                 onChange={(event) =>
@@ -310,14 +297,14 @@ export function AddStageDialog({
                             )}
                           </span>
                         </div>
-                        <div className="flex w-full flex-wrap items-center gap-2">
+                        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
                           {!enableCut ? (
                             <>
                               <label
                                 htmlFor="enableCut"
                                 className="whitespace-nowrap italic text-zinc-400"
                               >
-                                add automatic cuts?
+                                Cut automatically?
                               </label>
                               <input
                                 type="checkbox"
@@ -347,10 +334,7 @@ export function AddStageDialog({
                                   step="any"
                                   className="h-9 w-14 border-2 border-melon-300 bg-melon-25 pr-6 pl-2 hover:border-melon-400 focus:border-melon-600 focus:ring-0"
                                   value={String(uiCutPercentage)}
-                                  onChange={(e) => {
-                                    setUiCutPercentage(Number(e.target.value));
-                                    setHasUserSetCut(true);
-                                  }}
+                                  onChange={(e) => setUiCutPercentage(Number(e.target.value))}
                                   required
                                 />
                                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none">
@@ -366,12 +350,9 @@ export function AddStageDialog({
                                     inputMode="decimal"
                                     min="0.042"
                                     step="any"
-                                    className="h-9 w-28 border-2 border-melon-300 bg-melon-25 pr-10 pl-2 hover:border-melon-400 focus:border-melon-600 focus:ring-0"
+                                    className="h-9 w-25 border-2 border-melon-300 bg-melon-25 pr-10 pl-2 hover:border-melon-400 focus:border-melon-600 focus:ring-0"
                                     value={String(uiCutFrequency)}
-                                    onChange={(e) => {
-                                      setUiCutFrequency(Number(e.target.value));
-                                      setHasUserSetCut(true);
-                                    }}
+                                    onChange={(e) => setUiCutFrequency(Number(e.target.value))}
                                     required
                                   />
                                   <span className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none">
@@ -390,9 +371,9 @@ export function AddStageDialog({
                             <div>
                               {values.splits.map((split, index) => (
                                 <div key={`split-${index}`}>
-                                  <div className="mt-4 flex flex-wrap items-center gap-2 text-md text-zinc-600">
+                                  <div className="mt-4 flex flex-wrap items-start gap-2 text-md text-zinc-600">
                                     <label
-                                      className="whitespace-nowrap"
+                                      className="flex h-9 items-center whitespace-nowrap"
                                       htmlFor={`splits.${index}.amount`}
                                     >
                                       {index === 0 ? "split" : "... and"}
@@ -409,41 +390,111 @@ export function AddStageDialog({
                                       required
                                       placeholder="100"
                                     />
-                                    <label htmlFor={`splits.${index}.defaultBeneficiary`}>to</label>
-                                    <Field
-                                      id={`splits.${index}.defaultBeneficiary`}
-                                      name={`splits.${index}.defaultBeneficiary`}
-                                      className="h-9"
-                                      width="min-w-40 flex-1"
-                                      placeholder="0x"
-                                      required
-                                      defaultValue={namedOperator}
-                                    />
+                                    <label
+                                      className="flex h-9 items-center"
+                                      htmlFor={`splits.${index}.defaultBeneficiary`}
+                                    >
+                                      to
+                                    </label>
+                                    <select
+                                      aria-label="Recipient type"
+                                      value={isStickyRow(split) ? "hook" : "address"}
+                                      onChange={(e) => {
+                                        const hook = e.target.value === "hook";
+                                        // A Sticky row's beneficiary is a token, never a wallet,
+                                        // and it is the same token on every chain.
+                                        setFieldValue(`splits.${index}`, {
+                                          percentage: split.percentage,
+                                          defaultBeneficiary: "",
+                                          ...(hook
+                                            ? {
+                                                kind: "hook",
+                                                hookKind: "sticky",
+                                                ...stickyGroupOf({}),
+                                              }
+                                            : {}),
+                                        });
+                                      }}
+                                      className="h-9 border-2 border-melon-300 bg-melon-25 px-2 py-0 pr-8 text-md hover:border-melon-400 focus:border-melon-600 focus:outline-none focus:ring-0"
+                                    >
+                                      <option value="address">Address</option>
+                                      {!stickyReason || isStickyRow(split) ? (
+                                        <option value="hook">Hook</option>
+                                      ) : null}
+                                    </select>
+                                    {/* Phones keep the remove button on the row's first line. */}
                                     <Button
                                       variant="ghost"
                                       size="sm"
+                                      aria-label="Remove split"
                                       onClick={() => arrayHelpers.remove(index)}
-                                      className="h-9 px-0 sm:px-3"
+                                      className="ml-auto h-9 shrink-0 px-0 sm:order-last sm:ml-0 sm:px-3"
                                     >
-                                      <TrashIcon className="h-4 w-4" />
+                                      <XIcon className="h-4 w-4" />
                                     </Button>
+                                    {isStickyRow(split) ? (
+                                      <span className="flex h-9 items-center">Sticky</span>
+                                    ) : null}
+                                    <div
+                                      className={`flex min-w-40 flex-1 flex-col gap-2 ${
+                                        isStickyRow(split) ? "" : "max-sm:basis-full"
+                                      }`}
+                                    >
+                                      <Field
+                                        id={`splits.${index}.defaultBeneficiary`}
+                                        name={`splits.${index}.defaultBeneficiary`}
+                                        aria-label={isStickyRow(split) ? "Sticky token" : undefined}
+                                        className="h-9"
+                                        width="w-full min-w-0"
+                                        placeholder={
+                                          isStickyRow(split) ? "0x… (Sticky token)" : "0x"
+                                        }
+                                        required
+                                        defaultValue={
+                                          isStickyRow(split) ? undefined : namedOperator
+                                        }
+                                      />
+                                      {chainIds.length > 1 && !isStickyRow(split) && (
+                                        <label
+                                          className="flex w-fit items-center self-end gap-2 text-md italic text-zinc-400"
+                                          htmlFor={`perChainBeneficiary-${index}`}
+                                        >
+                                          adjust per chain
+                                          <input
+                                            type="checkbox"
+                                            id={`perChainBeneficiary-${index}`}
+                                            checked={(split.beneficiary?.length ?? 0) > 0}
+                                            onChange={(e) =>
+                                              toggleSplitPerChain(index, e.target.checked)
+                                            }
+                                          />
+                                        </label>
+                                      )}
+                                    </div>
                                   </div>
-                                  {chainIds.length > 1 && (
+                                  {isStickyRow(split) && stickyReason ? (
+                                    <p role="alert" className="mt-2 text-sm text-red-500">
+                                      {stickyReason}
+                                    </p>
+                                  ) : isStickyRow(split) ? (
+                                    <>
+                                      <StickyGroupFields
+                                        value={stickyGroupOf(split)}
+                                        onChange={(patch) =>
+                                          setFieldValue(`splits.${index}`, { ...split, ...patch })
+                                        }
+                                      />
+                                      <StickyTokenStatus
+                                        row={{
+                                          ...stickyGroupOf(split),
+                                          token: split.defaultBeneficiary,
+                                        }}
+                                        chainIds={sortedChainIds}
+                                      />
+                                    </>
+                                  ) : null}
+                                  {chainIds.length > 1 && !isStickyRow(split) && (
                                     <div className="mt-2">
-                                      <label
-                                        className="flex w-fit items-center gap-2 text-md italic text-zinc-400"
-                                        htmlFor={`perChainBeneficiary-${index}`}
-                                      >
-                                        set beneficiary per chain?
-                                        <input
-                                          type="checkbox"
-                                          id={`perChainBeneficiary-${index}`}
-                                          checked={(split.beneficiary?.length ?? 0) > 0}
-                                          onChange={(e) =>
-                                            toggleSplitPerChain(index, e.target.checked)
-                                          }
-                                        />
-                                      </label>
                                       {(split.beneficiary?.length ?? 0) > 0 && (
                                         <div className="mt-2 space-y-2">
                                           {sortedChainIds.map((chainId) => {
@@ -455,7 +506,7 @@ export function AddStageDialog({
                                                 key={chainId}
                                                 className="flex items-center gap-2 text-md text-zinc-600"
                                               >
-                                                <div className="flex w-40 shrink-0 items-center gap-2 text-sm">
+                                                <div className="flex w-28 shrink-0 items-center gap-2 text-sm sm:w-40">
                                                   <ChainLogo
                                                     chainId={chainId}
                                                     width={20}
@@ -466,7 +517,7 @@ export function AddStageDialog({
                                                   </span>
                                                 </div>
                                                 <input
-                                                  aria-label={`${chainDisplayName(chainId)} beneficiary`}
+                                                  aria-label={`${chainDisplayName(chainId)} recipient`}
                                                   className={perChainInputClassName}
                                                   placeholder="0x"
                                                   value={entry?.address ?? ""}
@@ -504,23 +555,23 @@ export function AddStageDialog({
                         />
                         {values.splits.length > 0 && (
                           <div className="text-sm font-medium text-zinc-500 mt-4 border-l border-zinc-300 pl-2 py-1 px-1">
-                            Total split limit of{" "}
+                            Split{" "}
                             {values.splits.reduce(
                               (sum, split) => sum + (Number(split.percentage) || 0),
                               0,
                             )}
-                            %, payer always receives{" "}
+                            % of tokens. The payer receives{" "}
                             {100 -
                               values.splits.reduce(
                                 (sum, split) => sum + (Number(split.percentage) || 0),
                                 0,
                               )}
-                            % of issuance.
+                            %.
                           </div>
                         )}
                         {values.splits.length == 0 && (
                           <div className="text-sm font-medium text-zinc-500 mt-4 border-l border-zinc-300 pl-2 py-1 px-1">
-                            Without splits, the payer always receives 100% of issuance.
+                            With no tokens split, the payer receives them all.
                           </div>
                         )}
                       </div>
@@ -528,42 +579,40 @@ export function AddStageDialog({
                         <div className="text-zinc-600 text-md mt-4 italic">
                           <ul className="list-disc list-inside space-y-2">
                             <li className="flex">
-                              <span className="mr-2">•</span>
-                              Cutting issuance by 50% means to double the price – a halvening
-                              effect.
+                              <span className="mr-2">•</span>A 50% cut creates half as many tokens
+                              for the same payment, doubling the price to create each token.
                             </li>
                             <li className="flex">
                               <span className="mr-2">•</span>
-                              If there's a market for {revnetTokenSymbol} / {reserveAsset} offering
-                              a better price, all {reserveAsset} paid in will be used to buyback
-                              instead of feeding the revnet. Uniswap is used as the market.
+                              If a configured Uniswap market offers more {revnetTokenSymbol} for the
+                              payment, it can buy back existing tokens there instead of issuing new
+                              ones. The money used goes to the market.
                             </li>
                             <li className="flex">
                               <span className="mr-2">•</span>
-                              Splits apply to both issuance and buybacks.
+                              Token splits apply to both newly created tokens and buybacks.
                             </li>
                             <li className="flex">
                               <span className="mr-2">•</span>
                               <span>
-                                You can write and deploy a custom split hook that automatically
-                                receives and processes the split {revnetTokenSymbol}.
+                                A recipient can be a split hook that handles the tokens
+                                automatically.
                               </span>
                             </li>
                             <li className="flex">
                               <span className="mr-2">•</span>
-                              If there are splits, the revnet operator can change the distribution
-                              of the split limit to new destinations at any time.
+                              The operator can change who receives the split tokens at any time, but
+                              cannot increase the total split for this stage.
                             </li>
                             <li className="flex">
                               <span className="mr-2">•</span>
-                              The revnet operator can be a multisig, a DAO, an LLC, a core team, an
-                              airdrop stockpile, a staking rewards contract, or some other address.
+                              The operator can be a wallet or a contract. Choose its address in the
+                              Operator section.
                             </li>
                             <li className="flex">
                               <span className="mr-2">•</span>
-                              The revnet operator is set once and is not bound by stages. The revnet
-                              operator can hand off this responsibility to another address at any
-                              time, or relinquish it altogether.
+                              The same operator serves every stage. It can pass the role to another
+                              address or give it up.
                             </li>
                           </ul>
                         </div>
@@ -573,20 +622,21 @@ export function AddStageDialog({
                         render={(arrayHelpers) => (
                           <div>
                             <p className="text-md text-zinc-500 mt-10">
-                              Optionally, auto-issue {revnetTokenSymbol} when the stage starts.
+                              Optionally, issue {revnetTokenSymbol} automatically when the stage
+                              starts, without a payment.
                             </p>
                             {values.autoIssuance?.map((autoissuance, index) => (
                               <div
                                 key={`autoissuance-${index}`}
-                                className="mt-4 grid grid-cols-[auto_12rem_auto_minmax(0,1fr)_auto] items-center gap-2 text-md text-zinc-600 sm:flex"
+                                className="mt-4 flex flex-wrap items-start gap-2 text-md text-zinc-600"
                               >
                                 <label
-                                  className="whitespace-nowrap"
+                                  className="flex h-9 items-center whitespace-nowrap"
                                   htmlFor={`autoIssuance.${index}.amount`}
                                 >
                                   {index === 0 ? "Issue" : "... and"}
                                 </label>
-                                <div className="relative w-48 sm:w-40">
+                                <div className="relative w-40 shrink-0">
                                   <Field
                                     id={`autoIssuance.${index}.amount`}
                                     name={`autoIssuance.${index}.amount`}
@@ -600,20 +650,32 @@ export function AddStageDialog({
                                     {revnetTokenSymbol}
                                   </span>
                                 </div>
-                                <label htmlFor={`autoIssuance.${index}.beneficiary`}>to</label>
-                                <Field
-                                  id={`autoIssuance.${index}.beneficiary`}
-                                  name={`autoIssuance.${index}.beneficiary`}
-                                  className="col-span-3 col-start-2 row-start-2 h-9 w-full min-w-0 sm:col-auto sm:row-auto sm:flex-1"
-                                  placeholder="0x"
-                                  required
-                                />
-                                {chainIds.length > 1 && (
-                                  <>
-                                    <label className="col-start-1 row-start-3 whitespace-nowrap sm:col-auto sm:row-auto">
-                                      on
-                                    </label>
-                                    <div className="col-span-3 col-start-2 row-start-3 sm:col-auto sm:row-auto">
+                                <label
+                                  className="flex h-9 items-center"
+                                  htmlFor={`autoIssuance.${index}.beneficiary`}
+                                >
+                                  to
+                                </label>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  aria-label="Remove auto issuance"
+                                  onClick={() => arrayHelpers.remove(index)}
+                                  className="ml-auto h-9 shrink-0 px-0 sm:order-last sm:ml-0 sm:px-3"
+                                >
+                                  <XIcon className="h-4 w-4" />
+                                </Button>
+                                <div className="flex min-w-56 flex-1 flex-col gap-2 max-sm:basis-full">
+                                  <Field
+                                    id={`autoIssuance.${index}.beneficiary`}
+                                    name={`autoIssuance.${index}.beneficiary`}
+                                    className="h-9 w-full min-w-0"
+                                    placeholder="0x"
+                                    required
+                                  />
+                                  {chainIds.length > 1 && (
+                                    <div className="flex items-center gap-2 self-end">
+                                      <label>on</label>
                                       <ChainSelector
                                         value={
                                           (autoissuance.chainId ?? sortedChainIds[0]) as JBChainId
@@ -624,16 +686,8 @@ export function AddStageDialog({
                                         options={chainIds}
                                       />
                                     </div>
-                                  </>
-                                )}
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => arrayHelpers.remove(index)}
-                                  className="col-start-5 row-span-2 row-start-1 h-9 justify-self-end self-center pr-0 pl-2 sm:col-auto sm:row-auto sm:px-3"
-                                >
-                                  <TrashIcon className="h-4 w-4" />
-                                </Button>
+                                  )}
+                                </div>
                               </div>
                             ))}
                             <Button
@@ -653,7 +707,7 @@ export function AddStageDialog({
                             </Button>
                             {values.autoIssuance.length > 0 && (
                               <div className="text-sm font-medium text-zinc-500 mt-4 border-l border-zinc-300 pl-2 py-1 px-1">
-                                Total auto issuance of{" "}
+                                Total issued at stage start:{" "}
                                 {commaNumber(
                                   values.autoIssuance?.reduce(
                                     (sum, issuance) => sum + (Number(issuance.amount) || 0),
@@ -677,17 +731,17 @@ export function AddStageDialog({
                       2. {revnetTokenSymbol} cash outs
                     </div>
                     <p className="text-md text-zinc-500 mt-3">
-                      The only way for anyone to access the {reserveAsset} used to issue{" "}
-                      {revnetTokenSymbol} is by cashing out or taking out a loan from the revnet
-                      using their {revnetTokenSymbol}.
+                      Holders can cash out {revnetTokenSymbol} for a share of the revnet&apos;s{" "}
+                      {reserveAsset}, or borrow against their tokens.
                     </p>
                     <p className="text-md text-zinc-500 mt-3">
-                      A tax can be added that makes cashing out and loans more expensive, while
-                      rewarding {revnetTokenSymbol} holders who stick around as others cash out.
+                      A cash-out tax leaves some of that share in the revnet for remaining holders.
+                      A higher tax leaves more behind and reduces how much holders can cash out or
+                      borrow.
                     </p>
                     <p className="text-md text-zinc-500 mt-3">
-                      A light tax is recommended to add an incentive while maintaining liquidity for{" "}
-                      {revnetTokenSymbol} holders.
+                      Use the preview to compare what a holder receives with what remains in the
+                      revnet.
                     </p>
                     <div className="space-y-2 mt-6">
                       <div className="flex justify-between relative w-full">
@@ -717,7 +771,7 @@ export function AddStageDialog({
                           step={5}
                           name="priceFloorTaxIntensity"
                           className="h-2 w-full cursor-pointer appearance-none bg-gray-200 px-0 accent-teal-500"
-                          aria-label="Exit tax percentage"
+                          aria-label="Cash-out tax"
                         />
                       </div>
                     </div>
@@ -731,32 +785,25 @@ export function AddStageDialog({
                         <ul className="list-disc list-inside space-y-2">
                           <li className="flex">
                             <span className="mr-2">•</span>
-                            The heavier the tax, the less that can be accessed by cashing out or
-                            taking out a loan at any given time, and the more that is left to share
-                            between remaining holders who cash out later.
+                            The cash-out tax stays in the revnet.
                           </li>
 
                           <li className="flex">
-                            <span className="mr-2">•</span>
-                            Loans are an automated source of revenue for {revnetTokenSymbol}. By
-                            making loans more expensive, a heavier cash out tax reduces potential
-                            loan revenue.
+                            <span className="mr-2">•</span>A higher cash-out tax reduces loan
+                            capacity.
                           </li>
                           <li className="flex">
                             <span className="mr-2">•</span>
-                            Given 100 {reserveAsset} in the revnet, 100 total supply of{" "}
-                            {revnetTokenSymbol}, and 10 {revnetTokenSymbol} being cashed out, a tax
-                            rate of 0 would yield a cash out value of 10 {reserveAsset}, 0.2 would
-                            yield 8.2 {reserveAsset}, 0.5 would yield 5.5 {reserveAsset}, and 0.8
-                            would yield 2.8 {reserveAsset}.
+                            For example, with 100 {reserveAsset} in reserve and 100 total{" "}
+                            {revnetTokenSymbol}, cashing out 10 tokens gives 10 {reserveAsset} at a
+                            tax rate of 0, 8.2 at 0.2, 5.5 at 0.5, or 2.8 at 0.8. These examples
+                            apply the cash-out tax. Check the final quote before confirming.
                           </li>
                           <li className="flex">
                             <span className="mr-2">•</span>
-                            The formula for the amount of {reserveAsset} received when cashing out
-                            is `(ax/s) * ((1-r) + xr/s)` where: `r` is the cash out tax rate, `a` is
-                            the amount in the revnet being accessed, `s` is the current token supply
-                            of {revnetTokenSymbol}, `x` is the amount of {revnetTokenSymbol} being
-                            cashed out.
+                            To calculate this amount, use `(ax/s) * ((1-r) + xr/s)`: `a` is the
+                            available reserve, `x` the tokens being cashed out, `s` the total token
+                            supply, and `r` the cash-out tax rate from 0 to 1.
                           </li>
                         </ul>
                       </div>
@@ -766,12 +813,6 @@ export function AddStageDialog({
 
                   <DialogFooter>
                     <div className="flex w-full flex-col items-end gap-3">
-                      <Button
-                        type="submit"
-                        className="bg-teal-500 text-melon-950 hover:bg-teal-600"
-                      >
-                        Save stage
-                      </Button>
                       {submitCount > 0 && !isValid ? (
                         <div
                           className="w-full border-l-2 border-red-500 pl-3 text-left"
@@ -785,6 +826,12 @@ export function AddStageDialog({
                           </p>
                         </div>
                       ) : null}
+                      <Button
+                        type="submit"
+                        className="bg-teal-500 text-melon-950 hover:bg-teal-600"
+                      >
+                        Save stage
+                      </Button>
                     </div>
                   </DialogFooter>
                 </Form>
@@ -795,6 +842,17 @@ export function AddStageDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** The cut controls for a stage being edited, or the off state a new stage opens with. */
+function cutControlsFrom(stage?: StageData) {
+  const percentage = Number(stage?.priceCeilingIncreasePercentage) || 0;
+  const frequency = Number(stage?.priceCeilingIncreaseFrequency) || 0;
+  return {
+    enabled: percentage !== 0 || frequency !== 0,
+    percentage: percentage || 10,
+    frequency: frequency || 30,
+  };
 }
 
 function getDefaultStageData(stageIdx: number, stages: StageData[]) {

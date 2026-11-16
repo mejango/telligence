@@ -12,11 +12,11 @@
 //
 // Pair derivation and the probe itself live in the SDK; only the user-facing
 // copy and the fail-closed policy are local.
+import { chainDisplayName } from "@/app/constants";
 import {
-  JB_CHAINS,
   JBChainId,
-  jbContractAddress,
   JBCoreContracts,
+  jbV6ContractAddress,
   NATIVE_TOKEN,
   USDC_ADDRESSES,
 } from "@bananapus/nana-sdk-core";
@@ -100,8 +100,8 @@ export async function assertLaunchFeedsReachable({
   const pairs = requiredFeedPairs(contexts, baseCurrency);
   if (pairs.length === 0) return;
 
-  const chainName = JB_CHAINS[chainId]?.name ?? `chain ${chainId}`;
-  if (!jbContractAddress[6][JBCoreContracts.JBPrices][chainId]) {
+  const chainName = chainDisplayName(chainId);
+  if (!jbV6ContractAddress[JBCoreContracts.JBPrices][chainId]) {
     throw new Error(
       `No price contract is known on ${chainName}, so this token combination can't be verified. Remove ${chainName} or launch with a single accepted token.`,
     );

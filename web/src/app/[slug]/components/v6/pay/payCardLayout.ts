@@ -1,5 +1,5 @@
-import { PaymentTerminalType } from "@/lib/paymentTerminal";
-import { V6PayMode } from "@/lib/v6/pay";
+import { V6PayMode, V6PayTokenOption } from "@/lib/v6/pay";
+import { parseUnits } from "viem";
 
 /**
  * Keep the established pay-panel height while a thumbnail strip is present,
@@ -20,10 +20,6 @@ export function payPanelLayoutClasses({
   return mode === "pay" && (shopTierCount ?? 0) > 0 ? "h-30 py-4" : "py-0";
 }
 
-export function paySettlementLabel(routeType: PaymentTerminalType) {
-  return routeType === "swap" ? "Swap" : "Issuance";
-}
-
 /**
  * Whether the token menu should open on "$" rather than on a token.
  *
@@ -36,11 +32,42 @@ export function defaultsToDollars({
   balances,
 }: {
   isConnected: boolean;
-  /** One balance per accepted token. Empty while they are still being read. */
-  balances: bigint[];
+  /**
+   * One balance per accepted token, undefined for one unread or failed. Empty while they are
+   * still being read. An unknown balance is never "nothing".
+   */
+  balances: readonly (bigint | undefined)[];
 }): boolean {
   if (!isConnected || balances.length === 0) return false;
   return balances.every((balance) => balance === 0n);
+}
+
+/**
+ * A typed dollar amount in token units, given JBPrices' price of one dollar in that token at the
+ * token's decimals. Zero for anything that is not a positive number.
+ */
+export function tokensForDollars(dollars: string, tokensPerDollar: bigint): bigint {
+  try {
+    const trimmed = dollars.trim();
+    if (!trimmed || Number(trimmed) <= 0) return 0n;
+    return (parseUnits(trimmed, 18) * tokensPerDollar) / 10n ** 18n;
+  } catch {
+    return 0n;
+  }
+}
+
+/**
+ * Where a picked token sits in a re-resolved list. Addresses differ across chains, so a token
+ * absent by key is looked for by symbol. -1 when this list does not have it.
+ */
+export function pickedTokenIndex(
+  tokens: readonly V6PayTokenOption[],
+  key: string,
+  symbol: string,
+  keyOf: (token: V6PayTokenOption) => string,
+): number {
+  const byKey = tokens.findIndex((token) => keyOf(token) === key);
+  return byKey >= 0 ? byKey : tokens.findIndex((token) => token.symbol === symbol);
 }
 
 /** What pressing the pay button does, given who is here and what they picked. */

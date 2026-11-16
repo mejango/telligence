@@ -86,7 +86,7 @@ describe("create form section order", () => {
 
     expect(headings).toEqual([
       "1. Look",
-      "2. Settlement",
+      "2. Money and chains",
       "3. Terms",
       "4. Store",
       "5. Operator",
@@ -100,7 +100,7 @@ describe("create form section order", () => {
     // "Look" (name, ticker, logo, about, socials) has no chain-dependent
     // field, so it leads. Everything from the chain picker down does.
     const environment = screen.getByLabelText("Deployment environment");
-    const chain = screen.getByRole("checkbox", { name: "Ethereum" });
+    const chain = screen.getByRole("checkbox", { name: "Sepolia" });
     const reserveAsset = screen.getByRole("checkbox", { name: "Custom token" });
     const terms = screen.getByRole("heading", { name: "3. Terms" });
 
@@ -112,12 +112,12 @@ describe("create form section order", () => {
   it("describes chains and reserve asset from the settlement section's copy", () => {
     renderCreateForm(validRevnetForm());
 
-    const settlement = screen.getByRole("heading", { name: "2. Settlement" }).closest("div");
+    const settlement = screen.getByRole("heading", { name: "2. Money and chains" }).closest("div");
     expect(settlement?.textContent).toContain(
-      "Pick which chains your revnet will accept money on and issue SAFE from, and which reserve asset will back the value of SAFE.",
+      "Choose where your revnet runs and which tokens its reserve accepts. Holders can cash out SAFE for a share of that reserve.",
     );
     expect(settlement?.textContent).toContain(
-      "Holders of SAFE can cash out on any of the selected chains for the reserve token(s), and can move their SAFE between chains at any time, which moves proportional reserved tokens alongside.",
+      "Holders can cash out on a selected chain if it has enough reserves. They can also move their SAFE between linked chains. The matching share of tokens set aside for other recipients moves with them.",
     );
   });
 
@@ -127,7 +127,7 @@ describe("create form section order", () => {
     // The operator is named in its own section, below the chain picker: this
     // promise only reads correctly once it sits with the other post-deploy
     // expectations.
-    const copy = screen.getByText(/able to add new chains to the revnet later/i);
+    const copy = screen.getByText(/they can add chains later/i);
     expect(copy.closest("div")?.querySelector("h2")?.textContent).toBe("6. Deploy");
   });
 
@@ -189,12 +189,14 @@ describe("inline per-chain inputs driven by the up-front chain selection", () =>
 
     // Single value by default; expandable to the selected chains, seeded with
     // the single default value.
-    expect(screen.queryByLabelText("Sepolia beneficiary")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText(/per chain/i, { selector: "#perChainBeneficiary-0" }));
-    expect(screen.getByLabelText("Sepolia beneficiary")).toHaveValue(TEST_BENEFICIARY);
-    expect(screen.getByLabelText("Base Sepolia beneficiary")).toHaveValue(TEST_BENEFICIARY);
+    expect(screen.queryByLabelText("Sepolia recipient")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByLabelText(/adjust per chain/i, { selector: "#perChainBeneficiary-0" }),
+    );
+    expect(screen.getByLabelText("Sepolia recipient")).toHaveValue(TEST_BENEFICIARY);
+    expect(screen.getByLabelText("Base Sepolia recipient")).toHaveValue(TEST_BENEFICIARY);
 
-    fireEvent.change(screen.getByLabelText("Base Sepolia beneficiary"), {
+    fireEvent.change(screen.getByLabelText("Base Sepolia recipient"), {
       target: { value: TEST_ACCOUNT },
     });
 
@@ -210,10 +212,10 @@ describe("inline per-chain inputs driven by the up-front chain selection", () =>
 
     // No standalone denomination block in the form body: the control lives at
     // the point of use, in the stage's issuance row.
-    expect(screen.queryByLabelText("Issuance currency")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("New token pricing currency")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("Edit stage 1"));
-    const inline = screen.getByRole("combobox", { name: "Issuance currency" });
+    const inline = screen.getByRole("combobox", { name: "New token pricing currency" });
     expect(inline).toHaveValue("ETH");
     fireEvent.change(inline, { target: { value: "USD" } });
 
@@ -237,7 +239,9 @@ describe("inline per-chain inputs driven by the up-front chain selection", () =>
     // Stage 1 owns the one global denomination.
     fireEvent.click(screen.getByLabelText("Edit stage 1"));
     expect(
-      within(screen.getByRole("dialog")).getByRole("combobox", { name: "Issuance currency" }),
+      within(screen.getByRole("dialog")).getByRole("combobox", {
+        name: "New token pricing currency",
+      }),
     ).toHaveValue("ETH");
 
     // Later stages quote it, they don't offer it: the protocol has no
@@ -247,15 +251,18 @@ describe("inline per-chain inputs driven by the up-front chain selection", () =>
     fireEvent.click(screen.getByLabelText("Edit stage 2"));
     const laterStage = screen.getByRole("dialog");
     expect(
-      within(laterStage).queryByRole("combobox", { name: "Issuance currency" }),
+      within(laterStage).queryByRole("combobox", { name: "New token pricing currency" }),
     ).not.toBeInTheDocument();
-    expect(laterStage.querySelectorAll("select")).toHaveLength(0);
+    // Split rows carry their own recipient-type picker; no other select may appear.
+    expect(laterStage.querySelectorAll('select:not([aria-label="Recipient type"])')).toHaveLength(
+      0,
+    );
     expect(issuanceSuffixText(laterStage)).toMatch(/^SAFE \/\s*ETH$/);
 
     // And it quotes the current value, including one just picked in stage 1.
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     fireEvent.click(screen.getByLabelText("Edit stage 1"));
-    fireEvent.change(screen.getByRole("combobox", { name: "Issuance currency" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "New token pricing currency" }), {
       target: { value: "USD" },
     });
     fireEvent.click(screen.getByText("Save stage"));
@@ -263,7 +270,7 @@ describe("inline per-chain inputs driven by the up-front chain selection", () =>
     fireEvent.click(screen.getByLabelText("Edit stage 2"));
     const reopened = screen.getByRole("dialog");
     expect(
-      within(reopened).queryByRole("combobox", { name: "Issuance currency" }),
+      within(reopened).queryByRole("combobox", { name: "New token pricing currency" }),
     ).not.toBeInTheDocument();
     expect(issuanceSuffixText(reopened)).toMatch(/^SAFE \/\s*USD$/);
 

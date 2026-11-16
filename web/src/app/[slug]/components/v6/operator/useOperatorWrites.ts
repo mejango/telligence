@@ -1,28 +1,28 @@
 "use client";
 
+import { useReviewedAction, useSafeTransactionSignature } from "@/hooks/useReviewedAction";
 import {
   useGetRelayrTxQuote,
   useSendRelayrTx,
   waitForRelayrBundle,
 } from "@/hooks/useReviewedRelayr";
-import { useReviewedSafeSignature } from "@/hooks/useReviewedSafeSignature";
-import {
-  isSafeConnection,
-  submittedViaSafe,
-  useWriteContract,
-} from "@/hooks/useReviewedWriteContract";
-import { readAuthorityIdentity, readBoundedSafeNonce } from "@/lib/cross-chain-authority";
-import { gasWithHeadroom } from "@/lib/gas";
+import { submittedViaSafe } from "@/lib/held-rows";
 import { areRelayrChainsCompatible } from "@/lib/relayr-chains";
+import { isSafeConnection } from "@/lib/safe-connector";
+import { chooseSafeNonce } from "@/lib/safe-nonce-choice";
 import {
   listPendingSafeTransactions,
-  nextProposalNonce,
+  proposalNonceChoices,
   proposeSafeTransaction,
-  queuedTransactionMatchesCall,
   safeProposalFor,
+  safeTransactionMatchesCall,
   submitSafeConfirmation,
-} from "@/lib/safe-queue";
+  usableSafeConfirmations,
+} from "@/lib/safe-service-config";
+import { SAFE_PROPOSAL_ORIGIN } from "@/lib/safe-transactions";
 import { chooseRelayrPayment } from "@/lib/transaction-review";
+import { gasWithHeadroom, type ReviewContextRow } from "@bananapus/nana-sdk-core/review";
+import { readAuthorityIdentity, readBoundedSafeNonce } from "@bananapus/nana-sdk-core/safe";
 import { useQueryClient } from "@tanstack/react-query";
 import { Address, encodeFunctionData, isAddressEqual } from "viem";
 import { useConfig } from "wagmi";
@@ -73,10 +73,10 @@ const REPEATABLE_OPERATOR_WRITES = new Set(["setHookFor", "setTerminalFor", "set
  *   in the Safe app.
  */
 export function useOperatorWrites() {
-  const { writeContractAsync } = useWriteContract();
+  const { run } = useReviewedAction();
   const { getRelayrTxQuote, reset: resetRelayr } = useGetRelayrTxQuote();
   const { sendRelayrTx } = useSendRelayrTx();
-  const { signSafeTransactionAsync } = useReviewedSafeSignature();
+  const { signSafeTransactionAsync } = useSafeTransactionSignature();
   const config = useConfig();
   const queryClient = useQueryClient();
 
@@ -84,11 +84,14 @@ export function useOperatorWrites() {
     writes,
     account,
     label,
+    context,
     onProgress,
   }: {
     writes: ChainWrite[];
     account: Address;
     label: string;
+    /** What the writes do, shown first in their review. */
+    context?: readonly ReviewContextRow[];
     onProgress: (message: string) => void;
   }): Promise<OperatorWritesResult> => {
     if (!writes.length) throw new Error("Choose at least one chain.");
@@ -162,7 +165,7 @@ export function useOperatorWrites() {
       });
 
       onProgress(`Reading the Safe queue on ${name}…`);
-      const nonce = await readBoundedSafeNonce(client, route.safe);
+      const nonce = await readBoundedSafeNonce(client, route.safe).catch(() => null);
       if (nonce === null || nonce > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error(`The operator Safe's nonce on ${name} could not be read.`);
       }
@@ -182,35 +185,49 @@ export function useOperatorWrites() {
         }
       };
 
-      const existing = pending.find((tx) => queuedTransactionMatchesCall(tx, call));
+      const existing = pending.find((tx) => safeTransactionMatchesCall(tx, call));
       if (existing) {
-        const confirmed = (existing.confirmations ?? []).some((confirmation) =>
+        const confirmed = usableSafeConfirmations(existing, route.owners).some((confirmation) =>
           isAddressEqual(confirmation.owner, account),
         );
         if (!confirmed) {
-          onProgress(`Sign the already-queued ${label} on ${name} in your wallet…`);
+          const what = `already-queued ${label} on ${name}`;
+          onProgress(`Review the ${what}…`);
           const signature = await signSafeTransactionAsync({
             chainId: write.chainId,
             safe: route.safe,
             tx: existing,
             reverify,
+            onSign: () => onProgress(`Sign the ${what} in your wallet…`),
           });
-          await submitSafeConfirmation(write.chainId, existing, signature);
+          await submitSafeConfirmation(write.chainId, route.safe, existing, signature);
         }
         result.safeConfirmed += 1;
         continue;
       }
 
-      const tx = safeProposalFor(call, nextProposalNonce(Number(nonce), pending));
-      onProgress(`Sign the ${label} proposal for ${name} in your wallet…`);
+      // Queued proposals offer their nonces for replacement; an empty queue asks nothing.
+      const tx = safeProposalFor(
+        call,
+        await chooseSafeNonce({
+          chainName: name,
+          choices: proposalNonceChoices(Number(nonce), pending),
+        }),
+      );
+      onProgress(`Review the ${label} proposal for ${name}…`);
       const signature = await signSafeTransactionAsync({
         chainId: write.chainId,
         safe: route.safe,
         tx,
         reverify,
+        onSign: () => onProgress(`Sign the ${label} proposal for ${name} in your wallet…`),
       });
       onProgress(`Queuing the proposal with the Safe service on ${name}…`);
-      await proposeSafeTransaction(write.chainId, route.safe, tx, account, signature);
+      await proposeSafeTransaction(write.chainId, route.safe, tx, {
+        sender: account,
+        signature,
+        origin: SAFE_PROPOSAL_ORIGIN,
+      });
       result.safeQueued += 1;
     }
     if (viaSafe.length) {
@@ -228,12 +245,9 @@ export function useOperatorWrites() {
       isSafeConnection(config) ||
       !areRelayrChainsCompatible(direct.map((write) => write.chainId))
     ) {
-      result.chains = await runSequentialWrites({
-        writes: direct,
-        account,
-        writeContractAsync,
-        onProgress,
-      });
+      result.chains = (
+        await runSequentialWrites({ writes: direct, account, label, run, context })
+      ).length;
       return result;
     }
 
@@ -273,19 +287,19 @@ export function useOperatorWrites() {
       }),
     );
 
-    onProgress("Quoting the Relayr bundle…");
+    onProgress("Getting payment options…");
     const quote = await getRelayrTxQuote(requests);
-    if (!quote) throw new Error("Relayr did not return a quote.");
+    if (!quote) throw new Error("No payment options are available.");
 
-    onProgress("Choose the chain for your Relayr payment…");
+    onProgress("Choose the chain for your payment…");
     const payment = await chooseRelayrPayment(quote.payment_info, preferredPaymentChainId);
-    onProgress("Confirm the Relayr payment in your wallet…");
+    onProgress("Confirm the payment in your wallet…");
     const hash = await sendRelayrTx(payment);
     if (submittedViaSafe(hash)) {
       return { ...result, chains: direct.length, viaRelayr: true, safeProposal: true };
     }
 
-    onProgress("Waiting for Relayr to execute on every chain…");
+    onProgress("Waiting for execution on every chain…");
     await waitForRelayrBundle(quote.bundle_uuid);
     resetRelayr();
     return { ...result, chains: direct.length, viaRelayr: true };

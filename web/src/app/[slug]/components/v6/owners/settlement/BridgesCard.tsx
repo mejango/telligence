@@ -3,6 +3,7 @@
 import { ChainLogo } from "@/components/ChainLogo";
 import { ArrowRightLeft as ArrowsRightLeftIcon } from "@/components/ui/icons";
 import { SkeletonLines } from "@/components/ui/skeleton";
+import { useHydrated } from "@/hooks/useHydrated";
 import { PERSIST } from "@/lib/query-persist";
 import { JBChainId } from "@bananapus/nana-sdk-core";
 import { useQuery } from "@tanstack/react-query";
@@ -34,13 +35,18 @@ export function BridgesCard({
   chains: ChainProject[];
   tokenSymbol: string;
 }) {
-  const { data, isLoading, isError } = useQuery({
+  const hydrated = useHydrated();
+  const query = useQuery({
     queryKey: ["v6Bridges", chainProjectsKey(chains)],
     meta: PERSIST,
     enabled: chains.length > 0,
     staleTime: 5 * 60_000,
     queryFn: () => fetchBridges(chains),
   });
+
+  const data = hydrated ? query.data : undefined;
+  const isLoading = hydrated ? query.isLoading : chains.length > 0;
+  const isError = hydrated && query.isError;
 
   // A single-chain project (or one with no suckers) has no bridges to show.
   if (!isLoading && !isError && (data?.length ?? 0) === 0) return null;

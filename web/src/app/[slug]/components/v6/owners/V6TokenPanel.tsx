@@ -17,21 +17,25 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { SkeletonLines } from "@/components/ui/skeleton";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { ErrorNote } from "@/components/ui/TxError";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { useToast } from "@/components/ui/use-toast";
+import { useHydrated } from "@/hooks/useHydrated";
+import {
+  isSafeProposalPendingError,
+  requireDone,
+  reviewClosed,
+  reviewedCall,
+  useReviewedAction,
+} from "@/hooks/useReviewedAction";
 import {
   useGetRelayrTxQuote,
   useSendRelayrTx,
   waitForRelayrBundle,
 } from "@/hooks/useReviewedRelayr";
-import {
-  isSafeConnection,
-  requireOnchainExecution,
-  submittedViaSafe,
-  useWriteContract,
-} from "@/hooks/useReviewedWriteContract";
 import { useViewedAccount } from "@/hooks/useViewedAccount";
-import { gasWithHeadroom } from "@/lib/gas";
+import { submittedViaSafe } from "@/lib/held-rows";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
 import {
   useJBContractContext,
   useJBProjectMetadataContext,
@@ -40,9 +44,10 @@ import {
 import type { ChainPayment, JBChainId, RelayrPostBundleResponse } from "@/lib/nana/types";
 import { PERSIST } from "@/lib/query-persist";
 import { areRelayrChainsCompatible } from "@/lib/relayr-chains";
+import { useSafeConnection } from "@/lib/safe-connector";
+import { preselectedRelayrPayment, relayrPaymentOptions } from "@/lib/transaction-review";
 import { formatEthAddress, formatHexEther, formatWalletError } from "@/lib/utils";
 import { wagmiConfig } from "@/lib/wagmiConfig";
-import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
 import {
   JB_CHAINS,
   jbControllerAbi,
@@ -50,9 +55,10 @@ import {
   jbDirectoryAbi,
   jbProjectsAbi,
 } from "@bananapus/nana-sdk-core";
+import { gasWithHeadroom, intent, writeIntentKey } from "@bananapus/nana-sdk-core/review";
 import { getTokenAddress, hasPermissions, JBPermissionIdsV6 } from "@bananapus/nana-sdk-core/v6";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Address,
   encodeAbiParameters,
@@ -62,8 +68,8 @@ import {
   PublicClient,
   zeroAddress,
 } from "viem";
-import { useAccount, useSwitchChain } from "wagmi";
-import { getAccount, getPublicClient } from "wagmi/actions";
+import { useAccount } from "wagmi";
+import { getPublicClient } from "wagmi/actions";
 import { ProjectItem } from "../shared";
 
 type TokenChainState = {
@@ -88,32 +94,22 @@ function clientFor(chainId: JBChainId) {
   return client;
 }
 
-function Pipe() {
-  return (
-    <span aria-hidden="true" className="text-melon-200">
-      |
-    </span>
-  );
-}
-
+// Each field draws its pip in the gap to its left. The row is shifted left by one gap and
+// clipped horizontally, so the pip of whichever field starts a line falls outside the clip.
 function TokenField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+    <span className="relative ml-8 inline-flex items-center gap-1.5 whitespace-nowrap before:absolute before:-left-5 before:text-melon-200 before:content-['|']">
       <span className="text-melon-700">{label}:</span>
       <span className="text-black">{children}</span>
     </span>
   );
 }
 
-const subscribeToHydration = () => () => {};
-const clientIsHydrated = () => true;
-const serverIsHydrated = () => false;
-
 /** Token identity and omnichain edit/deploy controls, ahead of the Owners subtabs. */
 export function V6TokenPanel({ projects }: { projects: ProjectItem[] }) {
   // The persisted query can restore before this streamed panel hydrates.
   // Keep its first client snapshot identical to the server's loading state.
-  const hydrated = useSyncExternalStore(subscribeToHydration, clientIsHydrated, serverIsHydrated);
+  const hydrated = useHydrated();
   const { contractAddress } = useJBContractContext();
   const { metadata } = useJBProjectMetadataContext();
   const { token: contextToken } = useJBTokenContext();
@@ -197,7 +193,7 @@ export function V6TokenPanel({ projects }: { projects: ProjectItem[] }) {
   const fallbackSymbol = contextToken.data?.symbol ?? "";
 
   return (
-    <section className="mb-8 bg-melon-50 p-4">
+    <section className="mb-8 border border-melon-200 p-4 max-sm:-mx-4 max-sm:border-x-0">
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-melon-700">Token</h2>
 
       {!hydrated || tokenState.isLoading ? (
@@ -205,51 +201,49 @@ export function V6TokenPanel({ projects }: { projects: ProjectItem[] }) {
       ) : tokenState.isError ? (
         <p className="text-sm text-red-600">Couldn&apos;t read this project&apos;s token.</p>
       ) : isDeployed && primary?.token ? (
-        <div
-          className={`flex flex-wrap items-center gap-x-3 gap-y-2 text-sm${
-            tokenState.isFetching ? " revalidating" : ""
-          }`}
-          aria-busy={tokenState.isFetching || undefined}
-        >
-          <TokenField label="Name">{primary.name ?? primary.symbol ?? "Token"}</TokenField>
-          <Pipe />
-          <TokenField label="Symbol">{primary.symbol ?? "—"}</TokenField>
-          <Pipe />
-          <TokenField label="Type">ERC-20</TokenField>
-          <Pipe />
-          <TokenField label="Address">
-            <EtherscanLink
-              value={primary.token}
-              chain={JB_CHAINS[primary.chainId].chain}
-              className="font-medium"
-            >
-              {formatEthAddress(primary.token)}
-            </EtherscanLink>
-          </TokenField>
-          <Pipe />
-          <TokenField label="On">
-            <span className="inline-flex items-center -space-x-0.5">
-              {states
-                .filter((state) => state.token)
-                .map((state) => (
-                  <EtherscanLink
-                    key={state.chainId}
-                    value={state.token!}
-                    chain={JB_CHAINS[state.chainId].chain}
-                    className="inline-flex rounded-full"
-                  >
-                    <ChainLogo chainId={state.chainId} width={18} height={18} standalone />
-                  </EtherscanLink>
-                ))}
-            </span>
-          </TokenField>
+        <div className="overflow-x-clip">
+          <div
+            className={`-ml-8 flex flex-wrap items-center gap-y-2 text-sm${
+              tokenState.isFetching ? " revalidating" : ""
+            }`}
+            aria-busy={tokenState.isFetching || undefined}
+          >
+            <TokenField label="Name">{primary.name ?? primary.symbol ?? "Token"}</TokenField>
+            <TokenField label="Symbol">{primary.symbol ?? "—"}</TokenField>
+            <TokenField label="Type">ERC-20</TokenField>
+            <TokenField label="Address">
+              <EtherscanLink
+                value={primary.token}
+                chain={JB_CHAINS[primary.chainId].chain}
+                className="font-medium"
+              >
+                {formatEthAddress(primary.token)}
+              </EtherscanLink>
+            </TokenField>
+            <TokenField label="On">
+              <span className="inline-flex items-center -space-x-0.5">
+                {states
+                  .filter((state) => state.token)
+                  .map((state) => (
+                    <EtherscanLink
+                      key={state.chainId}
+                      value={state.token!}
+                      chain={JB_CHAINS[state.chainId].chain}
+                      className="inline-flex rounded-full"
+                    >
+                      <ChainLogo chainId={state.chainId} width={18} height={18} standalone />
+                    </EtherscanLink>
+                  ))}
+              </span>
+            </TokenField>
+          </div>
         </div>
       ) : (
         <div className="max-w-3xl">
           <p className="font-medium text-black">No ERC-20 yet</p>
           <p className="mt-1 text-sm text-melon-700">
-            Balances remain internal Juicebox credits and can still be cashed out. Deploying an
-            ERC-20 makes them claimable as a transferable token and enables market liquidity.
+            Juicebox records your token balance, and you can still cash it out. Creating an ERC-20
+            lets owners claim tokens for use in wallets and markets.
           </p>
         </div>
       )}
@@ -296,22 +290,26 @@ function TokenEditDialog({
   const [quote, setQuote] = useState<RelayrPostBundleResponse | null>(null);
   const [selectedPayment, setSelectedPayment] = useState<ChainPayment | null>(null);
   const [confirming, setConfirming] = useState<"submit" | "pay" | null>(null);
+  // A write that went to the Safe as a proposal: nothing more to send from here.
+  const [proposed, setProposed] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The chains come from the server sucker-group list: write only to pairs the registry lists.
+  const gate = useGroupWriteGate(states);
   const { address, chainId: connectedChainId } = useAccount();
-  const { switchChainAsync } = useSwitchChain();
-  const { writeContractAsync } = useWriteContract();
+  const { run } = useReviewedAction();
   const { getRelayrTxQuote, reset: resetRelayr } = useGetRelayrTxQuote();
   const { sendRelayrTx } = useSendRelayrTx();
   const { toast } = useToast();
   const { projectId: homeProjectId } = useJBContractContext();
+  const viaSafe = useSafeConnection(wagmiConfig);
   const relayed =
     states.length > 1 &&
-    !isSafeConnection(wagmiConfig) &&
+    !viaSafe &&
     areRelayrChainsCompatible(states.map((state) => state.chainId));
   // A partial deployment cannot safely replay if a later direct transaction fails.
   const deploymentRouteError =
     !relayed && states.length > 1 && states.some((state) => !state.token)
-      ? "Choose one chain at a time to deploy an ERC-20 with this connection. Multi-chain deployment requires supported networks that are all mainnets or all testnets and a wallet that can sign Relayr authorizations."
+      ? "Choose one chain at a time to deploy an ERC-20 with this connection. Multi-chain deployment requires supported networks that are all mainnets or all testnets and a wallet that can sign authorizations."
       : null;
 
   const resetQuote = () => {
@@ -382,50 +380,54 @@ function TokenEditDialog({
       setError(deploymentRouteError);
       return false;
     }
+    try {
+      gate.assertVerified(states);
+    } catch (e) {
+      setError((e as Error).message);
+      return false;
+    }
 
     setBusy(true);
     setError(null);
     try {
       if (!relayed) {
-        for (const [index, state] of states.entries()) {
-          setDirectWriteIndex(index);
-          if (getAccount(wagmiConfig).chainId !== state.chainId) {
-            await switchChainAsync({ chainId: state.chainId });
-          }
-          const call = callFor(state, nextName, nextSymbol);
-          const hash = state.token
-            ? await writeContractAsync({
-                address: state.controller,
-                chainId: state.chainId,
-                abi: jbControllerAbi,
-                functionName: "setTokenMetadataOf",
-                args: call.args as readonly [bigint, string, string],
-              })
-            : await writeContractAsync({
-                address: state.controller,
-                chainId: state.chainId,
-                abi: jbControllerAbi,
-                functionName: "deployERC20For",
-                args: call.args as readonly [bigint, string, string, `0x${string}`],
-              });
-          if (states.length === 1 && submittedViaSafe(hash)) {
-            toast({
-              title: "Safe proposal submitted",
-              description: `The ${deployed ? "token update" : "token deployment"} is awaiting Safe approvals and execution.`,
-            });
-            return true;
-          }
-          requireOnchainExecution(
-            hash,
-            `${state.token ? "Token metadata update" : "Token deployment"} on ${chainDisplayName(state.chainId)}`,
-          );
-          const receipt = await waitForReceiptWithRetry(clientFor(state.chainId), hash);
-          if (receipt.status !== "success") {
-            throw new Error(
-              `Token transaction ${hash} reverted on ${chainDisplayName(state.chainId)}.`,
-            );
-          }
+        // One review for every chain, sent in order; a later chain resumes without resending.
+        const result = await run({
+          account: address,
+          context: tokenContext,
+          beforeWallet: (_call, index) => setDirectWriteIndex(index),
+          ...(states.length > 1
+            ? {
+                title: deployed ? "Update token metadata" : "Deploy project ERC-20",
+                scope: writeIntentKey("token-panel", {
+                  account: intent.address(address),
+                  calls: states.map((state) => [
+                    state.chainId,
+                    intent.address(state.controller),
+                    callFor(state, nextName, nextSymbol).data,
+                  ]),
+                }),
+              }
+            : {}),
+          calls: states.map((state) =>
+            reviewedCall({
+              chainId: state.chainId,
+              address: state.controller,
+              abi: jbControllerAbi,
+              functionName: callFor(state, nextName, nextSymbol).functionName,
+              args: callFor(state, nextName, nextSymbol).args,
+            }),
+          ),
+        });
+        // One chain's Safe proposal is the whole action; a batch's waits for its Safe.
+        if (states.length === 1 && result?.status === "proposed") {
+          toast({
+            title: "Safe proposal submitted",
+            description: `The ${deployed ? "token update" : "token deployment"} is awaiting Safe approvals and execution.`,
+          });
+          return true;
         }
+        requireDone(result);
         finish(deployed ? "The name and symbol are now updated." : "The ERC-20 is now deployed.");
         return true;
       }
@@ -470,16 +472,20 @@ function TokenEditDialog({
         }),
       );
       const relayrQuote = await getRelayrTxQuote(transactions);
-      if (!relayrQuote) throw new Error("Relayr did not return a quote.");
+      if (!relayrQuote) throw new Error("No payment options are available.");
       setQuote(relayrQuote);
       // Signing may switch the wallet; prefer the chain captured before this submission.
-      setSelectedPayment(
-        relayrQuote.payment_info.find(
-          (payment: ChainPayment) => payment.chain === connectedChainId,
-        ) ?? null,
-      );
+      setSelectedPayment(preselectedRelayrPayment(relayrQuote.payment_info, connectedChainId));
       return true;
     } catch (cause) {
+      if (reviewClosed(cause)) {
+        setConfirming(null);
+        return false;
+      }
+      if (isSafeProposalPendingError(cause)) {
+        setProposed(formatWalletError(cause));
+        return false;
+      }
       setError(formatWalletError(cause));
       return false;
     } finally {
@@ -493,19 +499,18 @@ function TokenEditDialog({
     setBusy(true);
     setError(null);
     try {
+      gate.assertVerified(states);
       const hash = await sendRelayrTx(selectedPayment);
       if (submittedViaSafe(hash)) {
         toast({
           title: "Safe payment proposal submitted",
           description:
-            "The Relayr bundle is not paid yet. Complete the payment proposal in Safe; do not submit another payment.",
+            "The bundle is not paid yet. Complete the payment proposal in Safe; do not submit another payment.",
         });
         return true;
       }
       await waitForRelayrBundle(quote.bundle_uuid);
-      finish(
-        `Relayr confirmed the ${deployed ? "update" : "deployment"} on ${states.length} chains.`,
-      );
+      finish(`Confirmed the ${deployed ? "update" : "deployment"} on ${states.length} chains.`);
       return true;
     } catch (cause) {
       setError(formatWalletError(cause));
@@ -537,7 +542,23 @@ function TokenEditDialog({
   const permissionName = deployed ? "SET_TOKEN_METADATA" : "DEPLOY_ERC20";
   const chainNames = states.map((state) => chainDisplayName(state.chainId)).join(", ");
   const formAction = deployed ? "Save token" : "Deploy token";
-  const actionLabel = relayed ? "Pay and submit" : formAction;
+  const tokenContext = [
+    { label: "Name", value: name.trim(), strong: true },
+    { label: "Symbol", value: symbol.trim() },
+    { label: "On", value: chainNames },
+    {
+      label: "Address",
+      value: deployed ? "Unchanged" : "Same address on every chain",
+    },
+    ...(confirming === "pay" && selectedPayment
+      ? [
+          {
+            label: "Relay fee",
+            value: `${formatHexEther(selectedPayment.amount)} ETH on ${chainDisplayName(selectedPayment.chain)}`,
+          },
+        ]
+      : []),
+  ];
   const confirmSteps = relayed
     ? [
         {
@@ -548,7 +569,7 @@ function TokenEditDialog({
           title: selectedPayment
             ? `Pay ${formatHexEther(selectedPayment.amount)} ETH to relay`
             : "Pay the relay fee",
-          detail: "Relayr then submits the transaction on each chain.",
+          detail: "The transaction is then submitted on each chain.",
         },
       ]
     : states.map((state) => ({
@@ -577,55 +598,51 @@ function TokenEditDialog({
         </button>
       </DialogTrigger>
       {confirming ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(next) => {
-            if (!next) setConfirming(null);
+          onClose={() => {
+            setConfirming(null);
+            setProposed(null);
           }}
           title={deployed ? "Confirm token update" : "Confirm token deployment"}
-          chainId={
-            confirming === "pay" && selectedPayment
-              ? (selectedPayment.chain as JBChainId)
-              : states[0].chainId
-          }
           preparing={relayed && confirming === "submit"}
           steps={confirmSteps}
           activeIndex={confirming === "pay" ? 1 : relayed && busy ? 0 : directWriteIndex}
-          action={actionLabel}
-          onConfirm={() => void confirm()}
+          start={confirming === "submit" && !relayed ? () => void confirm() : undefined}
           busy={busy}
-          disabled={confirming === "pay" && !selectedPayment}
+          complete={proposed !== null}
           status={
-            relayed && confirming === "submit"
+            proposed ??
+            (relayed && confirming === "submit"
               ? "Getting a relay quote… Your wallet will ask for a signature."
-              : null
+              : null)
           }
           error={error}
-        >
-          <SummaryRow label="Name">{name.trim()}</SummaryRow>
-          <SummaryRow label="Symbol">{symbol.trim()}</SummaryRow>
-          <SummaryRow label="On">{chainNames}</SummaryRow>
-          {deployed ? (
-            <SummaryRow label="Address">Unchanged</SummaryRow>
-          ) : (
-            <SummaryRow label="Address">Same deterministic address on every chain</SummaryRow>
-          )}
-          {confirming === "pay" && selectedPayment ? (
-            <SummaryRow label="Relay fee">
-              {formatHexEther(selectedPayment.amount)} ETH on{" "}
-              {JB_CHAINS[selectedPayment.chain as JBChainId]?.name ?? selectedPayment.chain}
-            </SummaryRow>
-          ) : null}
-          {quote ? (
-            <RelayrPaymentSelect
-              payments={quote.payment_info}
-              tokenSymbol="ETH"
-              selectedPayment={selectedPayment}
-              onSelectPayment={setSelectedPayment}
-              disabled={busy}
-            />
-          ) : null}
-        </TxConfirmDialog>
+          rows={tokenContext}
+          footerContent={
+            quote ? (
+              <>
+                <RelayrPaymentSelect
+                  options={relayrPaymentOptions(quote.payment_info)}
+                  value={selectedPayment?.chain ?? null}
+                  onValueChange={(chainId) =>
+                    setSelectedPayment(
+                      quote.payment_info.find((payment) => payment.chain === chainId) ?? null,
+                    )
+                  }
+                  disabled={busy}
+                />
+                <Button
+                  className="mt-3 w-full"
+                  disabled={busy || confirming !== "pay" || !selectedPayment}
+                  onClick={() => void confirm()}
+                >
+                  Pay and submit
+                </Button>
+              </>
+            ) : undefined
+          }
+        />
       ) : null}
       <DialogContent className="max-w-xl">
         <DialogHeader>
@@ -635,15 +652,13 @@ function TokenEditDialog({
           <DialogDescription>
             {deployed
               ? `Renames the ERC-20 on ${states.length} chain${states.length === 1 ? "" : "s"}: ${chainNames}. The contract address stays the same.`
-              : `Deploys one ERC-20 at the same deterministic address on ${states.length} chain${states.length === 1 ? "" : "s"}: ${chainNames}.`}
+              : `Deploys one ERC-20 at the same address on ${states.length} chain${states.length === 1 ? "" : "s"}: ${chainNames}.`}
           </DialogDescription>
         </DialogHeader>
 
         <div
           className={`border px-3 py-2 text-sm ${
-            canManage
-              ? "border-melon-200 bg-melon-50 text-melon-700"
-              : "border-zinc-200 bg-zinc-50 text-zinc-600"
+            canManage ? "border-melon-200 text-melon-700" : "border-zinc-200 text-zinc-600"
           }`}
         >
           {!address
@@ -683,7 +698,9 @@ function TokenEditDialog({
           </label>
         </div>
 
-        {error && !confirming ? <p className="text-xs text-red-600">{error}</p> : null}
+        {error && !confirming ? <ErrorNote message={error} /> : null}
+
+        {gate.line ? <p className="text-xs text-zinc-600">{gate.line}</p> : null}
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={busy}>
@@ -694,8 +711,8 @@ function TokenEditDialog({
               relayed || deploymentRouteError ? (connectedChainId as JBChainId) : states[0].chainId
             }
             onClick={() => void start()}
-            loading={busy}
-            disabled={!address || !canManage || busy}
+            loading={busy || gate.pending}
+            disabled={!address || !canManage || busy || gate.blocked}
             connectWalletText="Connect Wallet"
             className="bg-teal-500 text-melon-950 hover:bg-teal-600"
           >

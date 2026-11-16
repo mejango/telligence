@@ -19,16 +19,18 @@ function formatTimeAgo(date: Date): string {
 interface Props {
   timestamp: number;
   className?: string;
+  /** Inside a link, which is already the Tab stop. */
+  insideLink?: boolean;
 }
 
-export function DateRelative({ timestamp, className }: Props) {
+export function DateRelative({ timestamp, className, insideLink = false }: Props) {
   const date = new Date(timestamp * 1000);
   const relative = formatTimeAgo(date);
   const full = formatShortDateTime(date);
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
+      <TooltipTrigger asChild tabIndex={insideLink ? -1 : undefined}>
         {/* "3h ago" is measured from the render clock, so the server's value is
             already stale by the time the browser hydrates. The client's value is the
             correct one — keep it instead of reporting a hydration mismatch. */}

@@ -18,9 +18,13 @@ const mocks = vi.hoisted(() => ({
   receipt: vi.fn(),
   push: vi.fn(),
   activity: vi.fn(),
-  requireExecution: vi.fn(),
   viewAs: vi.fn(),
-  beforeSubmission: undefined as undefined | (() => Promise<void>),
+  /** The SDK's cross-tab locks; each test's default runs the work at once. */
+  locks: vi.fn(),
+  /** The wallet is a Safe app: a sent step is a proposal, not an execution. */
+  safe: false,
+  /** The final synchronous gate of the last reviewed action. */
+  assertWriteState: undefined as undefined | (() => void),
 }));
 vi.mock("wagmi", () => ({ useAccount: () => ({ address: mocks.address }), useConfig: () => ({}) }));
 vi.mock("wagmi/actions", () => ({ getAccount: () => ({ address: mocks.address, chainId: 8453 }) }));
@@ -33,12 +37,60 @@ vi.mock("@/hooks/useCreatorSession", () => ({
     error: null,
   }),
 }));
-vi.mock("@/hooks/useReviewedWriteContract", () => ({
-  useWriteContract: (options: { beforeSubmission?: () => Promise<void> }) => {
-    mocks.beforeSubmission = options.beforeSubmission;
-    return { writeContractAsync: mocks.write };
-  },
-  requireOnchainExecution: (...args: unknown[]) => mocks.requireExecution(...args),
+type Action = {
+  calls: unknown[];
+  assertWriteState?: () => void;
+  onSubmitted?: (call: unknown, step: number, hash: string, sent: object) => void;
+};
+// The reviewed run, reduced to its contract with the launch: the final gate, the wallet
+// (`write`), the saved hash, then the receipt (`receipt`) or a Safe proposal.
+vi.mock("@/hooks/useReviewedAction", () => ({
+  SAFE_PROPOSAL_PENDING_LINE: "This proposal is waiting in your Safe. Finish it there first.",
+  failedLine: (result: { error: string }) => result.error,
+  reviewedCall: (request: object, options: object) => ({ ...request, ...options }),
+  useReviewedAction: () => ({
+    following: false,
+    dismiss: () => true,
+    run: async (action: Action) => {
+      mocks.assertWriteState = action.assertWriteState;
+      const failed = (error: unknown, failure: unknown = error) => ({
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+        failure,
+      });
+      let hash: string;
+      try {
+        action.assertWriteState?.();
+        hash = await mocks.write(action.calls[0]);
+      } catch (error) {
+        return failed(error);
+      }
+      // As core does: a callback that throws is logged and never changes the run.
+      try {
+        await action.onSubmitted?.(action.calls[0], 0, hash, { safe: mocks.safe, adopted: false });
+      } catch {}
+      if (mocks.safe) return { status: "proposed", step: 0, safeTxHash: hash };
+      try {
+        const receipt = await mocks.receipt(undefined, hash);
+        if (receipt.status === "reverted")
+          return failed("The transaction reverted.", {
+            name: "ReviewedCallRevertedError",
+            step: 0,
+          });
+        return { status: "done", hashes: [hash], receipts: [receipt] };
+      } catch (error) {
+        return failed(error);
+      }
+    },
+  }),
+}));
+vi.mock("@bananapus/nana-sdk-core/review", async (original) => ({
+  ...(await original<object>()),
+  browserLocks: () => mocks.locks(),
+}));
+vi.mock("@/lib/reviewed-call", () => ({
+  revertedStep: (failure: { name?: string; step?: number } | null) =>
+    failure?.name === "ReviewedCallRevertedError" ? failure.step : undefined,
 }));
 vi.mock("@/lib/telligence/api", () => ({
   gatewayRequest: (...args: unknown[]) => mocks.gateway(...args),
@@ -152,6 +204,10 @@ function callsTo(path: string) {
 
 beforeEach(() => {
   localStorage.clear();
+  mocks.locks.mockReturnValue({
+    request: (_name: string, work: (lock: null) => Promise<unknown>) => work(null),
+  });
+  mocks.safe = false;
   mocks.address = CREATOR;
   mocks.session = { address: CREATOR, csrfToken: "csrf" };
   mocks.gateway.mockImplementation(async (path: string) => {
@@ -181,8 +237,8 @@ beforeEach(() => {
   mocks.activity.mockReturnValue(undefined);
 });
 
-describe("wallet-action:telligence-launch compute launch wallet lifecycle", () => {
-  it("registers only the confirmed factory identity and exact creator", async () => {
+describe("compute launch wallet lifecycle", () => {
+  it("wallet-action:telligence-launch registers only the confirmed factory identity and exact creator", async () => {
     render(component());
     clickLaunch();
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/compute/project-7/keys"));
@@ -253,14 +309,18 @@ describe("wallet-action:telligence-launch compute launch wallet lifecycle", () =
   });
 
   it("keeps Safe proposals saved and resumes with the actual execution receipt", async () => {
-    mocks.requireExecution.mockImplementationOnce(() => {
-      throw new Error("Safe proposal is awaiting execution");
-    });
+    mocks.safe = true;
     render(component());
     clickLaunch();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Safe proposal");
+    expect(await screen.findByRole("alert")).toHaveTextContent("waiting in your Safe");
+    expect(localStorage.getItem(pendingLaunchKey(CREATOR))).not.toBeNull();
+    // Resumed before the Safe executed it: still a proposal, with no receipt to wait for.
+    mocks.activity.mockReturnValue({ status: "safe-proposed" });
+    clickLaunch();
+    await waitFor(() => expect(callsTo("/v1/config")).toHaveLength(2));
+    expect(await screen.findByRole("alert")).toHaveTextContent("waiting in your Safe");
     expect(mocks.receipt).not.toHaveBeenCalled();
-    mocks.activity.mockReturnValue({ executionHash: EXECUTION_HASH });
+    mocks.activity.mockReturnValue({ status: "success", executionHash: EXECUTION_HASH });
     clickLaunch();
     await waitFor(() => expect(mocks.push).toHaveBeenCalled());
     expect(mocks.receipt).toHaveBeenCalledWith(expect.anything(), EXECUTION_HASH);
@@ -375,6 +435,28 @@ describe("wallet-action:telligence-launch compute launch wallet lifecycle", () =
     expect(localStorage.getItem(pendingLaunchKey(CREATOR))).not.toBeNull();
   });
 
+  it("shows the submitted hash when its record cannot be saved and registration fails", async () => {
+    const setItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+      if (String(value).includes(HASH)) throw new Error("quota");
+      setItem.call(this, key, value);
+    });
+    mocks.gateway.mockImplementation(async (path: string) => {
+      if (path === "/v1/config") return CONFIG;
+      if (path === "/v1/projects/prepare")
+        return {
+          preparationId: PREPARATION_ID,
+          inferenceSigner: OTHER,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        };
+      throw new Error("Registration is unavailable.");
+    });
+    render(component());
+    clickLaunch();
+    expect(await screen.findByRole("alert")).toHaveTextContent(`Launch submitted as ${HASH}`);
+    vi.mocked(Storage.prototype.setItem).mockRestore();
+  });
+
   it("allows another attempt only after a mined revert proves no project was created", async () => {
     mocks.receipt.mockResolvedValueOnce({ status: "reverted", logs: [] });
     render(component());
@@ -406,7 +488,6 @@ describe("wallet-action:telligence-launch compute launch wallet lifecycle", () =
     view.unmount();
     await act(async () => submitted.resolve(HASH));
     expect(localStorage.getItem(pendingLaunchKey(CREATOR))).not.toBeNull();
-    expect(mocks.receipt).not.toHaveBeenCalled();
     expect(callsTo("/v1/projects")).toHaveLength(0);
   });
 
@@ -425,12 +506,12 @@ describe("wallet-action:telligence-launch compute launch wallet lifecycle", () =
     await act(async () => pinning.resolve({ cid: "bafyproject" }));
     expect(mocks.write).not.toHaveBeenCalled();
   });
-  it("rechecks lifecycle at the reviewed hook's final wallet boundary", async () => {
+  it("rechecks lifecycle at the reviewed run's final wallet gate", async () => {
     const estimate = deferred<void>();
     const broadcast = vi.fn().mockResolvedValue(HASH);
     mocks.write.mockImplementationOnce(async () => {
       await estimate.promise;
-      await mocks.beforeSubmission?.();
+      mocks.assertWriteState?.();
       return broadcast();
     });
     const view = render(component());
@@ -443,11 +524,11 @@ describe("wallet-action:telligence-launch compute launch wallet lifecycle", () =
   });
   it("waits on the creator launch lock and rereads submission state before preparing", async () => {
     const release = deferred<void>();
-    const request = vi.fn(async (_name: string, callback: () => Promise<unknown>) => {
+    const request = vi.fn(async (_name: string, work: (lock: null) => Promise<unknown>) => {
       await release.promise;
-      return callback();
+      return work(null);
     });
-    vi.stubGlobal("navigator", { locks: { request } });
+    mocks.locks.mockReturnValue({ request });
     render(component());
     clickLaunch();
     await waitFor(() =>

@@ -3,9 +3,27 @@ import { Nav } from "@/components/layout/Nav";
 import type { Metadata } from "next";
 import Link from "next/link";
 
+const title = "Audit Revnet";
+const description =
+  "Inspect the Revnet V6 contracts, Juicebox V6 protocol, and Revnet Money webclient.";
+
 export const metadata: Metadata = {
-  title: "Audit Revnet",
-  description: "Inspect the Revnet V6 contracts, Juicebox V6 protocol, and Revnet Money webclient.",
+  title,
+  description,
+  alternates: { canonical: "/audit" },
+  openGraph: {
+    title,
+    description,
+    url: "/audit",
+    type: "website",
+    images: [{ url: "/assets/img/revnet-social.png", width: 1428, height: 804, alt: "Revnet" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title,
+    description,
+    images: ["/assets/img/revnet-social.png"],
+  },
 };
 
 const CODE_LINKS = [
@@ -44,8 +62,8 @@ export default function AuditPage() {
           .
         </p>
         <p className="mt-4 max-w-2xl leading-relaxed text-zinc-600">
-          Defenders who manage to steal funds and return them are encouraged to keep 10% as a
-          reward, paid by all projects together.
+          Return funds you take while defending the protocol and keep 10% as a reward, paid by all
+          projects together.
         </p>
 
         <section className="mt-14" aria-labelledby="audit-code">

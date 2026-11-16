@@ -189,7 +189,7 @@ export function CustomersSection({
                   chain={JB_CHAINS[purchase.chainId as JBChainId]?.chain}
                   className="shrink-0 text-teal-600"
                 >
-                  <DateRelative timestamp={purchase.timestamp} />
+                  <DateRelative timestamp={purchase.timestamp} insideLink />
                 </EtherscanLink>
                 <span className="min-w-0 truncate text-right text-zinc-600">
                   {names[purchase.tierId] ?? `Item #${purchase.tierId}`} →{" "}

@@ -1,13 +1,7 @@
 import type { Ruleset } from "@/app/[slug]/terms/getRulesets";
 import { resolveProjectBaseToken } from "@/hooks/useProjectBaseToken";
 import { isUsd, toBaseCurrencyId } from "@/lib/currency";
-import {
-  applyNanaFee,
-  applyRevFee,
-  generateFeeData,
-  netLoanProceeds,
-  revFeeApplies,
-} from "@/lib/feeHelpers";
+import { applyNanaFee, generateFeeData, netLoanProceeds } from "@/lib/feeHelpers";
 import { calculatePriceAtTimestamp } from "@/lib/issuancePrice";
 import { getTokenConfigForChain, getTokenSymbolFromAddress } from "@/lib/tokenUtils";
 import { ETH_CURRENCY_ID, NATIVE_TOKEN, USD_CURRENCY_ID } from "@bananapus/nana-sdk-core";
@@ -17,10 +11,8 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/wagmiTransports", () => ({ getViemPublicClient: vi.fn() }));
 
 describe("contract-derived monetary display math", () => {
-  it("applies the Revnet and Juicebox cash-out fees in integer arithmetic", () => {
-    expect(applyRevFee(10_000n)).toBe(9_750n);
+  it("applies the Juicebox cash-out fee in integer arithmetic", () => {
     expect(applyNanaFee(10_000n)).toBe(9_750n);
-    expect(applyRevFee(1n)).toBe(0n);
   });
 
   it("shows minimum-fee loan proceeds instead of gross principal", () => {
@@ -142,29 +134,5 @@ describe("contract-derived monetary display math", () => {
     expect(min.find((point) => point.year === 0.5)?.totalCost).toBe(100);
     expect(min.find((point) => point.year === 0.75)?.totalCost).toBeGreaterThan(100);
     expect(min.at(-1)?.totalCost).toBeCloseTo(197.5, 10);
-  });
-});
-
-// REVOwner is what charges the revnet cash-out fee, and it skips the fee hook entirely on a
-// zero-tax cash-out: "Zero-tax ordinary cash-outs do not add the revnet fee hook"
-// (REVOwner.sol:303). Applying it unconditionally under-quoted every zero-tax revnet — and
-// every plain project, which has no REVOwner at all — by 2.5%.
-describe("revFeeApplies", () => {
-  it("charges the fee on a revnet with a nonzero cash-out tax", () => {
-    expect(revFeeApplies(true, 2_000n)).toBe(true);
-  });
-
-  it("skips the fee when the cash-out tax is zero", () => {
-    expect(revFeeApplies(true, 0n)).toBe(false);
-  });
-
-  it("skips the fee for a project that is not a revnet", () => {
-    expect(revFeeApplies(false, 2_000n)).toBe(false);
-  });
-
-  it("suppresses the fee while either input is still loading", () => {
-    // A quote that is too high is the safer error for someone deciding whether to cash out.
-    expect(revFeeApplies(undefined, 2_000n)).toBe(false);
-    expect(revFeeApplies(true, undefined)).toBe(false);
   });
 });

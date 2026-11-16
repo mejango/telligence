@@ -1,3 +1,4 @@
+import { BendystrawRequestError } from "@bananapus/nana-sdk-core";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -92,5 +93,84 @@ describe("Bendystraw proxy boundary", () => {
       expect.objectContaining({ id: ProjectOperation.id }),
       variables,
     );
+  });
+});
+
+describe("Bendystraw proxy failures", () => {
+  const relay = () =>
+    proxyBendystraw(
+      jsonRequest(
+        `${SITE}/api/bendystraw/mainnet/query`,
+        JSON.stringify({
+          operation: ProjectOperation.id,
+          variables: { chainId: 1, projectId: 1, version: 6 },
+        }),
+      ),
+      { params: Promise.resolve({ net: "mainnet" }) },
+    );
+
+  // The relay logs why it failed. Silencing the log keeps the run's output clean, and the spy lets a test read it.
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it.each([
+    [
+      "an indexer error",
+      new BendystrawRequestError('relation "secret_table" does not exist', 502),
+      502,
+      "Bendystraw unavailable",
+      'BendystrawRequestError: relation "secret_table" does not exist',
+    ],
+    [
+      "a timeout",
+      Object.assign(new Error("The operation timed out"), { name: "TimeoutError" }),
+      504,
+      "Bendystraw timed out",
+      "TimeoutError: The operation timed out",
+    ],
+    [
+      "a request the indexer refuses",
+      new BendystrawRequestError("Bendystraw request failed (403)", 403),
+      400,
+      "invalid operation request",
+      "BendystrawRequestError: Bendystraw request failed (403)",
+    ],
+  ])(
+    "answers %s with its own status and message, and logs the cause once",
+    async (_name, failure, status, message, logged) => {
+      mocks.queryBendystraw.mockRejectedValue(failure);
+
+      const response = await relay();
+
+      expect(response.status).toBe(status);
+      await expect(response.json()).resolves.toEqual({ error: message });
+      expect(console.error).toHaveBeenCalledExactlyOnceWith("Bendystraw relay failed:", logged);
+    },
+  );
+
+  it("logs a cause on one line, without the control characters a terminal or a log viewer would act on", async () => {
+    // A line break could forge a log line, ESC starts a terminal sequence, and NUL cuts a line in some viewers. U+0085 (NEL), U+009B (CSI) and DEL are controls that `\s` does not match.
+    mocks.queryBendystraw.mockRejectedValue(
+      new BendystrawRequestError(
+        "first line\r\n2026-09-29 ERROR forged line\n\tindented \u001b[31mred\u001b[0m\u0000nul \u0085 nel \u009b csi \u007f del",
+        502,
+      ),
+    );
+
+    const response = await relay();
+
+    await expect(response.json()).resolves.toEqual({ error: "Bendystraw unavailable" });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(
+      "Bendystraw relay failed:",
+      "BendystrawRequestError: first line 2026-09-29 ERROR forged line indented [31mred [0m nul nel csi del",
+    );
+  });
+
+  it("logs nothing when the relay answers", async () => {
+    mocks.queryBendystraw.mockResolvedValue({ project: null });
+
+    expect((await relay()).status).toBe(200);
+    expect(console.error).not.toHaveBeenCalled();
   });
 });

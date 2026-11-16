@@ -1,4 +1,5 @@
 import { StageData } from "../types";
+import { getCurrentStageDuration, getStageCutFrequencySeconds } from "./calculatePickupIssuance";
 
 export function calculateFinalStageStarts(stages: StageData[]): StageData[] {
   return stages.map((stage, index) => {
@@ -6,13 +7,10 @@ export function calculateFinalStageStarts(stages: StageData[]): StageData[] {
 
     if (stage.stageStartCuts) {
       const previousStage = stages[index - 1];
-      const daysPerCut = Number(previousStage.priceCeilingIncreaseFrequency);
-
-      if (daysPerCut > 0) {
-        const cuts = Number(stage.stageStartCuts);
+      if (getStageCutFrequencySeconds(previousStage) > 0) {
         return {
           ...stage,
-          stageStart: String(cuts * daysPerCut),
+          stageStart: getCurrentStageDuration(stage, previousStage),
           // Remove stageStartCuts from final data
           stageStartCuts: undefined,
         };

@@ -10,14 +10,14 @@ import { describe, expect, it, vi } from "vitest";
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const ACCOUNT = "0x2222222222222222222222222222222222222222";
 
-describe("wallet-action:loans — protected loan transactions", () => {
+describe("protected loan transactions", () => {
   it("floor-rounds the fresh contract quote to 99% and refuses zero", () => {
     expect(minimumBorrowAmount(1_001n)).toBe(990n);
     expect(() => minimumBorrowAmount(0n)).toThrow(/no backing/u);
     expect(() => minimumBorrowAmount(1n)).toThrow(/rounds to zero/u);
   });
 
-  it("encodes a nonzero fresh floor in standard borrows", () => {
+  it("wallet-action:loans encodes a nonzero fresh floor in standard borrows", () => {
     const request = buildProtectedBorrowTx({
       chainId: 1,
       revnetId: 7n,
@@ -34,7 +34,7 @@ describe("wallet-action:loans — protected loan transactions", () => {
     expect(request.args[3]).toBe(2n * 10n ** 18n);
   });
 
-  it("encodes a nonzero fresh floor in reallocation borrows", () => {
+  it("wallet-action:loans encodes a nonzero fresh floor in reallocation borrows", () => {
     const request = buildProtectedReallocateCollateralTx({
       chainId: 1,
       loanId: 9n,

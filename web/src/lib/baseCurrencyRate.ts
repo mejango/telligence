@@ -2,9 +2,9 @@ import { PayEventRatesOperation } from "@/lib/bendystraw/operations";
 import { queryBendystraw } from "@/lib/bendystraw/query.server";
 import { getViemPublicClient, type transports } from "@/lib/wagmiTransports";
 import {
-  jbContractAddress,
   JBCoreContracts,
   jbPricesAbi,
+  jbV6ContractAddress,
   NATIVE_TOKEN,
   type JBChainId,
 } from "@bananapus/nana-sdk-core";
@@ -130,15 +130,22 @@ export function toBaseAxis(value: number | undefined, rate: number | null): numb
   return value * rate;
 }
 
-/** Pay events for a project, oldest first, for historical rate derivation. */
+/** The project's pays in its accounting token, oldest first, for historical rate derivation.
+ *  Pays in any other token it accepts would mix units into the ratio. */
 export async function fetchPayEventRates(
   chainId: JBChainId,
   projectId: number,
+  accountingToken: string,
   accountingDecimals: number,
 ): Promise<BaseRatePoint[]> {
   try {
     const data = await queryBendystraw(chainId, PayEventRatesOperation, {
-      where: { projectId, chainId: Number(chainId), version: 6 },
+      where: {
+        projectId,
+        chainId: Number(chainId),
+        version: 6,
+        token: accountingToken.toLowerCase(),
+      },
       limit: 500,
       offset: 0,
     });
@@ -172,7 +179,7 @@ export async function fetchLiveBasePerAccountingToken(
   if (baseCurrency === undefined) return null;
   const accountingCurrency = tokenCurrencyId(accountingToken as Address);
   if (baseCurrency === accountingCurrency) return 1;
-  const prices = jbContractAddress["6"]?.[JBCoreContracts.JBPrices]?.[chainId];
+  const prices = jbV6ContractAddress[JBCoreContracts.JBPrices]?.[chainId];
   if (!prices) return null;
 
   const client = getViemPublicClient(chainId as keyof typeof transports);

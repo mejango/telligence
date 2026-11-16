@@ -4,6 +4,8 @@ import { TransactionReviewProvider } from "@/components/TransactionReviewProvide
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { IS_DETERMINISTIC_BROWSER, PARA_EMBEDDED_WALLET_ENABLED } from "@/lib/browserEnvironment";
 import { installQueryPersistence } from "@/lib/query-persist";
+import { watchSafeWalletPeer } from "@/lib/safe-connector";
+import { transactionActivitySnapshot, useTransactionActivities } from "@/lib/transaction-activity";
 import { wagmiConfig } from "@/lib/wagmiConfig";
 import { connectParaSession } from "@/providers/para-bridge";
 import { verifyMarkedParaSession } from "@/providers/para-session";
@@ -19,6 +21,9 @@ import * as React from "react";
 import { useAccount, useConnect, useConnectors, WagmiProvider } from "wagmi";
 
 const ParaModalHost = React.lazy(() => import("@/providers/ParaModalHost"));
+const HeldRowFollowers = React.lazy(() =>
+  import("@/components/HeldRowFollowers").then((module) => ({ default: module.HeldRowFollowers })),
+);
 
 function createQueryClient() {
   const client = new QueryClient({
@@ -75,10 +80,9 @@ export function AppSpecificProviders({ children }: { children: React.ReactNode }
   // hand one visitor's fetched data to the next request.
   const [queryClient] = React.useState(createQueryClient);
 
-  // Last session's values are, by definition, values the server did not render, and
-  // streamed segments keep hydrating after this effect fires. Seeding the cache before
-  // the document settles re-renders a tree React is still matching against the server's
-  // HTML, which it reports as a hydration failure. Restore once the document is done.
+  // Let the document load before restoring last session's display values. Each
+  // consumer still needs its own hydration snapshot: streamed Suspense children
+  // can hydrate after window load, and the server did not render these values.
   React.useEffect(() => {
     let teardown: (() => void) | undefined;
     const restore = () => {
@@ -91,6 +95,21 @@ export function AppSpecificProviders({ children }: { children: React.ReactNode }
       teardown?.();
     };
   }, [queryClient]);
+
+  // Safe{Wallet} over WalletConnect is a Safe, and only its live session says so.
+  React.useEffect(() => watchSafeWalletPeer(wagmiConfig), []);
+
+  // Every page load follows the paid Relayr bundles and Safe proposals the
+  // transaction journal still has in flight (HeldRowFollowers follows held proposals).
+  // The journal is empty for most visitors, so the write machinery loads only for one
+  // that has rows.
+  React.useEffect(() => {
+    if (transactionActivitySnapshot().length === 0) return;
+    void import("@/hooks/useReviewedRelayr").then((module) => module.resumePendingRelayrBundles());
+    void import("@/lib/held-rows").then((module) => module.resumeSafeProposalTracking(wagmiConfig));
+  }, []);
+  const journaled = useTransactionActivities().length > 0;
+
   const [paraHostLoaded, setParaHostLoaded] = React.useState(false);
   const [paraRequestId, setParaRequestId] = React.useState(0);
   const [paraRequest, setParaRequest] = React.useState<ParaRequest>({ kind: "auth" });
@@ -102,44 +121,6 @@ export function AppSpecificProviders({ children }: { children: React.ReactNode }
   const [signInEntry, setSignInEntry] = React.useState("");
   const [paraConnectionError, setParaConnectionError] = React.useState(false);
 
-  // Bring Para up in the background once the page is done and the browser is
-  // idle. It mounts closed and invisible, so by the time anyone clicks Sign
-  // in both the chunk and Para's own async init are already finished and the
-  // sheet opens with nothing to wait for.
-  //
-  // Skipped on metered or slow connections: this is ~725 KiB that a visitor
-  // who never signs in does not need, and on those links the preload would
-  // cost more than the wait it saves. They still get it on click.
-  React.useEffect(() => {
-    if (!PARA_EMBEDDED_WALLET_ENABLED) return;
-    const link = (
-      navigator as Navigator & {
-        connection?: { saveData?: boolean; effectiveType?: string };
-      }
-    ).connection;
-    if (link?.saveData) return;
-    if (link?.effectiveType && /(^|-)2g$/.test(link.effectiveType)) return;
-
-    let cancelled = false;
-    const warm = () => {
-      if (!cancelled) setParaHostLoaded(true);
-    };
-    const idle = (
-      window as Window & {
-        requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-      }
-    ).requestIdleCallback;
-    const schedule = () => (idle ? idle(warm, { timeout: 4000 }) : window.setTimeout(warm, 1500));
-
-    let handle: number | undefined;
-    if (document.readyState === "complete") handle = schedule();
-    else window.addEventListener("load", () => (handle = schedule()), { once: true });
-    return () => {
-      cancelled = true;
-      if (handle !== undefined) window.clearTimeout(handle);
-    };
-  }, []);
-
   // Preserve embedded-wallet sessions without penalizing anonymous visitors.
   // Para's own session is authoritative; transient verification failures keep
   // the local marker intact so a later page load can recover.
@@ -147,8 +128,10 @@ export function AppSpecificProviders({ children }: { children: React.ReactNode }
     if (PARA_EMBEDDED_WALLET_ENABLED) void verifyMarkedParaSession();
   }, []);
 
+  const paraReturnFocus = React.useRef<HTMLElement | null>(null);
   const requestSignIn = React.useCallback(() => {
     if (!PARA_EMBEDDED_WALLET_ENABLED) return;
+    paraReturnFocus.current = document.activeElement as HTMLElement | null;
     setParaConnectionError(false);
     setParaHostLoaded(true);
     setParaRequest({ kind: "auth" });
@@ -156,6 +139,7 @@ export function AppSpecificProviders({ children }: { children: React.ReactNode }
   }, []);
   const requestAddFunds = React.useCallback((request: ParaAddFundsRequest) => {
     if (!PARA_EMBEDDED_WALLET_ENABLED) return;
+    paraReturnFocus.current = document.activeElement as HTMLElement | null;
     setParaConnectionError(false);
     setParaHostLoaded(true);
     setParaRequest({ kind: "addFunds", ...request });
@@ -195,6 +179,11 @@ export function AppSpecificProviders({ children }: { children: React.ReactNode }
           <TooltipProvider delayDuration={200} skipDelayDuration={100}>
             <TransactionReviewProvider>{children}</TransactionReviewProvider>
           </TooltipProvider>
+          {journaled ? (
+            <React.Suspense fallback={null}>
+              <HeldRowFollowers />
+            </React.Suspense>
+          ) : null}
           {paraConnectionError ? (
             <ParaConnectionNotice
               onDismiss={clearParaConnectionError}
@@ -216,6 +205,7 @@ export function AppSpecificProviders({ children }: { children: React.ReactNode }
                 onSettled={markParaSettled}
                 entry={signInEntry}
                 onEntryChange={setSignInEntry}
+                returnFocus={paraReturnFocus}
               />
             </React.Suspense>
           ) : null}

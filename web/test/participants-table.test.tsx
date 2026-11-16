@@ -21,10 +21,24 @@ function participant(index: number): ParticipantRow {
   return {
     address: `owner-${index}`,
     balance: BigInt(100 - index),
-    volume: 0n,
     chains: [1],
   };
 }
+
+describe("ParticipantsTable columns", () => {
+  it("has no Paid column and floors tiny shares", () => {
+    render(
+      <ParticipantsTable
+        participants={[{ address: "owner", balance: 1n, chains: [1] }]}
+        token={token}
+        totalSupply={10n ** 18n}
+        condensed
+      />,
+    );
+    expect(screen.queryByRole("columnheader", { name: "Paid" })).toBeNull();
+    expect(screen.getByText("<0.001%")).toBeInTheDocument();
+  });
+});
 
 describe("ParticipantsTable pagination", () => {
   it("matches Juicescan's 30-row paging controls", () => {

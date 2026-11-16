@@ -1,3 +1,4 @@
+import { chainRevert } from "@/lib/contract-revert";
 import { jbRouterTerminalRegistryAbi, NATIVE_TOKEN } from "@bananapus/nana-sdk-core";
 import {
   parseTierMetadataJson,
@@ -46,42 +47,26 @@ export function payTokenCurrencyId(token: Address): number {
 
 const ROUTER_PROBE_BENEFICIARY: Address = "0x0000000000000000000000000000000000000001";
 
-/**
- * Whether the router registry can actually route a pay of `token` into
- * `projectId` right now (direct forward, swap, or cash-out loop). A listed
- * router with no pool/feed path reverts at pay time — offering ETH/USDC there
- * is a trap, not a convenience — so a dead route previews an all-zero ruleset
- * (ruleset.id == 0). Cached (as a promise) per (chain, project, token), exactly
- * like website/'s _payRouteCache. Fail-soft: any error resolves false.
- */
-const payRouteCache = new Map<string, Promise<boolean>>();
-export function routerPayRouteWorks(
+/** A fresh route probe; the payment surface query owns freshness and retries. */
+export async function routerPayRouteWorks(
   client: PublicClient,
-  chainId: number,
   projectId: bigint,
   registry: Address,
   token: Address,
   decimals: number,
 ): Promise<boolean> {
-  const key = `${chainId}:${projectId}:${token.toLowerCase()}`;
-  let cached = payRouteCache.get(key);
-  if (!cached) {
-    cached = client
-      .readContract({
-        address: registry,
-        abi: jbRouterTerminalRegistryAbi,
-        functionName: "previewPayFor",
-        args: [projectId, token, 10n ** BigInt(decimals), ROUTER_PROBE_BENEFICIARY, "0x"],
-      })
-      .then((out) => {
-        // previewPayFor returns [ruleset, ...]; a dead route yields ruleset.id == 0.
-        const ruleset = (out as readonly [{ id: number | bigint }, ...unknown[]])[0];
-        return Number(ruleset?.id ?? 0) !== 0;
-      })
-      .catch(() => false);
-    payRouteCache.set(key, cached);
+  try {
+    const [ruleset] = await client.readContract({
+      address: registry,
+      abi: jbRouterTerminalRegistryAbi,
+      functionName: "previewPayFor",
+      args: [projectId, token, 10n ** BigInt(decimals), ROUTER_PROBE_BENEFICIARY, "0x"],
+    });
+    return Number(ruleset.id) !== 0;
+  } catch (error) {
+    if (chainRevert(error)) return false;
+    throw error;
   }
-  return cached;
 }
 
 export { parseTierMetadataJson, TIER_UNLIMITED_SUPPLY };
@@ -120,6 +105,9 @@ export function tierMediaAssetUrl(value: unknown): string | undefined {
 export function tierMediaImageUrl(image: unknown): string | undefined {
   return sdkTierMediaImageUrl(image, APP_IPFS_GATEWAY);
 }
+
+/** The longest payment note these forms send. */
+export const MEMO_MAX_LENGTH = 256;
 
 /** "3d 4h" / "2h 10m" / "5m" countdown label for a ruleset that hasn't started. */
 export function formatStartCountdown(secs: number): string {

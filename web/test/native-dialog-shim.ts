@@ -99,6 +99,20 @@ export function installNativeDialogShim(window: Window & typeof globalThis) {
   });
 }
 
+/**
+ * Chrome lets a page cancel a close request only with history-action user
+ * activation: a second Escape with no click or key press between the two fires
+ * a `cancel` the page cannot prevent, and the dialog closes anyway. This plays
+ * that request against the topmost modal dialog.
+ */
+export function requestCloseWithoutActivation() {
+  const top = topmostModal();
+  if (!top) return;
+  const view = top.ownerDocument.defaultView!;
+  top.dispatchEvent(new view.Event("cancel", { cancelable: false }));
+  top.close();
+}
+
 /** Between tests the document is torn down; the stand-in top layer must be too. */
 export function resetNativeDialogShim() {
   modalStack.length = 0;

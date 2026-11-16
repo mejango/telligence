@@ -4,6 +4,7 @@ import type { RevnetFormData, StageData } from "@/app/create/types";
 import { newDraftItem } from "@/components/shop/itemDraft";
 import { readAllProjectRulesets } from "@/lib/nana/rulesets";
 import type { JBChainId } from "@/lib/nana/types";
+import { isStickyHook, isStickyRow, stickyGroupDraft } from "@/lib/sticky";
 import {
   JBCoreContracts,
   NATIVE_TOKEN,
@@ -57,6 +58,7 @@ function sanitizeStage(value: unknown): StageData {
   const autoIssuance = Array.isArray(stage.autoIssuance) ? stage.autoIssuance : [];
   const splits = Array.isArray(stage.splits) ? stage.splits : [];
   return {
+    initialOperator: text(stage.initialOperator, 64) || undefined,
     initialIssuance: numericText(stage.initialIssuance),
     pickUpFromPrevious: stage.pickUpFromPrevious === true,
     priceCeilingIncreasePercentage: numericText(stage.priceCeilingIncreasePercentage),
@@ -84,9 +86,20 @@ function sanitizeStage(value: unknown): StageData {
     splits: splits.slice(0, 100).map((raw) => {
       const row = (raw ?? {}) as Record<string, unknown>;
       const beneficiaries = Array.isArray(row.beneficiary) ? row.beneficiary : [];
+      // Drafts saved before Sticky became a hook type carry kind "sticky".
+      const sticky = row.kind === "sticky" || isStickyRow(row);
       return {
         percentage: numericText(row.percentage),
         defaultBeneficiary: text(row.defaultBeneficiary, 64),
+        ...(sticky
+          ? {
+              kind: "hook" as const,
+              hookKind: "sticky" as const,
+              stickyGroup: row.stickyGroup === "tenure" ? ("tenure" as const) : ("all" as const),
+              stickyMinWeeks: numericText(row.stickyMinWeeks).slice(0, 3),
+              stickyMaxWeeks: numericText(row.stickyMaxWeeks).slice(0, 3),
+            }
+          : {}),
         beneficiary: beneficiaries.slice(0, 16).flatMap((beneficiary) => {
           const item = (beneficiary ?? {}) as Record<string, unknown>;
           const chainId = Number(item.chainId);
@@ -99,11 +112,14 @@ function sanitizeStage(value: unknown): StageData {
     }),
     stageStart: numericText(stage.stageStart) || "0",
     stageStartCuts: numericText(stage.stageStartCuts) || undefined,
+    // null is a passed start still waiting for a new date, which validation holds.
     futureStartTimestamp:
-      Number.isSafeInteger(Number(stage.futureStartTimestamp)) &&
-      Number(stage.futureStartTimestamp) > 0
-        ? Number(stage.futureStartTimestamp)
-        : undefined,
+      stage.futureStartTimestamp === null
+        ? null
+        : Number.isSafeInteger(Number(stage.futureStartTimestamp)) &&
+            Number(stage.futureStartTimestamp) > 0
+          ? Number(stage.futureStartTimestamp)
+          : undefined,
   };
 }
 
@@ -129,7 +145,7 @@ function sanitizeStore(value: unknown): RevnetFormData["store"] {
       const name = text(category.name, 64);
       return Number.isSafeInteger(id) && id > 0 && name ? [{ id, name }] : [];
     }),
-    items: items.slice(0, 64).map((entry) => {
+    items: items.map((entry) => {
       const item = (entry ?? {}) as Record<string, unknown>;
       const splits = Array.isArray(item.splits) ? item.splits : [];
       const perChainSupply = (item.perChainSupply ?? {}) as Record<string, unknown>;
@@ -138,6 +154,7 @@ function sanitizeStore(value: unknown): RevnetFormData["store"] {
         name: text(item.name, 100),
         description: text(item.description, 2_000),
         mediaUri: text(item.mediaUri, 500),
+        mediaType: text(item.mediaType, 100),
         uri: text(item.uri, 500),
         price: numericText(item.price),
         supply: numericText(item.supply),
@@ -182,6 +199,18 @@ function sanitizeStore(value: unknown): RevnetFormData["store"] {
   };
 }
 
+/**
+ * REVDeployer locks cash outs and loans for 7 days when the first stage's start has already
+ * passed, so a passed start comes back as a date still to choose, which validation holds.
+ */
+function withUpcomingStart(stage: StageData, index: number): StageData {
+  return index === 0 &&
+    stage.futureStartTimestamp &&
+    stage.futureStartTimestamp <= Date.now() / 1000
+    ? { ...stage, futureStartTimestamp: null }
+    : stage;
+}
+
 /** Parse an untrusted Revnet .jb file into whitelisted create-form values. */
 export function parseRevnetDraft(source: string): RevnetFormData {
   if (source.length > MAX_DRAFT_BYTES) throw new Error("That file is too large.");
@@ -221,7 +250,7 @@ export function parseRevnetDraft(source: string): RevnetFormData {
     discord: text(raw.discord, 200),
     infoUri: text(raw.infoUri, 500),
     tokenSymbol: text(raw.tokenSymbol, 32),
-    stages: raw.stages.slice(0, 32).map(sanitizeStage),
+    stages: raw.stages.slice(0, 32).map(sanitizeStage).map(withUpcomingStart),
     chainIds,
     operator: operators.slice(0, 16).flatMap((value) => {
       const item = (value ?? {}) as Record<string, unknown>;
@@ -238,7 +267,9 @@ export function parseRevnetDraft(source: string): RevnetFormData {
       address: text(custom.address, 64),
       symbol: text(custom.symbol, 32),
       decimals:
-        Number.isInteger(Number(custom.decimals)) && Number(custom.decimals) >= 0
+        typeof custom.decimals === "number" &&
+        Number.isInteger(custom.decimals) &&
+        custom.decimals >= 0
           ? Number(custom.decimals)
           : null,
       verifiedChainIds: (Array.isArray(custom.verifiedChainIds) ? custom.verifiedChainIds : [])
@@ -375,6 +406,23 @@ export async function buildRevnetDraft({
             (Number(entry.ruleset.start) - Number(stageReads[index - 1].ruleset.start)) / 86_400,
           );
     const splits = entry.splits.map((split) => {
+      const percentage = String(
+        Number((reservedPercent * (Number(split.percent) / SPLITS_TOTAL)).toFixed(6)),
+      );
+      // A Sticky split redeploys onto each chain's distributor; the token and group carry over.
+      if (
+        isStickyHook(split.hook, chainId) &&
+        !split.preferAddToBalance &&
+        Number(split.lockedUntil) === 0
+      ) {
+        return {
+          percentage,
+          defaultBeneficiary: split.beneficiary,
+          kind: "hook" as const,
+          hookKind: "sticky" as const,
+          ...stickyGroupDraft(split.projectId),
+        };
+      }
       if (
         split.projectId > 0n ||
         split.hook.toLowerCase() !== zeroAddress ||
@@ -385,12 +433,7 @@ export async function buildRevnetDraft({
           "A deployed reserved-token split uses routing or locking the Revnet create flow cannot reproduce.",
         );
       }
-      return {
-        percentage: String(
-          Number((reservedPercent * (Number(split.percent) / SPLITS_TOTAL)).toFixed(6)),
-        ),
-        defaultBeneficiary: split.beneficiary,
-      };
+      return { percentage, defaultBeneficiary: split.beneficiary };
     });
     const stored = autoIssuances
       .filter((row) => row.stageIndex === index)

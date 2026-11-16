@@ -5,7 +5,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 export const metadata: Metadata = {
-  title: "API keys · Telligence",
+  title: "API keys | Telligence",
   robots: { index: false, follow: false },
 };
 

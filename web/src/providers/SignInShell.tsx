@@ -1,6 +1,6 @@
 "use client";
 
-import { BrandMark, WalletFallbackMark } from "@/components/BrandMarks";
+import { BrandMark, WalletIcon } from "@/components/BrandMarks";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { offerableWallets } from "@/lib/wallet-list";
@@ -94,12 +94,7 @@ export function SignInShell({
             aria-label={connector.name}
             className="flex h-10 w-10 shrink-0 items-center justify-center px-0"
           >
-            {connector.icon ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={connector.icon} alt="" className="h-5 w-5 shrink-0" />
-            ) : (
-              <WalletFallbackMark id={connector.id} className="h-5 w-5 shrink-0" />
-            )}
+            <WalletIcon id={connector.id} icon={connector.icon} className="h-5 w-5 shrink-0" />
           </Button>
         ))}
       </div>

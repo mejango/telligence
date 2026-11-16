@@ -1,4 +1,4 @@
-[![revnet badge](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Frevnet.money%2Fapi%2Fdata%2Fshields%3FprojectId%3D3%26chainId%3D1&query=%24.message&label=Revnet%20Network&cacheSeconds=3600)](https://revnet.money/base:3)
+[![revnet badge](https://img.shields.io/endpoint?url=https%3A%2F%2Frevnet.money%2Fapi%2Fdata%2Fshields%3FprojectId%3D3%26chainId%3D1%26format%3Dendpoint)](https://revnet.money/eth:3)
 
 Revnet Money is the v6-only Revnet application. Project routes use
 `<chain>:<projectId>` (for example, `/eth:3`).

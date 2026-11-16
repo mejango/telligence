@@ -124,7 +124,7 @@ export function inspectProjectHref(revnetId: string) {
   return `/base:${revnetId}`;
 }
 
-export const RECOVERY_WALLET_REQUIRED =
+const RECOVERY_WALLET_REQUIRED =
   "Choose a separate recovery wallet. If the creator wallet is lost, this address is the only way to start recovery.";
 
 /** `creator`, when known, must differ from the recovery wallet; the form validates without it. */
@@ -167,7 +167,7 @@ export function validateComputeDraft(draft: ComputeProjectDraft, creator?: strin
     draft.cashOutTaxBps < 0 ||
     draft.cashOutTaxBps >= 10_000
   )
-    errors.cashOutTaxBps = "The cash-out tax must be at least 0% and below 100%.";
+    errors.cashOutTaxBps = "The cash out tax must be at least 0% and below 100%.";
   if (
     !draft.recoveryAddress ||
     (creator !== undefined && draft.recoveryAddress.toLowerCase() === creator.toLowerCase())

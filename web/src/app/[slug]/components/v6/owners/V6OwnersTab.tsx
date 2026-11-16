@@ -1,11 +1,12 @@
 "use client";
 
-import { CardSkeleton } from "@/components/loading/LoadingSkeletons";
-import { decodeProjectRouteSlug } from "@/lib/slug";
+import { CardSkeleton } from "@/components/loading/CardSkeleton";
+import { projectViewHref } from "@/lib/projectSubtabNavigation";
 import dynamic from "next/dynamic";
-import { useParams, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { twJoin } from "tailwind-merge";
+import { useProjectNavigation } from "../../../ProjectRouteContext";
 import { ProjectItem } from "../shared";
 import { V6AccountsSubtab } from "./accounts/V6AccountsSubtab";
 import { V6TokenPanel } from "./V6TokenPanel";
@@ -42,15 +43,6 @@ const SUBTABS = [
 
 type SubtabKey = (typeof SUBTABS)[number]["key"];
 
-export function ownersSubtabNavigation(slug: string, currentHref: string, key: SubtabKey) {
-  const url = new URL(currentHref);
-  url.searchParams.set("subtab", key);
-  return {
-    href: url.href,
-    mode: decodeProjectRouteSlug(slug)?.startsWith("@") ? "document" : "client",
-  } as const;
-}
-
 /**
  * The website/-parity Owners tab for V6 projects: a caps-label subtab row over
  * Accounts | Market | Settlement | Splits | Auto issuance | Loans. Subtabs are
@@ -67,31 +59,28 @@ export function V6OwnersTab({ projects }: { projects: ProjectItem[] }) {
 }
 
 function OwnersTabInner({ projects }: { projects: ProjectItem[] }) {
-  const params = useParams<{ slug: string }>();
+  const navigate = useProjectNavigation();
   const searchParams = useSearchParams();
   const requested = searchParams.get("subtab");
   const initial: SubtabKey = SUBTABS.some((t) => t.key === requested)
     ? (requested as SubtabKey)
     : "accounts";
 
-  const [active, setActive] = useState<SubtabKey>(initial);
+  const active = initial;
   const [mounted, setMounted] = useState<ReadonlySet<SubtabKey>>(() => new Set([initial]));
 
   const show = (key: SubtabKey) => {
-    const navigation = ownersSubtabNavigation(params.slug, window.location.href, key);
-    if (navigation.mode === "document") {
-      // The alias may have rebound since this layout mounted. Do not reveal
-      // another cached subtab under a freshly shareable @handle URL.
-      window.location.assign(navigation.href);
-      return;
-    }
-    setActive(key);
-    setMounted((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
-    window.history.replaceState(null, "", navigation.href);
+    const href = projectViewHref(window.location.href, "subtab", key);
+    navigate(() => {
+      setMounted((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
+      window.history.replaceState(null, "", href);
+    }, href);
   };
 
   const panel = (key: SubtabKey, node: React.ReactNode) =>
-    mounted.has(key) ? <div className={active === key ? "" : "hidden"}>{node}</div> : null;
+    mounted.has(key) || active === key ? (
+      <div className={active === key ? "" : "hidden"}>{node}</div>
+    ) : null;
 
   return (
     <div className="text-gray-600 text-md">
@@ -102,6 +91,7 @@ function OwnersTabInner({ projects }: { projects: ProjectItem[] }) {
           <button
             key={t.key}
             type="button"
+            data-project-navigation="local"
             onClick={() => show(t.key)}
             className={twJoin(
               "uppercase text-sm font-medium tracking-wide whitespace-nowrap pb-1 transition-all",

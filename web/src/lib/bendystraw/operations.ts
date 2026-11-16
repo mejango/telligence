@@ -23,10 +23,13 @@ import type {
   IndexedLpPositionsQueryVariables,
   IndexedPoolLiquidityEventsQuery,
   IndexedPoolLiquidityEventsQueryVariables,
+  IndexedPoolRangesQuery,
+  IndexedPoolRangesQueryVariables,
   IndexedPoolSwapsQuery,
   IndexedPoolSwapsQueryVariables,
   IndexedProjectsQuery,
   IndexedProjectsQueryVariables,
+  IndexedRouterPendingCall,
   IndexedSuckerGroupQuery,
   IndexedSuckerGroupQueryVariables,
   LoansByAccountQuery,
@@ -45,16 +48,17 @@ import type {
   ProjectAccountingContextQueryVariables,
   ProjectErc20TickersQuery,
   ProjectErc20TickersQueryVariables,
-  ProjectMomentsQuery,
-  ProjectMomentsQueryVariables,
   ProjectOperatorQuery,
   ProjectOperatorQueryVariables,
   ProjectPayersQuery,
   ProjectPayersQueryVariables,
+  ProjectPayNoticeQuery,
   ProjectQuery,
   ProjectQueryVariables,
   ProjectsByOwnerQuery,
   ProjectsByOwnerQueryVariables,
+  ProjectTokenBalanceMomentsQuery,
+  ProjectTokenBalanceMomentsQueryVariables,
   ProjectWithPermissionsQuery,
   ProjectWithPermissionsQueryVariables,
   ShieldGroupQuery,
@@ -142,19 +146,23 @@ function hasRoot(
   };
 }
 
-function hasDeploymentIdentity(value: unknown): boolean {
+function hasDeploymentIdentity(value: unknown, allowGlobalProject = false): boolean {
   return (
     isObject(value) &&
     isInteger(value.chainId) &&
     value.chainId > 0 &&
     isInteger(value.projectId) &&
-    value.projectId > 0 &&
+    value.projectId >= (allowGlobalProject ? 0 : 1) &&
     isInteger(value.version) &&
     value.version > 0
   );
 }
 
-function hasIdentityItems(root: string, nullableRoot = false): (value: unknown) => boolean {
+function hasIdentityItems(
+  root: string,
+  nullableRoot = false,
+  { allowGlobalProject = false } = {},
+): (value: unknown) => boolean {
   return (value) => {
     if (!isObject(value) || !(root in value)) return false;
     const rootValue = value[root];
@@ -162,7 +170,7 @@ function hasIdentityItems(root: string, nullableRoot = false): (value: unknown) 
     return (
       isObject(rootValue) &&
       Array.isArray(rootValue.items) &&
-      rootValue.items.every(hasDeploymentIdentity)
+      rootValue.items.every((item) => hasDeploymentIdentity(item, allowGlobalProject))
     );
   };
 }
@@ -187,6 +195,11 @@ const projectVariables = variablesWith({
 
 export const ProjectOperation = operation<ProjectQuery, ProjectQueryVariables>(
   "project.v1",
+  projectVariables,
+  hasRoot("project", "nullable-object"),
+);
+export const ProjectPayNoticeOperation = operation<ProjectPayNoticeQuery, ProjectQueryVariables>(
+  "project-pay-notice.v1",
   projectVariables,
   hasRoot("project", "nullable-object"),
 );
@@ -296,7 +309,7 @@ export const AccountPermissionHoldersOperation = operation<
 >(
   "account-permission-holders.v1",
   variablesWith({ where: filter }, { limit: positiveLimit, offset }),
-  hasIdentityItems("permissionHolders", true),
+  hasIdentityItems("permissionHolders", true, { allowGlobalProject: true }),
 );
 export const HasPermissionOperation = operation<HasPermissionQuery, HasPermissionQueryVariables>(
   "has-permission.v1",
@@ -362,19 +375,22 @@ export const AddToBalanceInflowsOperation = operation<
   variablesWith({}, { after: isOptionalString }),
   hasRoot("addToBalanceEvents", "items"),
 );
-export const ProjectMomentsOperation = operation<ProjectMomentsQuery, ProjectMomentsQueryVariables>(
-  "project-moments.v1",
+export const ProjectTokenBalanceMomentsOperation = operation<
+  ProjectTokenBalanceMomentsQuery,
+  ProjectTokenBalanceMomentsQueryVariables
+>(
+  "project-token-balance-moments.v1",
   variablesWith(
     { projectId: isNumber, chainId: isNumber, version: isNumber },
     { after: isOptionalString },
   ),
-  hasRoot("projectMoments", "items"),
+  hasRoot("projectTokenBalanceMoments", "items"),
 );
 export const TopSuckerGroupsOperation = operation<
   TopSuckerGroupsQuery,
   TopSuckerGroupsQueryVariables
 >(
-  "top-sucker-groups.v1",
+  "top-sucker-groups.v2",
   variablesWith({}, { limit: positiveLimit, offset }),
   hasRoot("suckerGroups", "items"),
 );
@@ -389,7 +405,7 @@ export const PermissionHoldersOperation = operation<
 >(
   "permission-holders.v1",
   variablesWith({ where: filter }, { limit: positiveLimit, offset }),
-  hasIdentityItems("permissionHolders", true),
+  hasIdentityItems("permissionHolders", true, { allowGlobalProject: true }),
 );
 export const V6StoredAutoIssuancesOperation = operation<
   V6StoredAutoIssuancesQuery,
@@ -427,7 +443,7 @@ export const IndexedLpPositionsOperation = operation<
   IndexedLpPositionsQuery,
   IndexedLpPositionsQueryVariables
 >(
-  "indexed-lp-positions.v1",
+  "indexed-lp-positions.v2",
   variablesWith({ chainId: isNumber, poolId: isString }, { limit: positiveLimit, offset }),
   // Rows carry no projectId, so the shared identity guard does not apply: a
   // position is identified by its pool, which the query already pins.
@@ -466,6 +482,21 @@ export const IndexedPoolLiquidityEventsOperation = operation<
   }),
   hasIdentityItems("buybackPoolLiquidityEvents"),
 );
+export const IndexedPoolRangesOperation = operation<
+  IndexedPoolRangesQuery,
+  IndexedPoolRangesQueryVariables
+>(
+  "indexed-pool-ranges.v1",
+  variablesWith({
+    projectId: isNumber,
+    chainId: isNumber,
+    version: isNumber,
+    poolId: isString,
+    limit: positiveLimit,
+    offset,
+  }),
+  hasIdentityItems("buybackPoolRanges"),
+);
 export const OwnedNftsOperation = operation<OwnedNftsQuery, OwnedNftsQueryVariables>(
   "owned-nfts.v1",
   variablesWith({ where: filter, limit: positiveLimit, offset }),
@@ -487,8 +518,25 @@ export const ShieldGroupOperation = operation<ShieldGroupQuery, ShieldGroupQuery
   hasRoot("suckerGroup", "nullable-object"),
 );
 
+export const RouterPendingCallsOperation = operation<
+  { routerPendingCalls: { items: IndexedRouterPendingCall[]; totalCount: number } },
+  { chainId: number; projectId: number; gateway: string; limit: number; offset: number }
+>(
+  "router-pending-calls.v1",
+  variablesWith({
+    chainId: isInteger,
+    projectId: isInteger,
+    gateway: isString,
+    limit: positiveLimit,
+    offset,
+  }),
+  hasRoot("routerPendingCalls", "items"),
+);
+
 export const BENDYSTRAW_OPERATIONS = [
+  RouterPendingCallsOperation,
   ProjectOperation,
+  ProjectPayNoticeOperation,
   ProjectAccountingContextOperation,
   IndexedProjectsOperation,
   IndexedSuckerGroupOperation,
@@ -509,7 +557,7 @@ export const BENDYSTRAW_OPERATIONS = [
   CashOutTaxSnapshotsOperation,
   SuckerGroupMomentsOperation,
   AddToBalanceInflowsOperation,
-  ProjectMomentsOperation,
+  ProjectTokenBalanceMomentsOperation,
   TopSuckerGroupsOperation,
   ProjectPayersOperation,
   PermissionHoldersOperation,
@@ -520,6 +568,7 @@ export const BENDYSTRAW_OPERATIONS = [
   IndexedLpPositionsOperation,
   IndexedPoolSwapsOperation,
   IndexedPoolLiquidityEventsOperation,
+  IndexedPoolRangesOperation,
   OwnedNftsOperation,
   MintNftEventsOperation,
   ShieldProjectOperation,
@@ -536,7 +585,9 @@ export const BENDYSTRAW_OPERATIONS = [
  * browser consumer.
  */
 export const BROWSER_BENDYSTRAW_OPERATIONS = [
+  RouterPendingCallsOperation,
   ProjectOperation,
+  ProjectPayNoticeOperation,
   ProjectAccountingContextOperation,
   SuckerGroupOperation,
   ParticipantsOperation,
@@ -560,7 +611,7 @@ export const BROWSER_BENDYSTRAW_OPERATIONS = [
   OwnedNftsOperation,
   MintNftEventsOperation,
   IndexedLpPositionsOperation,
-  IndexedPoolLiquidityEventsOperation,
+  IndexedPoolRangesOperation,
 ] as const;
 
 export type BrowserBendystrawOperation = (typeof BROWSER_BENDYSTRAW_OPERATIONS)[number];

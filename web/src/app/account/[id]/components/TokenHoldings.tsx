@@ -1,5 +1,6 @@
 "use client";
 
+import { chainDisplayName, chainSortIndex } from "@/app/constants";
 import { ChainLogo } from "@/components/ChainLogo";
 import { ProjectLink } from "@/components/ProjectLink";
 import { SkeletonLines } from "@/components/ui/skeleton";
@@ -64,7 +65,7 @@ export function groupHoldings(rows: HoldingRow[]): HoldingGroup[] {
   return [...groups.values()]
     .map((group) => ({
       ...group,
-      rows: [...group.rows].sort((a, b) => a.chainId - b.chainId),
+      rows: [...group.rows].sort((a, b) => chainSortIndex(a.chainId) - chainSortIndex(b.chainId)),
     }))
     .sort((a, b) => (b.total > a.total ? 1 : b.total < a.total ? -1 : 0));
 }
@@ -142,8 +143,6 @@ export function TokenHoldings({ address }: { address: Address }) {
                 </div>
                 <div className="mt-1.5 flex flex-col gap-1">
                   {group.rows.map((row) => {
-                    const credits = BigInt(row.creditBalance ?? 0);
-                    const claimed = BigInt(row.erc20Balance ?? 0);
                     return (
                       <div
                         key={`${row.chainId}:${row.projectId}`}
@@ -151,19 +150,13 @@ export function TokenHoldings({ address }: { address: Address }) {
                       >
                         <span className="flex items-center gap-2 text-xs text-zinc-500">
                           <ChainLogo chainId={row.chainId as JBChainId} width={16} height={16} />
-                          {JB_CHAINS[row.chainId as JBChainId]?.name ?? `Chain ${row.chainId}`}
+                          {chainDisplayName(row.chainId)}
                         </span>
                         <span className="text-right">
                           <span className="tabular-nums text-zinc-800">
                             {formatUnits(BigInt(row.balance), 18, { fractionDigits: 5 })}{" "}
                             {group.symbol}
                           </span>
-                          {credits > 0n ? (
-                            <span className="block text-[11px] tabular-nums text-zinc-500">
-                              {formatUnits(claimed, 18, { fractionDigits: 5 })} claimed |{" "}
-                              {formatUnits(credits, 18, { fractionDigits: 5 })} credits
-                            </span>
-                          ) : null}
                         </span>
                       </div>
                     );

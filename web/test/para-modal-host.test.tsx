@@ -245,7 +245,11 @@ describe("ParaModalHost", () => {
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(true));
     await waitFor(() => expect(hostDialog().open).toBe(true));
     expect(para.state.openModalCalls).toEqual([]);
-    expect(screen.getByText(/Use your passkey, or receive a code/)).toBeTruthy();
+    const sheet = within(hostDialog());
+    expect(sheet.getByRole("textbox", { name: "Email address or phone number" })).toBeEnabled();
+    expect(sheet.getByRole("button", { name: "Continue" })).toBeDisabled();
+    expect(sheet.getByRole("button", { name: "Google" })).toBeEnabled();
+    expect(sheet.queryByRole("button", { name: "Continue with email" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
@@ -380,9 +384,12 @@ describe("ParaModalHost", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText(/Use your passkey, or receive a code/)).toBeTruthy(),
-    );
+    await waitFor(() => expect(hostDialog().open).toBe(true));
+    const sheet = within(hostDialog());
+    expect(sheet.getByRole("textbox", { name: "Email address or phone number" })).toBeEnabled();
+    expect(sheet.getByRole("button", { name: "Continue" })).toBeDisabled();
+    expect(sheet.getByRole("button", { name: "Google" })).toBeEnabled();
+    expect(sheet.queryByRole("button", { name: "Continue with email" })).not.toBeInTheDocument();
     expect(para.state.onRampCalls).toEqual([]);
     expect(para.state.openModalCalls).toEqual([]);
   });

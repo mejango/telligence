@@ -25,3 +25,19 @@ data.
 CI validates every committed document against both live Bendystraw schemas.
 Runtime tests must cover invalid variables, malformed nested responses, mixed
 networks, unsupported chains, and any identity-scoped fallback.
+
+## Token units
+
+A project can accept more than one token, so a raw `balance`, `volume` or moment
+`balance` may add unlike units. `accountingTokenCount > 1` says so for one
+deployment; `groupMixesTokens` also catches chains with different tokens.
+
+- Event rows name their own `token`, `decimals` and `tokenSymbol`, falling back to
+  a token this app knows, then USD. Never the project's accounting token.
+- USD totals and ranking use `balanceUsd`, `volumeUsd`, `trendingVolumeUsd` and
+  `amountUsd`.
+- Native-unit totals and link previews read `projectTokenBalances`, one line per
+  token. The raw `balance` is read only when no rows were served.
+- History uses `suckerGroupMoment.balanceUsd`/`volumeUsd` or
+  `projectTokenBalanceMoments`. A mixed group's cash-out floor is its USD balance
+  in the accounting token at that token's own indexed rate.

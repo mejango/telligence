@@ -42,7 +42,10 @@ vi.mock("@/providers/para-config", () => ({
 vi.mock("@/hooks/useWallet", () => ({
   useWallet: () => ({ connectors: [], connectWith: vi.fn() }),
 }));
-vi.mock("@/hooks/useMobileWallet", () => ({ useMobileWallet: () => null }));
+vi.mock("@bananapus/nana-sdk-core/review/react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@bananapus/nana-sdk-core/review/react")>()),
+  useMobileWallet: () => null,
+}));
 vi.mock("wagmi", () => ({
   useConnect: () => ({ connectAsync: vi.fn() }),
   useConnectors: () => [],

@@ -2,6 +2,7 @@
 
 import { ChainLogo } from "@/components/ChainLogo";
 import { TableSkeleton } from "@/components/loading/LoadingSkeletons";
+import { useHydrated } from "@/hooks/useHydrated";
 import { PERSIST } from "@/lib/query-persist";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -25,7 +26,8 @@ export function AcrossChainsCard({
   chains: ChainProject[];
   tokenSymbol: string;
 }) {
-  const { data, isLoading, isError } = useQuery({
+  const hydrated = useHydrated();
+  const query = useQuery({
     queryKey: ["v6AcrossChains", chainProjectsKey(chains)],
     meta: PERSIST,
     enabled: chains.length > 0,
@@ -34,13 +36,21 @@ export function AcrossChainsCard({
     queryFn: () => fetchAcrossChains(chains),
   });
 
+  const data = hydrated ? query.data : undefined;
+  const isLoading = hydrated ? query.isLoading : chains.length > 0;
+  const isError = hydrated && query.isError;
+
   return (
     <div className="border border-zinc-200 bg-melon-50 p-4">
       <h3 className="font-medium text-zinc-900">Across chains</h3>
       <p className="text-sm text-zinc-500 mt-1">
         A project can settle funds on many chains, and holders can move funds between them.
       </p>
-      <div className={!isLoading && !isError && data ? "-mx-4 mt-3 overflow-x-auto" : "mt-3"}>
+      <div
+        className={
+          !isLoading && !isError && data ? "table-scroll -mx-4 mt-3 overflow-x-auto" : "mt-3"
+        }
+      >
         {isLoading ? (
           <TableSkeleton rows={Math.max(chains.length, 2)} columns={4} />
         ) : isError || !data ? (
@@ -89,7 +99,7 @@ function AcrossChainsTable({ rows, tokenSymbol }: { rows: AcrossChainRow[]; toke
             // Gross of the cash-out fees. The You card nets them, so an unqualified number
             // here reads as a contradiction on the adjacent tab rather than a different
             // question — this column is the raw per-token reclaim used for bridging math.
-            title="What one token reclaims from this chain's surplus, before cash-out fees"
+            title="What one token can return from this chain's available balance, before costs"
           >
             Unit value <span className="font-normal text-zinc-500">(before fees)</span>
           </th>

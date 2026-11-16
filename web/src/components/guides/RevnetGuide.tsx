@@ -1,4 +1,29 @@
+import { CodeBlock } from "@/components/guides/CodeBlock";
 import Link from "next/link";
+import type { ReactNode } from "react";
+
+export const INLINE_LINK = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+
+/** Guide prose may link a word with `[label](href)`; everything else renders as text. */
+export function Inline({ text }: { text: string }) {
+  const parts: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(INLINE_LINK)) {
+    parts.push(
+      text.slice(last, match.index),
+      <a
+        key={match.index}
+        href={match[2]}
+        className="underline decoration-melon-500 underline-offset-4 hover:text-melon-700"
+      >
+        {match[1]}
+      </a>,
+    );
+    last = match.index + match[0].length;
+  }
+  parts.push(text.slice(last));
+  return <>{parts}</>;
+}
 
 type RevnetGuidePoint = string | { key: string; text: string };
 
@@ -6,13 +31,28 @@ type RevnetGuideCodePoint = {
   title: string;
   description?: string;
   code?: string;
+  /** The code's language, rendered as `language-<lang>` and as the markdown fence. */
+  lang?: "ts" | "bash" | "solidity" | "graphql" | "json";
   details?: readonly { key: string; value: string }[];
   links?: readonly { href: string; label: string }[];
 };
 
+type RevnetGuideTable = {
+  label: string;
+  /** Gives each row a stable `#term-…` anchor built from its key. */
+  termIds?: boolean;
+  rows: readonly (readonly [string, string])[];
+};
+
+const slug = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
 type RevnetGuideAudience = "founders" | "frontend" | "contracts";
 
-const AUDIENCE_LABEL: Record<RevnetGuideAudience, string> = {
+export const AUDIENCE_LABEL: Record<RevnetGuideAudience, string> = {
   founders: "Project builders",
   frontend: "App builders",
   contracts: "Contract builders",
@@ -20,6 +60,8 @@ const AUDIENCE_LABEL: Record<RevnetGuideAudience, string> = {
 
 export type RevnetGuideSection = {
   id: string;
+  /** Old section links that now point to this consolidated explanation. */
+  aliases?: readonly string[];
   /** Who the section is for. Omitted = everyone. */
   audience?: readonly RevnetGuideAudience[];
   /** Group label. A new value starts a part header in the body and the contents list. */
@@ -28,27 +70,39 @@ export type RevnetGuideSection = {
   summary: string;
   paragraphs?: readonly string[];
   points?: readonly RevnetGuidePoint[];
+  /** Ordered steps, numbered by the list itself. */
+  steps?: readonly string[];
   /** A visual sketch with a plain-language alternative for readers who cannot use it. */
   diagrams?: readonly { label: string; description?: string; lines: readonly string[] }[];
-  /** Plain two-column reference rows, without the "code point" framing. */
-  table?: { label: string; rows: readonly (readonly [string, string])[] };
-  /** Side-by-side comparison: two named columns, one row per point. */
+  /** Render the diagrams directly after the summary instead of after the prose. */
+  diagramsFirst?: boolean;
+  /** Plain two-column reference rows. Values may carry inline links, one per line. */
+  table?: RevnetGuideTable | readonly RevnetGuideTable[];
+  /** Side-by-side comparison: named columns, one row per point. */
   compare?: {
     label: string;
-    columns: readonly [string, string];
-    rows: readonly (readonly [string, string])[];
+    /** The example's givens, shown under the label. */
+    lead?: string;
+    columns: readonly string[];
+    rows: readonly (readonly string[])[];
+    /** Text shown under the rows, such as the formula behind them. */
+    footer?: string;
   };
   codePoints?: readonly RevnetGuideCodePoint[];
   note?: string;
   links?: readonly { href: string; label: string }[];
 };
 
-type Props = {
-  eyebrow: string;
+/** A guide's content as data, shared by its page and its markdown route. */
+export type RevnetGuideContent = {
   title: string;
   introduction: string;
   sections: readonly RevnetGuideSection[];
   companion: { href: string; label: string; description: string };
+};
+
+type Props = RevnetGuideContent & {
+  eyebrow: string;
   afterIntroduction?: React.ReactNode;
   afterSections?: React.ReactNode;
 };
@@ -89,6 +143,37 @@ function ContentsList({ sections }: { sections: readonly RevnetGuideSection[] })
   );
 }
 
+function Diagrams({ section }: { section: RevnetGuideSection }) {
+  return section.diagrams?.map((diagram, diagramIndex) => (
+    <figure key={diagram.label} className="border border-melon-300 bg-melon-50">
+      <figcaption className="border-b border-melon-200 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-melon-700">
+        {diagram.label}
+      </figcaption>
+      {diagram.description ? (
+        <p id={`${section.id}-diagram-${diagramIndex}-description`} className="sr-only">
+          {diagram.description}
+        </p>
+      ) : null}
+      <div
+        role="region"
+        aria-label={`${diagram.label}: scrollable diagram`}
+        aria-describedby={
+          diagram.description ? `${section.id}-diagram-${diagramIndex}-description` : undefined
+        }
+        tabIndex={0}
+        className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-melon-700"
+      >
+        <pre
+          aria-hidden={diagram.description ? true : undefined}
+          className="p-4 font-mono text-sm leading-6 text-zinc-800"
+        >
+          {diagram.lines.join("\n")}
+        </pre>
+      </div>
+    </figure>
+  ));
+}
+
 export function RevnetGuide({
   eyebrow,
   title,
@@ -122,7 +207,7 @@ export function RevnetGuide({
           <nav aria-label={`${eyebrow} contents`} className="lg:hidden">
             <details>
               <summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold text-zinc-800 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-melon-700">
-                Contents · {sections.length} sections
+                Contents, {sections.length} sections
               </summary>
               <ContentsList sections={sections} />
             </details>
@@ -155,15 +240,18 @@ export function RevnetGuide({
               tabIndex={-1}
               className="scroll-mt-6 border-t border-melon-200 py-10 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-melon-700 first:border-t-0 first:pt-0"
             >
+              {section.aliases?.map((alias) => (
+                <span key={alias} id={alias} className="block scroll-mt-6" aria-hidden="true" />
+              ))}
               {section.part && section.part !== sections[index - 1]?.part ? (
                 <p className="mb-6 text-sm font-semibold uppercase tracking-[0.16em] text-melon-700">
                   {section.part}
                 </p>
               ) : null}
-              <div className="flex items-start gap-4">
+              <div className="sm:flex sm:items-start sm:gap-4">
                 <span
                   aria-hidden="true"
-                  className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center border border-melon-300 bg-melon-100 text-sm font-semibold text-melon-800"
+                  className="mb-3 inline-flex h-8 w-8 shrink-0 sm:mb-0 sm:mt-1 items-center justify-center border border-melon-300 bg-melon-100 text-sm font-semibold text-melon-800"
                 >
                   {index + 1}
                 </span>
@@ -191,13 +279,19 @@ export function RevnetGuide({
                       ))}
                     </p>
                   ) : null}
-                  <p className="mt-3 text-lg leading-relaxed text-zinc-700">{section.summary}</p>
+                  <p className="mt-3 text-lg leading-relaxed text-zinc-700">
+                    <Inline text={section.summary} />
+                  </p>
                 </div>
               </div>
 
               <div className="ml-0 mt-6 space-y-5 text-base leading-relaxed text-zinc-700 sm:ml-12 sm:text-lg">
+                {section.diagramsFirst ? <Diagrams section={section} /> : null}
+
                 {section.paragraphs?.map((paragraph) => (
-                  <p key={paragraph}>{paragraph}</p>
+                  <p key={paragraph}>
+                    <Inline text={paragraph} />
+                  </p>
                 ))}
 
                 {section.points?.length ? (
@@ -205,11 +299,11 @@ export function RevnetGuide({
                     {section.points.map((point) => (
                       <li key={typeof point === "string" ? point : point.key} className="pl-1">
                         {typeof point === "string" ? (
-                          point
+                          <Inline text={point} />
                         ) : (
                           <>
                             <strong className="font-semibold text-zinc-900">{point.key}:</strong>{" "}
-                            {point.text}
+                            <Inline text={point.text} />
                           </>
                         )}
                       </li>
@@ -217,45 +311,28 @@ export function RevnetGuide({
                   </ul>
                 ) : null}
 
-                {section.diagrams?.map((diagram, diagramIndex) => (
-                  <figure key={diagram.label} className="border border-melon-300 bg-melon-50">
-                    <figcaption className="border-b border-melon-200 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-melon-700">
-                      {diagram.label}
-                    </figcaption>
-                    {diagram.description ? (
-                      <p
-                        id={`${section.id}-diagram-${diagramIndex}-description`}
-                        className="px-4 pt-4 text-base leading-relaxed text-zinc-800"
-                      >
-                        {diagram.description}
-                      </p>
-                    ) : null}
-                    <div
-                      role="region"
-                      aria-label={`${diagram.label}: scrollable diagram`}
-                      aria-describedby={
-                        diagram.description
-                          ? `${section.id}-diagram-${diagramIndex}-description`
-                          : undefined
-                      }
-                      tabIndex={0}
-                      className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-melon-700"
-                    >
-                      <pre
-                        aria-hidden={diagram.description ? true : undefined}
-                        className="p-4 font-mono text-sm leading-6 text-zinc-800"
-                      >
-                        {diagram.lines.join("\n")}
-                      </pre>
-                    </div>
-                  </figure>
-                ))}
+                {section.steps?.length ? (
+                  <ol className="ml-8 list-outside list-decimal space-y-3 marker:font-semibold marker:text-melon-700">
+                    {section.steps.map((step) => (
+                      <li key={step} className="pl-1">
+                        <Inline text={step} />
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
+
+                {section.diagramsFirst ? null : <Diagrams section={section} />}
 
                 {section.compare ? (
                   <div className="border border-melon-300">
                     <table className="w-full table-fixed border-collapse text-left text-sm sm:text-base">
                       <caption className="border-b border-melon-200 bg-melon-50 px-4 py-2 text-left text-xs font-semibold uppercase tracking-[0.14em] text-melon-700">
                         {section.compare.label}
+                        {section.compare.lead ? (
+                          <span className="mt-1 block text-sm font-normal normal-case tracking-normal text-zinc-700">
+                            {section.compare.lead}
+                          </span>
+                        ) : null}
                       </caption>
                       <thead>
                         <tr>
@@ -263,7 +340,7 @@ export function RevnetGuide({
                             <th
                               key={column}
                               scope="col"
-                              className="border-b border-melon-200 px-3 py-3 align-top font-semibold text-zinc-900 first:border-r sm:px-4"
+                              className="border-b border-r border-melon-200 px-3 py-3 align-top font-semibold text-zinc-900 last:border-r-0 sm:px-4"
                             >
                               {column}
                             </th>
@@ -271,45 +348,57 @@ export function RevnetGuide({
                         </tr>
                       </thead>
                       <tbody>
-                        {section.compare.rows.map(([left, right]) => (
-                          <tr key={left} className="border-b border-melon-200 last:border-b-0">
-                            <td className="border-r border-melon-200 px-3 py-3 align-top text-zinc-700 sm:px-4">
-                              {left}
-                            </td>
-                            <td className="px-3 py-3 align-top text-zinc-700 sm:px-4">{right}</td>
+                        {section.compare.rows.map((row) => (
+                          <tr key={row[0]} className="border-b border-melon-200 last:border-b-0">
+                            {row.map((cell, cellIndex) => (
+                              <td
+                                key={cellIndex}
+                                className="border-r border-melon-200 px-3 py-3 align-top text-zinc-700 last:border-r-0 sm:px-4"
+                              >
+                                {cell}
+                              </td>
+                            ))}
                           </tr>
                         ))}
                       </tbody>
                     </table>
+                    {section.compare.footer ? (
+                      <p className="border-t border-melon-200 px-3 py-3 text-sm sm:px-4 sm:text-base">
+                        {section.compare.footer}
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
 
-                {section.table ? (
-                  <div className="border border-melon-300">
-                    <h3
-                      id={`${section.id}-reference`}
-                      className="border-b border-melon-200 bg-melon-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-melon-700"
-                    >
-                      {section.table.label}
-                    </h3>
-                    <dl
-                      aria-labelledby={`${section.id}-reference`}
-                      className="text-sm sm:text-base"
-                    >
-                      {section.table.rows.map(([key, value]) => (
-                        <div
-                          key={key}
-                          className="grid border-b border-melon-200 last:border-b-0 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
-                        >
-                          <dt className="px-4 pb-1 pt-3 font-mono text-sm font-semibold text-zinc-900 sm:border-r sm:border-melon-200 sm:py-3">
-                            {key}
-                          </dt>
-                          <dd className="px-4 pb-3 pt-1 text-zinc-700 sm:py-3">{value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </div>
-                ) : null}
+                {[section.table ?? []].flat().map((table, tableIndex) => {
+                  const labelId = `${section.id}-reference${tableIndex ? `-${tableIndex + 1}` : ""}`;
+                  return (
+                    <div key={table.label} className="border border-melon-300">
+                      <h3
+                        id={labelId}
+                        className="border-b border-melon-200 bg-melon-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-melon-700"
+                      >
+                        {table.label}
+                      </h3>
+                      <dl aria-labelledby={labelId} className="text-sm sm:text-base">
+                        {table.rows.map(([key, value]) => (
+                          <div
+                            key={key}
+                            id={table.termIds ? `term-${slug(key)}` : undefined}
+                            className="grid scroll-mt-6 border-b border-melon-200 last:border-b-0 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
+                          >
+                            <dt className="px-4 pb-1 pt-3 font-mono text-sm font-semibold text-zinc-900 sm:border-r sm:border-melon-200 sm:py-3">
+                              {key}
+                            </dt>
+                            <dd className="whitespace-pre-line px-4 pb-3 pt-1 text-zinc-700 sm:py-3">
+                              <Inline text={value} />
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  );
+                })}
 
                 {section.codePoints?.length ? (
                   <div className="space-y-5">
@@ -318,15 +407,12 @@ export function RevnetGuide({
                         key={codePoint.title}
                         className="border border-melon-300 bg-melon-50 p-4 sm:p-5"
                       >
-                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-melon-700">
-                          Code point
-                        </p>
-                        <h3 className="mt-2 text-lg font-semibold text-zinc-900 sm:text-xl">
+                        <h3 className="text-lg font-semibold text-zinc-900 sm:text-xl">
                           {codePoint.title}
                         </h3>
                         {codePoint.description ? (
                           <p className="mt-2 text-base leading-relaxed text-zinc-700">
-                            {codePoint.description}
+                            <Inline text={codePoint.description} />
                           </p>
                         ) : null}
 
@@ -349,14 +435,11 @@ export function RevnetGuide({
                         ) : null}
 
                         {codePoint.code ? (
-                          <pre
-                            role="region"
-                            aria-label={`${codePoint.title}: code example`}
-                            className="mt-4 overflow-x-auto border border-black bg-zinc-900 p-4 text-sm leading-6 text-melon-100 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-melon-700"
-                            tabIndex={0}
-                          >
-                            <code>{codePoint.code}</code>
-                          </pre>
+                          <CodeBlock
+                            title={codePoint.title}
+                            code={codePoint.code}
+                            lang={codePoint.lang}
+                          />
                         ) : null}
 
                         {codePoint.links?.length ? (
@@ -373,7 +456,7 @@ export function RevnetGuide({
 
                 {section.note ? (
                   <div className="border-l-4 border-peel-400 bg-peel-50 px-5 py-4 text-zinc-800">
-                    {section.note}
+                    <Inline text={section.note} />
                   </div>
                 ) : null}
 

@@ -13,7 +13,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    setupFiles: ["./test/setup.ts"],
+    setupFiles: ["./test/setup.ts", "./test/review-calls-setup.ts"],
     include: ["test/**/*.test.{ts,tsx}"],
     clearMocks: true,
     mockReset: true,
@@ -37,23 +37,11 @@ export default defineConfig({
           functions: 100,
           lines: 69,
         },
-        "src/hooks/useAllowance.ts": {
-          statements: 94,
-          branches: 85,
-          functions: 100,
-          lines: 100,
-        },
         "src/hooks/useReviewedRelayr.ts": {
           statements: 72,
           branches: 62,
           functions: 54,
           lines: 76,
-        },
-        "src/hooks/useReviewedWriteContract.ts": {
-          statements: 59,
-          branches: 42,
-          functions: 44,
-          lines: 63,
         },
         "src/lib/bridgePrepare.ts": {
           statements: 84,

@@ -1,26 +1,30 @@
 "use client";
 
 import { ButtonWithWallet } from "@/components/ButtonWithWallet";
-import { TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
-import { useAllowance } from "@/hooks/useAllowance";
-import {
-  isSafeConnection,
-  submittedViaSafe,
-  useWriteContract,
-} from "@/hooks/useReviewedWriteContract";
-import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { TxProgress } from "@/components/ui/TxProgress";
+import { useReviewedAction } from "@/hooks/useReviewedAction";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
+import { ACCOUNT_CHANGED, requireProposedOrDone, reviewClosed } from "@/lib/reviewed-call";
+import { isSafeConnection, useSafeConnection } from "@/lib/safe-connector";
+import { liquidityIntent } from "@bananapus/nana-sdk-core/review";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
-import { erc20Abi, formatUnits, zeroAddress, type Hex, type PublicClient } from "viem";
+import { useMemo, useState } from "react";
+import {
+  erc20Abi,
+  formatUnits,
+  zeroAddress,
+  type Address,
+  type Hex,
+  type PublicClient,
+} from "viem";
 import { useAccount, useConfig, usePublicClient } from "wagmi";
 import { chainName, fmtUnits } from "../settlement/lib";
 import {
+  addsFunds,
+  liquidityShortfall,
   lpBandPrices,
-  lpDeadline,
-  PERMIT2_ABI,
-  PERMIT2_ADDRESS,
-  POSITION_MANAGER_ABI,
-  POSITION_MANAGER_BY_CHAIN,
   prepareMarketEdit,
   refreshPoolAndPosition,
   reverifyMarketEdit,
@@ -34,9 +38,9 @@ import {
 import { LiquidityRangePreview } from "./LiquidityRangePreview";
 import {
   approvalStepsFor,
+  liquidityReviewedCalls,
   parseAmountText,
-  runApprovalStep,
-  SummaryRow,
+  safeBatchIntro,
   type LiquidityStep,
 } from "./liquidityWrite";
 
@@ -104,11 +108,10 @@ export function MarketEditPanel({
 }) {
   const { address } = useAccount();
   const wagmiConfig = useConfig();
+  const viaSafe = useSafeConnection(wagmiConfig);
   const chainId = Number(state.chainId);
   const publicClient = usePublicClient({ chainId });
   const queryClient = useQueryClient();
-  const { ensureAllowance } = useAllowance(chainId);
-  const positionManager = POSITION_MANAGER_BY_CHAIN[chainId]!;
   const corridor = useMemo<MarketCorridor | null>(
     () =>
       state.reference.cashOut && state.reference.issuance
@@ -131,27 +134,18 @@ export function MarketEditPanel({
     plan: MarketEditPlan;
     steps: LiquidityStep[];
     snapshot: string;
+    /** Freed funds and any new position go to the account that reviewed the edit. */
+    account: Address;
   } | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
   const [busy, setBusy] = useState(false);
+  // The pool is found from the server sucker-group project: an edit that adds funds goes only
+  // to a registry-listed pair. Withdrawals of the wallet's own positions stay open.
+  const gate = useGroupWriteGate([state]);
 
-  const review = useRef({
-    title: "Review market edit",
-    confirmLabel: "Agree & edit the market",
-    description: "",
-  });
-  const activePlan = useRef<{ pool: PoolSnapshot; plan: MarketEditPlan } | null>(null);
-  const { writeContractAsync } = useWriteContract({
-    transactionReview: review.current,
-    // Runs AFTER the confirm modal, so however long it sat open, a changed
-    // position or drift beyond the reviewed maxima still aborts first.
-    reverify: async () => {
-      if (activePlan.current && address) {
-        await reverifyMarketEdit(activePlan.current.pool, activePlan.current.plan, address);
-      }
-    },
-  });
+  const { run } = useReviewedAction();
 
   const balances = useQuery({
     queryKey: ["v6LpEditBalances", chainId, pool.projectToken, pool.pair.addr, address],
@@ -201,6 +195,7 @@ export function MarketEditPanel({
   }, [corridor, tokenText, pairText, refit, pool, sides, address, tokenSymbol]);
 
   const prepare = async () => {
+    setFailure(null);
     if (!address || !publicClient) {
       setStatus("Connect a wallet first.");
       return;
@@ -233,14 +228,18 @@ export function MarketEditPanel({
         refit,
         address,
       );
+      if (addsFunds(plan) && gate.blocked) {
+        throw new Error(gate.line ?? "Still confirming this project's chains onchain. Try again.");
+      }
       const held = balances.data ?? (await balances.refetch()).data;
-      if (!held) throw new Error("Could not read your wallet balances.");
-      if (plan.tokenFlow > held.token) {
-        throw new Error(`That's more ${tokenSymbol} than your balance.`);
-      }
-      if (plan.pairFlow > held.pair) {
-        throw new Error(`That's more ${pool.pair.symbol} than your balance.`);
-      }
+      // A re-fit pays in its whole cap and takes the rest back, so the wallet must hold the cap.
+      const paysCap = plan.token?.kind === "move" || plan.pair?.kind === "move";
+      const short = liquidityShortfall(plan, paysCap, held);
+      if (short === "unread") throw new Error("Could not read your wallet balances.");
+      if (short)
+        throw new Error(
+          `That's more ${short === "token" ? tokenSymbol : pool.pair.symbol} than your balance.`,
+        );
       const steps = await approvalStepsFor({
         publicClient: publicClient as PublicClient,
         chainId: state.chainId,
@@ -263,10 +262,11 @@ export function MarketEditPanel({
           },
         ],
         snapshot,
+        account: address,
       });
       const tight = [
-        plan.tokenFunding > held.token ? tokenSymbol : null,
-        plan.pairFunding > held.pair ? pool.pair.symbol : null,
+        held && plan.tokenFunding > held.token ? tokenSymbol : null,
+        held && plan.pairFunding > held.pair ? pool.pair.symbol : null,
       ].filter((symbol): symbol is string => symbol != null);
       setStatus(
         tight.length
@@ -284,60 +284,61 @@ export function MarketEditPanel({
 
   const execute = async () => {
     if (!address || !publicClient || !current) return;
-    const { plan, steps } = current;
+    const { plan, steps, account } = current;
+    if (addsFunds(plan) && gate.blocked) return;
+    if (account.toLowerCase() !== address.toLowerCase()) {
+      setReviewed(null);
+      setStatus(ACCOUNT_CHANGED);
+      return;
+    }
+    // One liquidity action in this pool: its approvals are its steps, its batch is it.
+    const lpIntent = liquidityIntent({ chainId, pool: current.pool.poolId, positions: [] });
     setBusy(true);
     setStatus(null);
+    setFailure(null);
     try {
-      for (const [index, step] of steps.entries()) {
-        setStepIndex(index);
-        if (step.approval) {
-          const outcome = await runApprovalStep(step, {
+      const result = requireProposedOrDone(
+        await run({
+          account,
+          title: "Review market edit",
+          confirmLabel: "Agree & edit the market",
+          context: editContext,
+          description: describeMarketEdit(current.pool, plan, tokenSymbol),
+          calls: liquidityReviewedCalls(lpIntent, {
             chainId: state.chainId,
-            address,
-            publicClient: publicClient as PublicClient,
-            ensureAllowance,
-            approvePermit2: (args) =>
-              writeContractAsync({
-                chainId,
-                address: PERMIT2_ADDRESS,
-                abi: PERMIT2_ABI,
-                functionName: "approve",
-                args,
-              }),
-          });
-          if (outcome === "safe-proposed") {
-            setStatus(
-              "Permit2 authorization was proposed to Safe. Execute it, then review the edit again.",
-            );
-            setReviewed(null);
-            return;
-          }
-          continue;
-        }
-        activePlan.current = { pool: current.pool, plan };
-        review.current.description = describeMarketEdit(current.pool, plan, tokenSymbol);
-        const hash = await writeContractAsync({
-          chainId,
-          address: positionManager,
-          abi: POSITION_MANAGER_ABI,
-          functionName: "modifyLiquidities",
-          args: [plan.unlockData, lpDeadline(isSafeConnection(wagmiConfig))],
-          value: plan.value,
-        });
-        if (submittedViaSafe(hash)) {
-          setStatus("The edit was proposed to Safe and awaits approvals and execution.");
-          setReviewed(null);
-          onDone(null);
-          return;
-        }
-        const receipt = await waitForReceiptWithRetry(publicClient, hash);
-        if (receipt.status !== "success") throw new Error(`Market edit ${hash} reverted.`);
-        setStepIndex(steps.length);
-        await queryClient.invalidateQueries({ queryKey: ["revnetPoolLpProviders"] });
-        onDone(hash);
+            steps,
+            unlockData: plan.unlockData,
+            value: plan.value,
+            safe: isSafeConnection(wagmiConfig),
+          }),
+          scope: steps.length > 1 ? lpIntent : undefined,
+          // A Safe proposes the approvals and the write as one transaction.
+          batch: true,
+          // After the review, however long it sat open, a changed position or drift beyond the
+          // reviewed maxima still aborts first.
+          reverify: async (call) => {
+            if (call.functionName === "modifyLiquidities")
+              await reverifyMarketEdit(current.pool, plan, account);
+          },
+          beforeWallet: (_call, step) => setStepIndex(step),
+        }),
+      );
+      setReviewed(null);
+      if (result.status === "proposed") {
+        setStatus(
+          steps.length > 1
+            ? "Proposed to Safe as one batch. Both sides show their new state under Your liquidity once it executes."
+            : "The edit was proposed to Safe and awaits approvals and execution.",
+        );
+        onDone(null);
+        return;
       }
+      setStepIndex(steps.length);
+      await queryClient.invalidateQueries({ queryKey: ["revnetPoolLpProviders"] });
+      onDone(result.hashes.at(-1) ?? null);
     } catch (cause) {
-      setStatus(txMessage(cause, "Could not edit this market."));
+      if (reviewClosed(cause)) setReviewed(null);
+      else setFailure(txMessage(cause, "Could not edit this market."));
     } finally {
       setBusy(false);
     }
@@ -369,16 +370,75 @@ export function MarketEditPanel({
     .map((side) => `#${side!.tokenId.toString()}`)
     .join(" + ");
 
+  const editContext = !current
+    ? []
+    : [
+        { label: "Market", value: `${ids} on ${chainName(state.chainId)}` },
+        // Without a re-fit the bands keep their ticks, which the current corridor may not describe.
+        current.plan.refit
+          ? {
+              label: "Corridor",
+              value: `${
+                corridor
+                  ? `${formatPrice(corridor.floor)} – ${formatPrice(corridor.ceiling)} ${pool.pair.symbol}/${tokenSymbol}`
+                  : "None"
+              } (re-fit)`,
+            }
+          : { label: "Bands", value: "Kept as they are" },
+        ...(current.plan.token
+          ? [{ label: `${tokenSymbol} side`, value: String(sideLine(current.plan.token, "token")) }]
+          : []),
+        ...(current.plan.pair
+          ? [
+              {
+                label: `${pool.pair.symbol} side`,
+                value: String(sideLine(current.plan.pair, "pair")),
+              },
+            ]
+          : []),
+        ...(current.plan.tokenFlow > 0n || current.plan.pairFlow > 0n
+          ? [
+              {
+                label: "From your wallet",
+                value: amountsText(
+                  positive(current.plan.tokenFlow),
+                  positive(current.plan.pairFlow),
+                ),
+              },
+            ]
+          : []),
+        {
+          label: "Back to your wallet",
+          value:
+            current.plan.tokenFlow < 0n || current.plan.pairFlow < 0n
+              ? `${amountsText(positive(-current.plan.tokenFlow), positive(-current.plan.pairFlow))} + unclaimed fees`
+              : "Unclaimed fees",
+        },
+        ...(current.plan.tokenFunding > 0n || current.plan.pairFunding > 0n
+          ? [
+              {
+                label: "Authorizes up to",
+                value: `${amountsText(current.plan.tokenFunding, current.plan.pairFunding)} (1% price headroom)`,
+              },
+            ]
+          : []),
+        ...(current.plan.tokenMinimum > 0n || current.plan.pairMinimum > 0n
+          ? [
+              {
+                label: "Enforced onchain",
+                value: `Removed liquidity pays at least ${amountsText(current.plan.tokenMinimum, current.plan.pairMinimum)} (95% floors)`,
+              },
+            ]
+          : []),
+      ];
   return (
-    <div className="mt-2 border border-zinc-200 p-2 text-xs text-zinc-700">
+    <div className="mt-2 border border-zinc-200 p-2 text-xs text-zinc-700 max-sm:border-x-0 max-sm:px-0">
       <p className="font-medium">
         Edit market {ids} on {chainName(state.chainId)}
       </p>
       <p className="mt-1 text-zinc-500">
-        {tokenSymbol} sells from the current price up to the ceiling; {pool.pair.symbol} buys from
-        the current price down to the floor. Each side is its own position, so each amount is used
-        in full and a change on one side never touches the other. Anything added comes from your
-        wallet and anything freed returns to it, with unclaimed fees, in one transaction.
+        {tokenSymbol} sells above the current price and {pool.pair.symbol} buys below it. Anything
+        added comes from your wallet. Anything freed returns to it with unclaimed fees.
       </p>
       <LiquidityRangePreview
         floor={state.reference.cashOut}
@@ -389,11 +449,11 @@ export function MarketEditPanel({
         pairSymbol={pool.pair.symbol}
         tokenSymbol={tokenSymbol}
       />
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <label className="text-[11px] text-zinc-500">
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <label className="text-xs text-zinc-600">
           {tokenSymbol} to sell above the price
-          <input
-            className="mt-1 w-full border border-zinc-200 px-2 py-1.5 text-xs"
+          <Input
+            className="mt-1"
             type="number"
             min="0"
             placeholder="0"
@@ -403,10 +463,10 @@ export function MarketEditPanel({
           />
           {inWallet(balances.data?.token, 18, tokenSymbol)}
         </label>
-        <label className="text-[11px] text-zinc-500">
+        <label className="text-xs text-zinc-600">
           {pool.pair.symbol} to buy with below the price
-          <input
-            className="mt-1 w-full border border-zinc-200 px-2 py-1.5 text-xs"
+          <Input
+            className="mt-1"
             type="number"
             min="0"
             placeholder="0"
@@ -418,20 +478,20 @@ export function MarketEditPanel({
         </label>
       </div>
       {corridor ? (
-        <label className="mt-2 flex items-start gap-2 text-[11px] text-zinc-600">
+        <label className="mt-2 flex items-start gap-2 text-xs text-zinc-600">
           <input
             type="checkbox"
-            className="mt-0.5"
+            className="h-4 w-4 shrink-0"
             checked={refit}
             disabled={editing}
             onChange={(event) => setRefit(event.target.checked)}
           />
           <span>
-            Re-fit both sides to the current corridor ({formatPrice(corridor.floor)} –{" "}
+            Match both sides to the current floor and ceiling ({formatPrice(corridor.floor)} –{" "}
             {formatPrice(corridor.ceiling)} {pool.pair.symbol}/{tokenSymbol}).
             {moved
-              ? " The floor or ceiling moved since these positions were minted, so their edges are stale."
-              : " Not needed right now — the positions already match it."}
+              ? " They moved since these positions were made."
+              : " Not needed: the positions already match."}
           </span>
         </label>
       ) : (
@@ -453,14 +513,9 @@ export function MarketEditPanel({
         Set a side to 0 to remove that position. Both at 0 removes the market.
       </p>
       <div className="mt-3 flex justify-end gap-2">
-        <button
-          type="button"
-          className="border border-zinc-300 px-3 py-1.5 disabled:opacity-50"
-          disabled={busy}
-          onClick={onClose}
-        >
+        <Button type="button" variant="secondary" disabled={busy} onClick={onClose}>
           Cancel
-        </button>
+        </Button>
         <ButtonWithWallet
           targetChainId={state.chainId}
           loading={busy}
@@ -473,67 +528,22 @@ export function MarketEditPanel({
         </ButtonWithWallet>
       </div>
       {current || busy ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(open) => {
-            if (!open) setReviewed(null);
-          }}
+          onClose={() => setReviewed(null)}
           title="Confirm market edit"
-          chainId={state.chainId}
           preparing={!current}
           steps={current?.steps ?? []}
           activeIndex={busy ? stepIndex : -1}
-          action="Edit the market"
-          onConfirm={() => void execute()}
+          stepsIntro={
+            viaSafe && (current?.steps.length ?? 0) > 1 ? safeBatchIntro(current!.steps) : undefined
+          }
+          start={() => void execute()}
           busy={busy}
           status={status}
-        >
-          {current ? (
-            <>
-              <SummaryRow label="Market">
-                {ids} on {chainName(state.chainId)}
-              </SummaryRow>
-              <SummaryRow label="Corridor">
-                {corridor
-                  ? `${formatPrice(corridor.floor)} – ${formatPrice(corridor.ceiling)} ${pool.pair.symbol}/${tokenSymbol}`
-                  : "—"}
-                {current.plan.refit ? " (re-fit)" : " (kept)"}
-              </SummaryRow>
-              {current.plan.token ? (
-                <SummaryRow label={`${tokenSymbol} side`}>
-                  {sideLine(current.plan.token, "token")}
-                </SummaryRow>
-              ) : null}
-              {current.plan.pair ? (
-                <SummaryRow label={`${pool.pair.symbol} side`}>
-                  {sideLine(current.plan.pair, "pair")}
-                </SummaryRow>
-              ) : null}
-              {current.plan.tokenFlow > 0n || current.plan.pairFlow > 0n ? (
-                <SummaryRow label="From your wallet">
-                  {amountsText(positive(current.plan.tokenFlow), positive(current.plan.pairFlow))}
-                </SummaryRow>
-              ) : null}
-              <SummaryRow label="Back to your wallet">
-                {current.plan.tokenFlow < 0n || current.plan.pairFlow < 0n
-                  ? `${amountsText(positive(-current.plan.tokenFlow), positive(-current.plan.pairFlow))} + unclaimed fees`
-                  : "Unclaimed fees"}
-              </SummaryRow>
-              {current.plan.tokenFunding > 0n || current.plan.pairFunding > 0n ? (
-                <SummaryRow label="Authorizes up to">
-                  {amountsText(current.plan.tokenFunding, current.plan.pairFunding)} (1% price
-                  headroom)
-                </SummaryRow>
-              ) : null}
-              {current.plan.tokenMinimum > 0n || current.plan.pairMinimum > 0n ? (
-                <SummaryRow label="Enforced onchain">
-                  At least {amountsText(current.plan.tokenMinimum, current.plan.pairMinimum)} back
-                  (95% floors)
-                </SummaryRow>
-              ) : null}
-            </>
-          ) : null}
-        </TxConfirmDialog>
+          error={failure}
+          rows={editContext}
+        />
       ) : null}
       {status && !current ? (
         <p className="mt-2 wrap-anywhere text-[11px] text-zinc-600" role="status">

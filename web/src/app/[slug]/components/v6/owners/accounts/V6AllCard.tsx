@@ -2,15 +2,14 @@
 
 import { useCompleteParticipants } from "@/hooks/useCompleteBendystrawLists";
 import { useTotalOutstandingTokens } from "@/hooks/useTotalOutstandingTokens";
-import { ProjectOperation, SuckerGroupOperation, useBendystrawQuery } from "@/lib/bendystraw";
+import { ProjectOperation, useBendystrawQuery } from "@/lib/bendystraw";
 import { useJBChainId, useJBContractContext, useJBTokenContext } from "@/lib/nana/project";
 import { prettyNumber } from "@/lib/number";
-import { getTokenConfigForChain, getTokenSymbolFromAddress } from "@/lib/tokenUtils";
 import { formatTokenSymbol } from "@/lib/utils";
 import { formatUnits } from "@bananapus/nana-sdk-core";
 import { ParticipantsPieChart } from "../../../../owners/components/ParticipantsPieChart";
 import { ParticipantsTable } from "../../../../owners/components/ParticipantsTable";
-import { aggregateParticipants, participantVolumeIsComparable } from "./participantsAggregate";
+import { aggregateParticipants } from "./participantsAggregate";
 
 /**
  * "All" card (website/ parity: renderOwnersAll): the holder distribution pie +
@@ -29,25 +28,6 @@ export function V6AllCard() {
   });
   const suckerGroupId = project.data?.project?.suckerGroupId;
 
-  const { data: suckerGroupData } = useBendystrawQuery(
-    SuckerGroupOperation,
-    { id: suckerGroupId ?? "" },
-    { enabled: !!suckerGroupId, pollInterval: 10000, chainId: Number(chainId) },
-  );
-
-  // Null while the sucker-group data loads — volume amounts can't be labeled
-  // yet (never default to ETH/18).
-  const chainTokenConfig = getTokenConfigForChain(suckerGroupData, Number(chainId));
-  const baseTokenSymbol = chainTokenConfig
-    ? (chainTokenConfig.symbol ?? getTokenSymbolFromAddress(chainTokenConfig.token))
-    : undefined;
-  const baseTokenDecimals = chainTokenConfig?.decimals;
-  // `participant.volume` is denominated in each chain's OWN accounting token, so a group mixing
-  // ETH and USDC cannot be summed into one figure under one symbol.
-  const volumeComparable = participantVolumeIsComparable(
-    suckerGroupData?.suckerGroup?.projects?.items ?? [],
-  );
-
   const participantsQuery = useCompleteParticipants(
     {
       suckerGroupId,
@@ -57,7 +37,6 @@ export function V6AllCard() {
     !!suckerGroupId,
   );
 
-  // Aggregate each account's balance/volume across the chains it holds on.
   const participants = aggregateParticipants(participantsQuery.data);
   const totalLabel = token?.data
     ? `${prettyNumber(
@@ -86,18 +65,13 @@ export function V6AllCard() {
             <p className="-mt-4 text-center text-sm text-melon-700">Total: {totalLabel}</p>
           ) : null}
         </div>
-        <div className="w-full min-w-0 overflow-auto">
-          {chainTokenConfig ? (
-            <ParticipantsTable
-              participants={participants}
-              token={token?.data}
-              totalSupply={totalOutstandingTokens}
-              baseTokenSymbol={baseTokenSymbol}
-              baseTokenDecimals={baseTokenDecimals}
-              volumeComparable={volumeComparable}
-              condensed
-            />
-          ) : null}
+        <div className="w-full min-w-0">
+          <ParticipantsTable
+            participants={participants}
+            token={token?.data}
+            totalSupply={totalOutstandingTokens}
+            condensed
+          />
         </div>
       </div>
       {participants.length > 0 ? (

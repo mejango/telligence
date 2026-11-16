@@ -157,6 +157,21 @@ describe("store validation", () => {
     ];
     expect(createSchema.safeParse(form).success).toBe(true);
   });
+
+  it("checks the encoded price limit in the chosen shop denomination", () => {
+    const form = validRevnetForm();
+    form.reserveAsset = "USDC";
+    form.issuanceBaseCurrency = "ETH";
+    form.store.items = [item({ price: "100000000000000000" })];
+    expect(createSchema.safeParse(form).success).toBe(false);
+    expect(() => tiered721(form)).toThrow("uint104");
+
+    form.store.pricing = "USD";
+    expect(createSchema.safeParse(form).success).toBe(true);
+    const config = tiered721(form).baseline721HookConfiguration.tiersConfig;
+    expect(config).toMatchObject({ currency: 2, decimals: 6 });
+    expect(config.tiers[0].price).toBe(parseUnits("100000000000000000", 6));
+  });
 });
 
 describe("store drafts", () => {
@@ -207,10 +222,11 @@ describe("store section", () => {
         validate={withSchema(createSchema)}
         onSubmit={() => undefined}
       >
-        {({ values }) => (
+        {({ values, errors }) => (
           <>
             <StoreSection />
             <output data-testid="store-state">{JSON.stringify(values.store)}</output>
+            <output data-testid="store-errors">{JSON.stringify(errors)}</output>
           </>
         )}
       </FormProvider>,
@@ -221,7 +237,98 @@ describe("store section", () => {
 
   it("says the operator can stock it later", () => {
     renderStore(validRevnetForm());
-    expect(screen.getByText(/The Operator can add items later/i)).toBeInTheDocument();
+    expect(screen.getByText(/An operator can add items later/i)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["ETH", "ETH", "reserve", "ETH", 1, 18],
+    ["USDC", "ETH", "reserve", "ETH", 1, 18],
+    ["ETH_USDC", "ETH", "reserve", "ETH", 1, 18],
+    ["ETH", "USD", "reserve", "USD", 2, 6],
+    ["USDC", "USD", "reserve", "USD", 2, 6],
+    ["ETH_USDC", "USD", "reserve", "USD", 2, 6],
+    ["CUSTOM", "ETH", "reserve", "TOKEN", 0xd00d, 6],
+    ["CUSTOM", "USD", "reserve", "TOKEN", 0xd00d, 6],
+    ["ETH", "ETH", "USD", "USD", 2, 6],
+    ["CUSTOM", "ETH", "USD", "USD", 2, 6],
+  ] as const)(
+    "keeps %s reserve, %s issuance and %s shop labels aligned with encoded pricing",
+    (reserveAsset, issuanceBaseCurrency, pricing, symbol, currency, decimals) => {
+      const form = validRevnetForm();
+      form.reserveAsset = reserveAsset;
+      form.issuanceBaseCurrency = issuanceBaseCurrency;
+      form.customReserveAsset = {
+        address: "0x000000000000000000000000000000000000d00d",
+        symbol: "TOKEN",
+        decimals: 6,
+        verifiedChainIds: [sepolia.id],
+      };
+      form.store.pricing = pricing;
+      form.store.items = [item({ price: "1.000001", supply: "2" })];
+      renderStore(form);
+
+      expect(screen.getByText(`Price (${symbol})`)).toBeInTheDocument();
+      fireEvent.keyDown(screen.getByLabelText("Pricing currency"), { key: "ArrowDown" });
+      const baseSymbol = reserveAsset === "CUSTOM" ? "TOKEN" : issuanceBaseCurrency;
+      expect(screen.getAllByRole("option", { name: baseSymbol }).length).toBeGreaterThan(0);
+      expect(createSchema.safeParse(form).success).toBe(true);
+      const config = tiered721(form).baseline721HookConfiguration.tiersConfig;
+      expect(config).toMatchObject({ currency, decimals });
+      expect(config.tiers[0].price).toBe(parseUnits("1.000001", decimals));
+    },
+  );
+
+  it("validates the selected chain quantities as they are edited, without using an overridden default", () => {
+    const form = validRevnetForm();
+    form.chainIds = [sepolia.id, baseSepolia.id];
+    form.operator.push({ chainId: String(baseSepolia.id), address: TEST_ACCOUNT });
+    form.store.items = [
+      item({
+        supply: "1",
+        reserveFrequency: "2",
+        reserveBeneficiary: TEST_BENEFICIARY,
+        perChainSupply: { [sepolia.id]: "2", [baseSepolia.id]: "2" },
+        perChainSupplyOpen: true,
+      }),
+    ];
+    renderStore(form);
+    expect(JSON.parse(screen.getByTestId("store-errors").textContent ?? "{}")).toEqual({});
+    expect(createSchema.safeParse(form).success).toBe(true);
+    for (const chainId of form.chainIds) {
+      expect(
+        tiered721(form, chainId).baseline721HookConfiguration.tiersConfig.tiers[0],
+      ).toMatchObject({ initialSupply: 2, reserveFrequency: 2 });
+    }
+
+    fireEvent.change(screen.getByLabelText("Base Sepolia quantity"), { target: { value: "1" } });
+    expect(screen.getByTestId("store-errors")).toHaveTextContent("at least 2");
+    const changed = { ...form, store: storeState() };
+    expect(createSchema.safeParse(changed).success).toBe(false);
+    expect(() => tiered721(changed, baseSepolia.id)).toThrow("at least 2");
+    expect(
+      tiered721(changed, sepolia.id).baseline721HookConfiguration.tiersConfig.tiers[0]
+        .initialSupply,
+    ).toBe(2);
+  });
+
+  it("ignores unselected chain quantities and still rejects a selected chain's default single reserve", () => {
+    const form = validRevnetForm();
+    form.store.items = [
+      item({
+        supply: "1",
+        reserveFrequency: "2",
+        reserveBeneficiary: TEST_BENEFICIARY,
+        perChainSupply: { [sepolia.id]: "2", [baseSepolia.id]: "1", 10: "unfinished" },
+      }),
+    ];
+    renderStore(form);
+    expect(JSON.parse(screen.getByTestId("store-errors").textContent ?? "{}")).toEqual({});
+    expect(createSchema.safeParse(form).success).toBe(true);
+    expect(tiered721(form).baseline721HookConfiguration.tiersConfig.tiers[0].initialSupply).toBe(2);
+
+    form.store.items[0].perChainSupply[sepolia.id] = "";
+    expect(createSchema.safeParse(form).success).toBe(false);
+    expect(() => tiered721(form)).toThrow("at least 2");
   });
 
   it("adds and removes items", () => {
@@ -247,6 +354,7 @@ describe("store section", () => {
     const multi = { ...validRevnetForm(), chainIds: [sepolia.id, baseSepolia.id] };
     multi.store.items = [item()];
     renderStore(multi as RevnetFormData);
+    fireEvent.click(screen.getByLabelText("Limited supply (on each chain)"));
     fireEvent.click(screen.getByText("Set per chain"));
     fireEvent.change(screen.getByLabelText("Base Sepolia quantity"), { target: { value: "3" } });
     expect(storeState().items[0].perChainSupply[baseSepolia.id]).toBe("3");
@@ -255,8 +363,8 @@ describe("store section", () => {
   it("keeps the operator's post-launch powers editable", () => {
     const form = validRevnetForm();
     renderStore(form);
-    fireEvent.click(screen.getByText(/Store config/));
-    fireEvent.click(screen.getByText("Mint items for free"));
+    fireEvent.click(screen.getByText(/Store settings/));
+    fireEvent.click(screen.getByText("Create items for free"));
     expect(storeState().operatorCanMint).toBe(false);
   });
 
@@ -276,7 +384,7 @@ describe("store section", () => {
 
     fireEvent.change(screen.getByLabelText("Item 1 category"), { target: { value: "add" } });
     fireEvent.change(screen.getByLabelText("New category name"), { target: { value: "Shirts" } });
-    fireEvent.click(screen.getByText("Add"));
+    fireEvent.blur(screen.getByLabelText("New category name"));
 
     expect(storeState().categories).toEqual([{ id: 1, name: "Shirts" }]);
     // The item lands in the category it just named, and the name travels in its metadata.

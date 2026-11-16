@@ -3,18 +3,21 @@
 import { ButtonWithWallet } from "@/components/ButtonWithWallet";
 import { ChainLogo } from "@/components/ChainLogo";
 import { TableSkeleton } from "@/components/loading/LoadingSkeletons";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { TxProgress } from "@/components/ui/TxProgress";
 import { toast } from "@/components/ui/use-toast";
-import { submittedViaSafe, useWriteContract } from "@/hooks/useReviewedWriteContract";
+import { useHydrated } from "@/hooks/useHydrated";
+import { failedLine, reviewedCall, useReviewedAction } from "@/hooks/useReviewedAction";
+import { legacyIntents } from "@/lib/legacy-intents";
+import { useGroupWriteGate } from "@/lib/nana/groupWriteGate";
 import { PERSIST } from "@/lib/query-persist";
 import { formatWalletError } from "@/lib/utils";
-import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
 import { JBChainId } from "@bananapus/nana-sdk-core";
+import { bridgeIntent } from "@bananapus/nana-sdk-core/review";
 import { buildSyncAccountingDataTx } from "@bananapus/nana-sdk-core/v6";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Address } from "viem";
-import { useAccount, usePublicClient } from "wagmi";
+import { Address, zeroAddress } from "viem";
+import { useAccount } from "wagmi";
 import {
   chainName,
   ChainProject,
@@ -53,23 +56,38 @@ function StatusBadge({ level, label }: { level: GossipLevel; label: string }) {
  * mode). No verified budget → error toast, never a blind-guessed fee.
  */
 function SyncButton({
-  peerChainId,
+  peerProject,
   toChainId,
   syncSucker,
   onSynced,
 }: {
-  peerChainId: JBChainId;
+  peerProject: ChainProject;
   toChainId: JBChainId;
   syncSucker: Address;
   onSynced: () => void;
 }) {
+  const peerChainId = peerProject.chainId;
+  // The peer's project comes from the server sucker-group list: sync only a registry-listed pair.
+  const gate = useGroupWriteGate([peerProject]);
   const { address } = useAccount();
-  const publicClient = usePublicClient({ chainId: peerChainId });
-  const { writeContractAsync } = useWriteContract();
+  const { run } = useReviewedAction();
   const [state, setState] = useState<"idle" | "finding" | "working" | "sent">("idle");
   const [review, setReview] = useState<{ value: bigint } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const nativeSymbol = viemChainOf(peerChainId)?.nativeCurrency.symbol ?? "ETH";
+  const context = [
+    { label: "On", value: chainName(peerChainId) },
+    { label: "Pushes to", value: chainName(toChainId) },
+    ...(review
+      ? [
+          {
+            label: "Bridge fee",
+            value: `${fmtUnits(review.value, 18)} ${nativeSymbol}`,
+            note: "Found by simulation",
+          },
+        ]
+      : []),
+  ];
 
   return (
     <>
@@ -78,17 +96,16 @@ function SyncButton({
         size="sm"
         variant="outline"
         forceChildren
-        loading={state === "finding" || state === "working"}
-        disabled={state === "sent"}
+        loading={state === "finding" || state === "working" || gate.pending}
+        disabled={state === "sent" || gate.blocked}
         onClick={async () => {
           try {
+            gate.assertVerified([peerProject]);
             setState("finding");
             setError(null);
             const value = await findSyncValue(peerChainId, syncSucker, address);
             if (value == null) {
-              throw new Error(
-                "Could not determine the bridge messaging fee — the sync simulation did not succeed at any budget. Try again shortly.",
-              );
+              throw new Error("Couldn't find the bridge fee. Try again shortly.");
             }
             setReview({ value });
             setState("idle");
@@ -105,14 +122,12 @@ function SyncButton({
       >
         {state === "sent" ? "Sent" : "Sync"}
       </ButtonWithWallet>
+      {gate.line ? <p className="mt-1 text-xs text-zinc-600">{gate.line}</p> : null}
       {review || state === "finding" ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(open) => {
-            if (!open) setReview(null);
-          }}
+          onClose={() => setReview(null)}
           title="Confirm sync"
-          chainId={peerChainId}
           preparing={!review}
           status={review ? null : "Simulating the bridge messaging fee…"}
           steps={[
@@ -122,12 +137,13 @@ function SyncButton({
             },
           ]}
           activeIndex={state === "working" ? 0 : -1}
-          action="Sync"
           busy={state !== "idle"}
           error={error}
-          onConfirm={async () => {
+          rows={context}
+          start={async () => {
             if (!review) return;
             try {
+              gate.assertVerified([peerProject]);
               setState("working");
               setError(null);
               const request = buildSyncAccountingDataTx({
@@ -135,13 +151,30 @@ function SyncButton({
                 sucker: syncSucker,
                 value: review.value,
               });
-              // Simulate the exact tx (account + value) before prompting the wallet.
-              await publicClient?.simulateContract({
+              // Held by the sucker and account (a sync moves no one token: the zero address
+              // names the whole sucker); the bridge fee is simulated again on a reopen.
+              const result = await run({
                 account: address,
-                ...request,
+                context,
+                calls: [
+                  reviewedCall(request, {
+                    intent: bridgeIntent({
+                      chainId: peerChainId,
+                      sucker: syncSucker,
+                      token: zeroAddress,
+                      account: address!,
+                    }),
+                    legacyIntents: legacyIntents.sync(syncSucker),
+                  }),
+                ],
               });
-              const hash = await writeContractAsync(request);
-              if (submittedViaSafe(hash)) {
+              if (!result || result.status === "failed") {
+                setState("idle");
+                if (result) setError(failedLine(result));
+                else setReview(null);
+                return;
+              }
+              if (result.status === "proposed") {
                 setState("sent");
                 setReview(null);
                 toast({
@@ -150,16 +183,11 @@ function SyncButton({
                 });
                 return;
               }
-              if (!publicClient) throw new Error("Public client unavailable.");
-              const receipt = await waitForReceiptWithRetry(publicClient, hash);
-              if (receipt.status !== "success") {
-                throw new Error(`Accounting sync ${hash} reverted onchain.`);
-              }
               setState("sent");
               setReview(null);
               toast({
                 title: "Sync confirmed",
-                description: `${chainName(peerChainId)} is pushing its accounting snapshot over the bridge — it lands in a few minutes.`,
+                description: `${chainName(peerChainId)} is pushing its accounting snapshot over the bridge. It lands in a few minutes.`,
               });
               onSynced();
             } catch (cause) {
@@ -168,16 +196,7 @@ function SyncButton({
               setError(formatWalletError(cause));
             }
           }}
-        >
-          <SummaryRow label="On">{chainName(peerChainId)}</SummaryRow>
-          <SummaryRow label="Pushes to">{chainName(toChainId)}</SummaryRow>
-          {review ? (
-            <SummaryRow label="Bridge fee">
-              {fmtUnits(review.value, 18)} {nativeSymbol}
-              <span className="block text-xs text-zinc-500">Found by simulation</span>
-            </SummaryRow>
-          ) : null}
-        </TxConfirmDialog>
+        />
       ) : null}
     </>
   );
@@ -185,10 +204,12 @@ function SyncButton({
 
 function PeerRow({
   peer,
+  peerProject,
   toChainId,
   onSynced,
 }: {
   peer: GossipPeerRow;
+  peerProject: ChainProject | undefined;
   toChainId: JBChainId;
   onSynced: () => void;
 }) {
@@ -219,9 +240,9 @@ function PeerRow({
       </td>
       <td className={cell}>{peer.snapshot ? timeAgo(peer.snapshot) : "never"}</td>
       <td className={`${cell} text-right`}>
-        {showSync && peer.syncSucker && (
+        {showSync && peer.syncSucker && peerProject && (
           <SyncButton
-            peerChainId={peer.peerChainId}
+            peerProject={peerProject}
             toChainId={toChainId}
             syncSucker={peer.syncSucker}
             onSynced={onSynced}
@@ -238,7 +259,8 @@ function PeerRow({
  * (website/ renderGossipSection parity).
  */
 export function GossipCard({ chains }: { chains: ChainProject[] }) {
-  const { data, isLoading, isError, refetch } = useQuery({
+  const hydrated = useHydrated();
+  const query = useQuery({
     queryKey: ["v6Gossip", chainProjectsKey(chains)],
     meta: PERSIST,
     enabled: chains.length > 1,
@@ -246,6 +268,11 @@ export function GossipCard({ chains }: { chains: ChainProject[] }) {
     refetchInterval: 60_000,
     queryFn: () => fetchGossip(chains),
   });
+
+  const data = hydrated ? query.data : undefined;
+  const isLoading = hydrated ? query.isLoading : chains.length > 1;
+  const isError = hydrated && query.isError;
+  const { refetch } = query;
 
   if (chains.length < 2) return null;
 
@@ -255,13 +282,15 @@ export function GossipCard({ chains }: { chains: ChainProject[] }) {
     <div className="border border-zinc-200 bg-melon-50 p-4">
       <h3 className="font-medium text-zinc-900">Gossip</h3>
       <p className="text-sm text-zinc-500 mt-1">
-        Each chain&apos;s cash out and loan availability depends on knowledge of the project&apos;s
-        composition on other chains.
+        Chains share records of the revnet&apos;s money and tokens. These records affect how much
+        owners can cash out or borrow on each chain.
       </p>
       {isLoading ? (
         <TableSkeleton rows={Math.max(chains.length, 2)} columns={6} />
       ) : isError || !data ? (
-        <div className="text-sm text-zinc-500 py-4">Could not verify cross-chain gossip state.</div>
+        <div className="text-sm text-zinc-500 py-4">
+          Could not check the records shared between chains.
+        </div>
       ) : (
         data.map((view) => (
           <div key={view.chainId} className="mt-4">
@@ -269,7 +298,7 @@ export function GossipCard({ chains }: { chains: ChainProject[] }) {
               <ChainLogo chainId={view.chainId} width={16} height={16} />
               {chainName(view.chainId)} knows
             </div>
-            <div className="-mx-4 mt-2 overflow-x-auto">
+            <div className="table-scroll -mx-4 mt-2 overflow-x-auto">
               <table className="w-full min-w-[900px]">
                 <thead className="bg-melon-100">
                   <tr className="border-b border-zinc-100">
@@ -286,6 +315,9 @@ export function GossipCard({ chains }: { chains: ChainProject[] }) {
                     <PeerRow
                       key={peer.peerChainId}
                       peer={peer}
+                      peerProject={chains.find(
+                        (chain) => Number(chain.chainId) === Number(peer.peerChainId),
+                      )}
                       toChainId={view.chainId}
                       onSynced={() => {
                         // The push rides the bridge for minutes — re-read a few times so

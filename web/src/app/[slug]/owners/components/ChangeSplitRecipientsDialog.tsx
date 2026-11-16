@@ -3,6 +3,10 @@
 import { chainDisplayName } from "@/app/constants";
 import { Field } from "@/app/create/form/Fields";
 import { ChainLogo } from "@/components/ChainLogo";
+import { PermissionStatus } from "@/components/PermissionStatus";
+import { StickyGroupFields } from "@/components/sticky/StickyGroupFields";
+import { StickyRecipient } from "@/components/sticky/StickyRecipient";
+import { StickyTokenStatus } from "@/components/sticky/StickyTokenStatus";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,26 +16,44 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Trash2 as TrashIcon } from "@/components/ui/icons";
-import { SummaryRow, TxConfirmDialog } from "@/components/ui/TxConfirmDialog";
+import { X as XIcon } from "@/components/ui/icons";
+import { SummaryRow, TxProgress } from "@/components/ui/TxProgress";
 import { toast } from "@/components/ui/use-toast";
+import { WalletConnectButton } from "@/components/WalletButton";
 import { useUserPermissions } from "@/hooks/useUserPermissions";
 import { FieldArray, Form, FormProvider } from "@/lib/forms";
 import { withSchema } from "@/lib/formValidation";
+import { hasSuckerPair, isPairCheckPending, unverifiedPairLine } from "@/lib/nana/suckers";
 import { areRelayrChainsCompatible } from "@/lib/relayr-chains";
-import { JB_CHAINS, JBChainId, SPLITS_TOTAL_PERCENT } from "@bananapus/nana-sdk-core";
+import { SAFE_PROPOSAL_UNCONFIRMED_LINE } from "@/lib/reviewed-call";
+import {
+  isStickyHook,
+  isStickyRow,
+  stickyGroupDraft,
+  stickyGroupOf,
+  stickyRecipientLabel,
+  stickySplitsProblem,
+  stickyUnavailableReason,
+  type StickyGroupDraft,
+} from "@/lib/sticky";
+import { wagmiConfig } from "@/lib/wagmiConfig";
+import { JBChainId, SPLITS_TOTAL_PERCENT } from "@bananapus/nana-sdk-core";
 import { useEffect, useMemo, useState } from "react";
-import { Address, zeroAddress } from "viem";
+import { Address, zeroAddress, type PublicClient } from "viem";
+import { useAccount } from "wagmi";
+import { getPublicClient } from "wagmi/actions";
 import { changeSplitsSchema } from "./changeSplitsSchema";
 import { useChainSplits } from "./hooks/useChainSplits";
-import { useSetSplitGroups } from "./hooks/useSetSplitGroups";
+import { stickySplitGroupId, useSetSplitGroups } from "./hooks/useSetSplitGroups";
 import { emptySaveBlockMessage } from "./splitsLib";
 
 /**
  * A row in the editor. `percentage` and `beneficiary` are what the form edits;
  * the rest is carried verbatim from the on-chain `JBSplit` so a save can't
  * silently drop a split's hook, project routing, or lock. Rows the user adds
- * have none of it — a plain address payout.
+ * have none of it — a plain address payout, or Sticky holders (`kind` "hook",
+ * `hookKind` "sticky": `beneficiary` is the Sticky token and the group fields
+ * pick who).
  */
 export type SplitFormData = {
   percentage: string;
@@ -40,7 +62,9 @@ export type SplitFormData = {
   hook?: Address;
   lockedUntil?: number;
   preferAddToBalance?: boolean;
-};
+  kind?: "address" | "hook";
+  hookKind?: "sticky";
+} & Partial<StickyGroupDraft>;
 
 export type ChainFormData = {
   chainId: JBChainId;
@@ -57,6 +81,7 @@ function trimTrailingZeros(fixed: string): string {
 }
 
 export function splitRouting(split: SplitFormData) {
+  if (isStickyRow(split)) return null;
   if (split.hook && split.hook !== zeroAddress)
     return { kind: "hook", address: split.hook } as const;
   if (split.projectId) return { kind: "project", projectId: split.projectId } as const;
@@ -78,27 +103,42 @@ type Props = {
   initialChainId: JBChainId;
   splitLimit?: string;
   triggerVariant?: "default" | "outline" | "secondary";
+  /** For a panel that would otherwise sit empty when the account can't edit. */
+  deniedNote?: string;
 };
 
 export function ChangeSplitRecipientsDialog(props: Props) {
-  const { stageIdx, initialChainId, splitLimit, triggerVariant = "outline" } = props;
+  const { stageIdx, initialChainId, splitLimit, triggerVariant = "outline", deniedNote } = props;
   const [open, setOpen] = useState(false);
   const [reviewing, setReviewing] = useState<ChainFormData[] | null>(null);
+  // A multi-chain change stopped at a Safe proposal: nothing more to send from here.
+  const [proposal, setProposal] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const { address } = useAccount();
 
-  const { hasPermission } = useUserPermissions();
-  const { chainSplits, refetch } = useChainSplits(stageIdx);
+  const permissions = useUserPermissions();
+  const { hasPermission } = permissions;
+  const { chainSplits, verifiedPairs, suckerCheck, refetch } = useChainSplits(stageIdx);
 
-  const { submitSplits, isSubmitting, isPending, isTxLoading, relayrAvailable } = useSetSplitGroups(
-    {
-      onSuccess: (txHash) => {
-        console.debug(`Transaction confirmed: ${txHash}`);
-        toast({ title: "Splits updated successfully" });
-        setReviewing(null);
-        setOpen(false);
-        setTimeout(refetch, 4000); // Give it some time to index data
-      },
+  const {
+    submitSplits,
+    isSubmitting,
+    isPending,
+    isTxLoading,
+    isSafeProposal,
+    isTxUnconfirmed,
+    isTxReceiptUnconfirmed,
+    txHeldLine,
+    relayrAvailable,
+  } = useSetSplitGroups({
+    onSuccess: (txHash) => {
+      console.debug(`Transaction confirmed: ${txHash}`);
+      toast({ title: "Splits updated successfully" });
+      setReviewing(null);
+      setOpen(false);
+      setTimeout(refetch, 4000); // Give it some time to index data
     },
-  );
+  });
 
   useEffect(() => {
     if (open) refetch();
@@ -122,6 +162,14 @@ export function ChangeSplitRecipientsDialog(props: Props) {
         hook: split.hook,
         lockedUntil: split.lockedUntil,
         preferAddToBalance: split.preferAddToBalance,
+        // A Sticky split's projectId is its holder group, never a project.
+        ...(isStickyHook(split.hook, chainData.chainId)
+          ? {
+              kind: "hook" as const,
+              hookKind: "sticky" as const,
+              ...stickyGroupDraft(split.projectId),
+            }
+          : {}),
       })),
     }));
 
@@ -147,34 +195,114 @@ export function ChangeSplitRecipientsDialog(props: Props) {
         splitCount: chain.splits.length,
         fallbackSplitCount: fallbackCountByChain.get(chain.chainId) ?? null,
       })),
-      (chainId) => JB_CHAINS[chainId as JBChainId]?.name ?? `chain ${chainId}`,
+      (chainId) => chainDisplayName(chainId),
     );
 
+  // Each chain's project id is written into the call, so it must be a pair the
+  // on-chain sucker registry lists, not only the indexer.
+  const unverifiedChain = (chains: ChainFormData[]) =>
+    chains.find(
+      (chain) =>
+        !hasSuckerPair(verifiedPairs, { peerChainId: chain.chainId, projectId: chain.projectId }),
+    );
+
+  const [stickyProblem, setStickyProblem] = useState<string | null>(null);
   const handleSubmit = async (values: FormData) => {
+    // Permission can come from a viewed account. The confirm sends from the
+    // connected wallet and cannot connect one, so it opens only once one is.
+    if (!address) return;
     const selectedChains = values.chains.filter((c) => c.selected);
     if (selectedChains.length === 0) {
       console.error("No chains selected");
       return;
     }
     if (blockMessageFor(values.chains)) return;
+    if (unverifiedChain(selectedChains)) return;
+    // The distributor never reverts, so an unregistered token would quietly pay group 0.
+    // Check every Sticky token on the chain it is saved to before anything is signed.
+    setStickyProblem(null);
+    try {
+      for (const chain of selectedChains) {
+        const sticky = chain.splits.filter(isStickyRow).map((split) => ({
+          beneficiary: split.beneficiary as Address,
+          projectId: stickySplitGroupId(split),
+        }));
+        if (sticky.length === 0) continue;
+        const client = getPublicClient(wagmiConfig, { chainId: chain.chainId }) as PublicClient;
+        const problem = await stickySplitsProblem(sticky, [chain.chainId], () => client);
+        if (problem) {
+          setStickyProblem(problem);
+          return;
+        }
+      }
+    } catch (error) {
+      setStickyProblem(
+        error instanceof Error ? error.message : "Could not check the Sticky tokens.",
+      );
+      return;
+    }
+    setProposal(null);
     setReviewing(selectedChains);
   };
 
   const confirmSubmit = async () => {
     if (!reviewing) return;
-    const result = await submitSplits(reviewing);
+    // Back to the form, which names the pair that is no longer chain-verified.
+    if (unverifiedChain(reviewing)) {
+      setReviewing(null);
+      return;
+    }
+    setFailure(null);
+    const result = await submitSplits(reviewing, [
+      { label: "Stage", value: String(stageIdx + 1) },
+      ...reviewing.map((chain) => ({
+        label: chainNameOf(chain.chainId),
+        value:
+          chain.splits.length === 0
+            ? "No recipients"
+            : `${chain.splits.length} recipient${chain.splits.length === 1 ? "" : "s"}`,
+        lines: chain.splits.map((split) => {
+          const routing = splitRouting(split);
+          const to = isStickyRow(split)
+            ? stickyRecipientLabel({
+                projectId: stickySplitGroupId(split),
+                beneficiary: split.beneficiary as Address,
+              })
+            : routing
+              ? routing.kind === "hook"
+                ? `split hook ${routing.address}`
+                : `project #${routing.projectId}`
+              : split.beneficiary;
+          return `${trimTrailingZeros(Number(split.percentage).toFixed(7))}% to ${to}`;
+        }),
+      })),
+    ]);
+    if (result?.closed) {
+      setReviewing(null);
+      return;
+    }
+    if (result?.proposal) setProposal(result.proposal);
+    if (result?.error) setFailure(result.error);
     if (result?.success && reviewing.length > 1) setReviewing(null);
   };
 
   const writing = isSubmitting || isPending || isTxLoading;
+  // A change proposed to the Safe, on one chain or at the first of several,
+  // waits on its signers, not on a receipt here, so the confirm ends on Done.
+  const proposed = Boolean(isSafeProposal) || proposal !== null;
+  // A single-chain change whose watch ended without a receipt may still land:
+  // the confirm ends on Done and Save stays locked.
+  const unconfirmed = Boolean(isTxReceiptUnconfirmed);
+  // So may a Safe proposal whose result can't be confirmed: Save stays locked.
+  const saveLocked = unconfirmed || Boolean(isTxUnconfirmed);
   const relayed =
     relayrAvailable &&
     (reviewing?.length ?? 0) > 1 &&
     areRelayrChainsCompatible(reviewing?.map((chain) => chain.chainId) ?? []);
-  const chainNameOf = (chainId: JBChainId) => JB_CHAINS[chainId]?.name ?? `chain ${chainId}`;
+  const chainNameOf = (chainId: JBChainId) => chainDisplayName(chainId);
 
   if (!hasPermission("SET_SPLIT_GROUPS")) {
-    return null;
+    return <PermissionStatus {...permissions} deniedNote={deniedNote} />;
   }
 
   return (
@@ -183,13 +311,14 @@ export function ChangeSplitRecipientsDialog(props: Props) {
         <Button variant={triggerVariant}>Change split recipients</Button>
       </DialogTrigger>
       {reviewing ? (
-        <TxConfirmDialog
+        <TxProgress
           open
-          onOpenChange={(next) => {
-            if (!next) setReviewing(null);
+          onClose={() => {
+            setReviewing(null);
+            setProposal(null);
+            setFailure(null);
           }}
           title="Confirm split recipients"
-          chainId={reviewing[0].chainId}
           steps={
             relayed
               ? [
@@ -199,17 +328,26 @@ export function ChangeSplitRecipientsDialog(props: Props) {
                   },
                   {
                     title: "Pay the relay fee",
-                    detail: "Choose a funding chain and pay once. Relayr updates each chain.",
+                    detail: "Choose a funding chain and pay once to update each chain.",
                   },
                 ]
               : reviewing.map((chain) => ({
                   title: `Update the recipients on ${chainNameOf(chain.chainId)}`,
                 }))
           }
-          activeIndex={writing ? 0 : -1}
-          action="Save changes"
-          onConfirm={() => void confirmSubmit()}
-          busy={writing}
+          activeIndex={writing && !proposed ? 0 : -1}
+          start={() => void confirmSubmit()}
+          busy={writing && !proposed}
+          complete={proposed || unconfirmed}
+          error={failure}
+          status={
+            proposal ??
+            (isTxUnconfirmed
+              ? SAFE_PROPOSAL_UNCONFIRMED_LINE
+              : proposed
+                ? "Proposed to Safe. Approve and execute it there."
+                : (txHeldLine ?? (unconfirmed ? "Couldn't confirm the change yet." : null)))
+          }
         >
           <SummaryRow label="Stage">{stageIdx + 1}</SummaryRow>
           {reviewing.map((chain) => (
@@ -224,11 +362,23 @@ export function ChangeSplitRecipientsDialog(props: Props) {
                     return (
                       <span key={index} className="block text-xs text-zinc-500">
                         {trimTrailingZeros(Number(split.percentage).toFixed(7))}% to{" "}
-                        {routing
-                          ? routing.kind === "hook"
-                            ? `split hook ${routing.address}`
-                            : `project #${routing.projectId}`
-                          : split.beneficiary}
+                        {isStickyRow(split) ? (
+                          <StickyRecipient
+                            split={{
+                              projectId: stickySplitGroupId(split),
+                              beneficiary: split.beneficiary as Address,
+                            }}
+                            chainId={chain.chainId}
+                          />
+                        ) : routing ? (
+                          routing.kind === "hook" ? (
+                            `split hook ${routing.address}`
+                          ) : (
+                            `project #${routing.projectId}`
+                          )
+                        ) : (
+                          split.beneficiary
+                        )}
                       </span>
                     );
                   })}
@@ -237,16 +387,15 @@ export function ChangeSplitRecipientsDialog(props: Props) {
             </SummaryRow>
           ))}
           {relayed ? <SummaryRow label="Relay fee">Quoted in ETH after you sign</SummaryRow> : null}
-        </TxConfirmDialog>
+        </TxProgress>
       ) : null}
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Change split recipients</DialogTitle>
           <p className="text-sm text-zinc-500 mt-2">Stage {stageIdx + 1}</p>
           <p className="text-sm text-zinc-500 mt-1">
-            The stage always sets aside {splitLimit ? `${splitLimit} of` : "its split percent of"}{" "}
-            new issuance — that amount is fixed. Splits only route it, so changing them can&apos;t
-            change how much is set aside.
+            This stage splits {splitLimit ?? "a fixed share"} of new tokens. You can change who
+            receives that share, but cannot change its size.
           </p>
         </DialogHeader>
 
@@ -258,13 +407,20 @@ export function ChangeSplitRecipientsDialog(props: Props) {
         >
           {({ values, setFieldValue, isValid }) => {
             const emptySaveBlock = blockMessageFor(values.chains);
+            const unverified = unverifiedChain(values.chains.filter((c) => c.selected));
+            // While the registry read is in flight Save shows its loading state;
+            // a mismatch or failure says so inline.
+            const pairPending = !!unverified && isPairCheckPending(suckerCheck);
+            const pairLine = unverified
+              ? unverifiedPairLine(suckerCheck, chainDisplayName(unverified.chainId))
+              : null;
             return (
               <Form>
                 <div className="space-y-6 mt-4">
                   {values.chains.length > 1 && (
                     <div>
-                      <div className="text-sm font-semibold mb-2">Select chains to update:</div>
-                      <div className="flex flex-wrap gap-6">
+                      <div className="text-sm font-semibold mb-2">Chains to update</div>
+                      <div className="flex flex-wrap gap-x-6 gap-y-2">
                         {values.chains.map((chain, chainIdx) => (
                           <label key={chain.chainId} className="flex items-center gap-2">
                             <input
@@ -283,7 +439,7 @@ export function ChangeSplitRecipientsDialog(props: Props) {
 
                   <FieldArray name="chains">
                     {() => (
-                      <div className="space-y-8">
+                      <div className="space-y-4">
                         {values.chains.map((chain, chainIdx) => {
                           if (!chain.selected) return null;
 
@@ -293,8 +449,11 @@ export function ChangeSplitRecipientsDialog(props: Props) {
                           );
 
                           return (
-                            <div key={chain.chainId} className="border border-zinc-200 p-4 rounded">
-                              <div className="flex items-center gap-2 mb-4">
+                            <div
+                              key={chain.chainId}
+                              className="border-t border-zinc-200 pt-4 first:border-t-0 first:pt-0"
+                            >
+                              <div className="flex items-center gap-2">
                                 <ChainLogo chainId={chain.chainId} width={24} height={24} />
                                 <h3 className="text-md font-semibold">
                                   {chainDisplayName(chain.chainId)}
@@ -303,15 +462,15 @@ export function ChangeSplitRecipientsDialog(props: Props) {
 
                               <FieldArray name={`chains.${chainIdx}.splits`}>
                                 {(arrayHelpers) => (
-                                  <div className="space-y-3">
+                                  <div>
                                     {chain.splits.length === 0 &&
                                       (blockMessageFor([chain]) ? (
-                                        <p className="text-sm text-red-500">
+                                        <p className="mt-4 text-sm text-red-500">
                                           {blockMessageFor([chain])} Keep at least one recipient, or
                                           clear the default group first.
                                         </p>
                                       ) : (
-                                        <p className="text-sm text-zinc-500">
+                                        <p className="mt-4 text-sm text-zinc-500">
                                           No recipients: this chain&apos;s reserved tokens will be
                                           minted to the revnet&apos;s owner contract, where anyone
                                           can burn them.
@@ -320,61 +479,136 @@ export function ChangeSplitRecipientsDialog(props: Props) {
                                     {chain.splits.map((split, splitIdx) => {
                                       const routing = splitRouting(split);
                                       const locked = splitIsLocked(split, nowSeconds);
+                                      const sticky = isStickyRow(split);
+                                      // Sticky is a hook type, offered where this chain has the distributor.
+                                      const stickyReason = stickyUnavailableReason([chain.chainId]);
+                                      const rowName = `chains.${chainIdx}.splits.${splitIdx}`;
                                       return (
-                                        <div key={splitIdx} className="flex gap-2 items-start">
-                                          <div className="flex-1">
-                                            <label className="text-sm text-zinc-600 mb-1 block">
+                                        <div key={splitIdx}>
+                                          <div className="mt-4 flex flex-wrap items-start gap-2 text-md text-zinc-600">
+                                            <label
+                                              className="flex h-9 items-center whitespace-nowrap"
+                                              htmlFor={`${rowName}.percentage`}
+                                            >
                                               {splitIdx === 0 ? "Split" : "... and"}
                                             </label>
-                                            <div className="flex gap-2 items-start">
-                                              <Field
-                                                name={`chains.${chainIdx}.splits.${splitIdx}.percentage`}
-                                                type="number"
-                                                min="0"
-                                                max="100"
-                                                step="0.01"
-                                                className="h-9"
-                                                width="w-28"
-                                                suffix="%"
-                                                required
-                                              />
-                                              <span className="flex items-center text-zinc-600 mt-2">
-                                                to
-                                              </span>
-                                              {routing ? (
-                                                <div className="flex-1 mt-2 text-sm text-zinc-600 break-all">
-                                                  {routing.kind === "hook"
-                                                    ? `split hook ${routing.address}`
-                                                    : `project #${routing.projectId}`}
-                                                  {locked && " (locked)"}
-                                                </div>
-                                              ) : (
+                                            <Field
+                                              id={`${rowName}.percentage`}
+                                              name={`${rowName}.percentage`}
+                                              type="number"
+                                              min="0"
+                                              max="100"
+                                              step="0.01"
+                                              className="h-9 pr-8 pl-2"
+                                              width="w-28 shrink-0"
+                                              suffix="%"
+                                              required
+                                            />
+                                            <span className="flex h-9 items-center">to</span>
+                                            {!routing && !locked ? (
+                                              <select
+                                                aria-label="Recipient type"
+                                                value={sticky ? "hook" : "address"}
+                                                onChange={(e) =>
+                                                  setFieldValue(rowName, {
+                                                    percentage: split.percentage,
+                                                    beneficiary: "",
+                                                    ...(e.target.value === "hook"
+                                                      ? {
+                                                          kind: "hook",
+                                                          hookKind: "sticky",
+                                                          ...stickyGroupOf({}),
+                                                        }
+                                                      : {}),
+                                                  })
+                                                }
+                                                className="h-9 border-2 border-melon-300 bg-melon-25 px-2 py-0 pr-8 text-md hover:border-melon-400 focus:border-melon-600 focus:outline-none focus:ring-0"
+                                              >
+                                                <option value="address">Address</option>
+                                                {!stickyReason || sticky ? (
+                                                  <option value="hook">Hook</option>
+                                                ) : null}
+                                              </select>
+                                            ) : null}
+                                            {/* Phones keep the remove button on the row's first line. */}
+                                            <Button
+                                              type="button"
+                                              variant="ghost"
+                                              size="sm"
+                                              onClick={() => arrayHelpers.remove(splitIdx)}
+                                              className="ml-auto h-9 shrink-0 px-0 sm:order-last sm:ml-0 sm:px-3"
+                                              aria-label="Remove split"
+                                              disabled={locked}
+                                              title={
+                                                locked
+                                                  ? "Locked until this stage's lock expires"
+                                                  : undefined
+                                              }
+                                            >
+                                              <XIcon className="h-4 w-4" />
+                                            </Button>
+                                            {sticky && !locked ? (
+                                              <span className="flex h-9 items-center">Sticky</span>
+                                            ) : null}
+                                            {sticky && locked ? (
+                                              <div className="min-w-40 flex-1 py-2 text-sm break-all max-sm:basis-full">
+                                                <StickyRecipient
+                                                  split={{
+                                                    projectId: stickySplitGroupId(split),
+                                                    beneficiary: split.beneficiary as Address,
+                                                  }}
+                                                  chainId={chain.chainId}
+                                                />{" "}
+                                                (locked)
+                                              </div>
+                                            ) : routing ? (
+                                              <div className="min-w-40 flex-1 py-2 text-sm break-all max-sm:basis-full">
+                                                {routing.kind === "hook"
+                                                  ? `split hook ${routing.address}`
+                                                  : `project #${routing.projectId}`}
+                                                {locked && " (locked)"}
+                                              </div>
+                                            ) : (
+                                              <div
+                                                className={`flex min-w-40 flex-1 flex-col gap-2 ${
+                                                  sticky ? "" : "max-sm:basis-full"
+                                                }`}
+                                              >
                                                 <Field
-                                                  name={`chains.${chainIdx}.splits.${splitIdx}.beneficiary`}
+                                                  name={`${rowName}.beneficiary`}
                                                   type="text"
-                                                  className="h-9 flex-1"
-                                                  placeholder="0x..."
+                                                  aria-label={sticky ? "Sticky token" : undefined}
+                                                  className="h-9"
+                                                  width="w-full min-w-0"
+                                                  placeholder={
+                                                    sticky ? "0x… (Sticky token)" : "0x..."
+                                                  }
                                                   required
                                                 />
-                                              )}
-                                            </div>
+                                              </div>
+                                            )}
                                           </div>
-                                          <Button
-                                            type="button"
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={() => arrayHelpers.remove(splitIdx)}
-                                            className="mt-6"
-                                            aria-label="Remove split"
-                                            disabled={locked}
-                                            title={
-                                              locked
-                                                ? "Locked until this stage's lock expires"
-                                                : undefined
-                                            }
-                                          >
-                                            <TrashIcon className="size-4" />
-                                          </Button>
+                                          {sticky && !locked && stickyReason ? (
+                                            <p role="alert" className="mt-2 text-sm text-red-500">
+                                              {stickyReason}
+                                            </p>
+                                          ) : sticky && !locked ? (
+                                            <>
+                                              <StickyGroupFields
+                                                value={stickyGroupOf(split)}
+                                                onChange={(patch) =>
+                                                  setFieldValue(rowName, { ...split, ...patch })
+                                                }
+                                              />
+                                              <StickyTokenStatus
+                                                row={{
+                                                  ...stickyGroupOf(split),
+                                                  token: split.beneficiary,
+                                                }}
+                                                chainIds={[chain.chainId]}
+                                              />
+                                            </>
+                                          ) : null}
                                         </div>
                                       );
                                     })}
@@ -389,14 +623,14 @@ export function ChangeSplitRecipientsDialog(props: Props) {
                                           beneficiary: "",
                                         })
                                       }
-                                      className="mt-2"
+                                      className="mt-4"
                                     >
                                       Add split +
                                     </Button>
 
                                     {chain.splits.length > 0 && (
                                       <div
-                                        className={`text-sm py-1 ${
+                                        className={`mt-3 text-sm ${
                                           Math.abs(totalPercentage - 100) < 0.01
                                             ? "text-zinc-500 "
                                             : "text-red-500"
@@ -418,6 +652,15 @@ export function ChangeSplitRecipientsDialog(props: Props) {
                   </FieldArray>
                 </div>
 
+                {pairLine ? <p className="mt-4 text-sm text-zinc-600">{pairLine}</p> : null}
+                {stickyProblem ? (
+                  <p role="alert" className="mt-4 text-sm text-red-600">
+                    {stickyProblem}
+                  </p>
+                ) : null}
+                {isTxUnconfirmed ? (
+                  <p className="mt-4 text-sm text-zinc-600">{SAFE_PROPOSAL_UNCONFIRMED_LINE}</p>
+                ) : null}
                 <DialogFooter className="mt-6">
                   <Button
                     type="button"
@@ -427,16 +670,26 @@ export function ChangeSplitRecipientsDialog(props: Props) {
                   >
                     Cancel
                   </Button>
-                  <Button
-                    type="submit"
-                    disabled={
-                      !isValid || !!emptySaveBlock || isSubmitting || isPending || isTxLoading
-                    }
-                    loading={isSubmitting || isPending || isTxLoading}
-                    className="bg-teal-500 text-melon-950 hover:bg-teal-600"
-                  >
-                    Save changes
-                  </Button>
+                  {address ? (
+                    <Button
+                      type="submit"
+                      disabled={
+                        !isValid ||
+                        !!emptySaveBlock ||
+                        !!unverified ||
+                        isSubmitting ||
+                        isPending ||
+                        isTxLoading ||
+                        saveLocked
+                      }
+                      loading={isSubmitting || isPending || isTxLoading || pairPending}
+                      className="bg-teal-500 text-melon-950 hover:bg-teal-600"
+                    >
+                      Save changes
+                    </Button>
+                  ) : (
+                    <WalletConnectButton className="bg-teal-500 text-melon-950 hover:bg-teal-600" />
+                  )}
                 </DialogFooter>
               </Form>
             );

@@ -3,6 +3,7 @@
 import { TierMediaPreview } from "@/app/[slug]/components/v6/shop/TierMediaPreview";
 import { tierDisplayName, type TierMedia } from "@/app/[slug]/components/v6/shop/shopLib";
 import { ChainLogo } from "@/components/ChainLogo";
+import { ProjectLink } from "@/components/ProjectLink";
 import { SkeletonLines } from "@/components/ui/skeleton";
 import {
   useCompleteOwnedNfts,
@@ -16,7 +17,6 @@ import { slugFor } from "@/lib/slug";
 import { parseTierMetadataJson, tierDisplayMetadata } from "@/lib/v6/pay";
 import { JB_CHAINS } from "@bananapus/nana-sdk-core";
 import { useQueries } from "@tanstack/react-query";
-import Link from "next/link";
 import { useMemo } from "react";
 import type { Address } from "viem";
 
@@ -160,12 +160,12 @@ export function StoreItemHoldings({ address }: { address: Address }) {
                 <div className="flex flex-wrap items-center gap-2">
                   <ChainLogo chainId={group.chainId} width={16} height={16} standalone />
                   {group.slug ? (
-                    <Link
+                    <ProjectLink
                       href={`/${group.slug}/shop`}
                       className="text-sm font-medium hover:underline"
                     >
                       {group.name}
-                    </Link>
+                    </ProjectLink>
                   ) : (
                     <span className="text-sm font-medium">{group.name}</span>
                   )}

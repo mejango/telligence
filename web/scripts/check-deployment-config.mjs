@@ -19,6 +19,9 @@ const gitignore = await readFile(".gitignore", "utf8");
 const dockerignore = await readFile(".dockerignore", "utf8");
 const npmConfig = await readFile(".npmrc", "utf8");
 const packageManifest = JSON.parse(await readFile("package.json", "utf8"));
+const protocolFixture = JSON.parse(
+  await readFile("test/fixtures/protocol-deployments.v6.json", "utf8"),
+);
 
 for (const legacyRoute of [
   "src/app/api/ipfs/[...path]/route.ts",
@@ -40,7 +43,7 @@ if (!existsSync("package-lock.json") || packageManifest.packageManager !== "npm@
 }
 if (
   !dockerfile.startsWith(
-    "FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS base",
+    "FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS base",
   ) ||
   !dockerfile.includes("npm install --global npm@12.0.1 --no-audit --no-fund") ||
   !dockerfile.includes("NODE_OPTIONS=--no-experimental-webstorage") ||
@@ -48,7 +51,7 @@ if (
   !npmConfig.includes("ignore-scripts=true")
 ) {
   throw new Error(
-    "The app must use Node 26.12.1/npm 12.0.1 with Web Storage and dependency scripts disabled",
+    "The app must use Node 26.13.1/npm 12.0.1 with Web Storage and dependency scripts disabled",
   );
 }
 if (
@@ -70,15 +73,21 @@ if (packageManifest.scripts?.["dependencies:check"] !== "npm ls --depth=0") {
   throw new Error("The installed dependency tree must have an explicit npm integrity gate");
 }
 if (
-  packageManifest.dependencies?.next !== "16.3.4" ||
-  packageManifest.devDependencies?.["eslint-config-next"] !== "16.3.4"
+  packageManifest.dependencies?.next !== "16.4.2" ||
+  packageManifest.devDependencies?.["eslint-config-next"] !== "16.4.2"
 ) {
-  throw new Error("Next and eslint-config-next must remain on the supported 16.3.4 baseline");
+  throw new Error("Next and eslint-config-next must remain on the supported 16.4.2 baseline");
 }
 for (const [name, workflow] of [
   ["CI", ci],
   ["release", releaseGate],
 ]) {
+  const artifactCommit = workflow.match(
+    /repository: Bananapus\/deploy-all-v6\s+ref: ([a-f\d]{40})/u,
+  )?.[1];
+  if (artifactCommit !== protocolFixture.source.commit) {
+    throw new Error(`${name} must check out the fixture's exact deploy-all-v6 commit`);
+  }
   const installIndex = workflow.indexOf("npm ci --ignore-scripts");
   const integrityIndex = workflow.indexOf("npm run dependencies:check");
   const auditIndex = workflow.indexOf("npm run audit:production");

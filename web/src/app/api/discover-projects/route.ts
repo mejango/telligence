@@ -33,7 +33,7 @@ export async function GET() {
         continue;
       }
       group.members.push(project);
-      if (BigInt(project.volume || "0") > BigInt(group.representative.volume || "0")) {
+      if (BigInt(project.volumeUsd || "0") > BigInt(group.representative.volumeUsd || "0")) {
         group.representative = project;
       }
     }

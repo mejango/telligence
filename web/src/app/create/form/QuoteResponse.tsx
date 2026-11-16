@@ -9,12 +9,14 @@ import { useCreateForm } from "./useCreateForm";
 interface Props {
   relayrResponse: RelayrPostBundleResponse;
   reset: () => void;
+  preferredPaymentChainId?: number;
   quotedStageStart?: QuotedStageStart;
-  rebuildStaleQuote?: () => Promise<RelayrPostBundleResponse>;
+  rebuildStaleQuote?: (stale: RelayrPostBundleResponse) => Promise<RelayrPostBundleResponse>;
 }
 
 export function QuoteResponse(props: Props) {
-  const { relayrResponse, reset, quotedStageStart, rebuildStaleQuote } = props;
+  const { relayrResponse, reset, preferredPaymentChainId, quotedStageStart, rebuildStaleQuote } =
+    props;
   const { revnetTokenSymbol, isSubmitting } = useCreateForm();
 
   return (
@@ -35,6 +37,7 @@ export function QuoteResponse(props: Props) {
         <PayAndDeploy
           relayrResponse={relayrResponse}
           revnetTokenSymbol={revnetTokenSymbol}
+          preferredPaymentChainId={preferredPaymentChainId}
           quotedStageStart={quotedStageStart}
           rebuildStaleQuote={rebuildStaleQuote}
         />

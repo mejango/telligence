@@ -6,8 +6,7 @@ import { describe, expect, it } from "vitest";
 const beneficiary = "0x1111111111111111111111111111111111111111";
 
 describe("revnet shop owner mint", () => {
-  // wallet-action:shop-items
-  it("encodes quantity as repeated uint16 tier ids for mintFor", () => {
+  it("wallet-action:shop-items encodes quantity as repeated uint16 tier ids for mintFor", () => {
     const tierIds = buildOwnerMintTierIds(7, 3);
     const data = encodeFunctionData({
       abi: jb721TiersHookAbi,

@@ -2,7 +2,7 @@
   "format": "revnet-v6-app-deployments-2",
   "source": {
     "repository": "https://github.com/Bananapus/deploy-all-v6",
-    "commit": "316e9d4d3f9e1c5b41a5df7c0ad6183abbeccc7f"
+    "commit": "8ff50c28f7f4e4a8f98fdd8f680a6e2ddd2323d1"
   },
   "chains": {
     "1": {
@@ -128,6 +128,10 @@
         "address": "0xb552eb94284f94b833837d4b2cbb237128415d4e"
       },
       "ccipSuckerDeployers": {
+        "421614": {
+          "artifact": "JBCCIPSuckerDeployer__ARB_SEP",
+          "address": "0x2845f919af9ed7d8dab188d42114bd590340a242"
+        },
         "11155111": {
           "artifact": "JBCCIPSuckerDeployer__ETH_SEP",
           "address": "0x3955fec11fe15f0be4dfa2b0153feef55d55e1ee"
@@ -135,10 +139,6 @@
         "11155420": {
           "artifact": "JBCCIPSuckerDeployer__OP_SEP",
           "address": "0x8f6f0a70939997310309d7ab66b1b199faafe7f0"
-        },
-        "421614": {
-          "artifact": "JBCCIPSuckerDeployer__ARB_SEP",
-          "address": "0x2845f919af9ed7d8dab188d42114bd590340a242"
         }
       },
       "nativeSuckerDeployers": {

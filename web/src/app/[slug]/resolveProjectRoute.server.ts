@@ -1,7 +1,7 @@
 import "server-only";
 
-import { readCrossChainHandleAuthority } from "@/lib/cross-chain-authority";
 import { getEnsPublicClient } from "@/lib/ensPublicClient.server";
+import { readHandleAuthority } from "@/lib/handle-authority";
 import {
   ENS_REGISTRY_ADDRESS,
   ensRegistryAbi,
@@ -24,6 +24,7 @@ import {
   RevnetCoreContracts,
   revOwnerAbi,
 } from "@bananapus/nana-sdk-core";
+import { connection } from "next/server";
 import { cache } from "react";
 import { namehash, zeroAddress, type Address } from "viem";
 import { getIndexedProjectOperatorAddresses } from "./getProjectOperator";
@@ -31,6 +32,8 @@ import { getIndexedProjectOperatorAddresses } from "./getProjectOperator";
 export type ResolvedProjectRoute = ReturnType<typeof parseSlug> & {
   /** Present only when an @handle route live-verified this exact setter. */
   verifiedOperator?: Address;
+  /** Completion time of the live proof, not when a consumer reads its cache. */
+  checkedAt?: number;
 };
 
 /**
@@ -62,6 +65,9 @@ export async function resolveProjectRouteUncached(
   } catch {
     return null;
   }
+
+  // Alias proofs must never come from Next's Full Route Cache.
+  await connection();
 
   try {
     const client = getEnsPublicClient();
@@ -112,8 +118,9 @@ export async function resolveProjectRouteUncached(
     const candidateVerifies = async (candidate: Address) => {
       // The reverse claim is written on Ethereum even for L2 revnets. Address
       // equality alone is not proof that a contract operator has the same
-      // controller on both chains.
-      const authority = await readCrossChainHandleAuthority({
+      // controller on both chains, and a Safe needs its creation record from
+      // the project chain's Safe service: without it the route stays unproven.
+      const authority = await readHandleAuthority({
         sourceChainId: record.chainId,
         sourceClient: projectClient,
         mainnetClient: client,
@@ -152,7 +159,12 @@ export async function resolveProjectRouteUncached(
       // mismatch — do not turn arbitrary invalid ENS aliases into historical
       // log scans.
       if (!(await candidateVerifies(operator))) return null;
-      return { chainId: record.chainId, projectId: record.projectId, verifiedOperator: operator };
+      return {
+        chainId: record.chainId,
+        projectId: record.projectId,
+        verifiedOperator: operator,
+        checkedAt: Date.now(),
+      };
     }
 
     // Continue through canonical history only if Bendystraw was stale or
@@ -170,7 +182,12 @@ export async function resolveProjectRouteUncached(
       });
     }
     if (!operator || !(await candidateVerifies(operator))) return null;
-    return { chainId: record.chainId, projectId: record.projectId, verifiedOperator: operator };
+    return {
+      chainId: record.chainId,
+      projectId: record.projectId,
+      verifiedOperator: operator,
+      checkedAt: Date.now(),
+    };
   } catch {
     // ENS, the resolver, Bendystraw, and RPC are all upstream route
     // dependencies. Fail closed instead of accepting one side of the link.
