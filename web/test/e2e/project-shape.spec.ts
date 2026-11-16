@@ -510,7 +510,9 @@ test("home and discover shells stay contained and deterministic", async ({ page 
   ).toBeVisible();
   await expect(page.getByText("04 / Share what comes back", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("Return rewards to the revnet for supporters to share.", { exact: true }),
+    page.getByText("Revenue paid into the revnet adds to the balance its holders share.", {
+      exact: true,
+    }),
   ).toBeVisible();
   await expectContained(page, ["main", "footer"]);
   await expectNoBlockingAccessibilityFindings(page);
