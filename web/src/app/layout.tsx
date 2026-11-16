@@ -74,7 +74,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: imgUrl,
           width: 1200,
           height: 630,
-          alt: "Telligence — throw money at a problem together",
+          alt: "Telligence: throw money at a problem together",
           type: "image/png",
         },
       ],

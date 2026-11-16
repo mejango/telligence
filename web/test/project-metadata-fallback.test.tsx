@@ -37,10 +37,10 @@ function view(client: QueryClient, projectId = 7n, description = "Indexed descri
   return (
     <QueryClientProvider client={client}>
       <ProjectProviders
-        chainId={10}
+        chainId={8453}
         projectId={projectId}
         project={{ name: "Indexed name", logoUri: null, description }}
-        projects={[{ chainId: 10, projectId: Number(projectId) }]}
+        projects={[{ chainId: 8453, projectId: Number(projectId) }]}
       >
         <MetadataProbe />
       </ProjectProviders>

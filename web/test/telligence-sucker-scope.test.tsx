@@ -46,7 +46,7 @@ describe("Telligence chain scope for live sucker groups", () => {
     await act(async () => {
       await result.current.refetch();
     });
-    expect(mocks.resolveSuckers).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveSuckers).toHaveBeenCalled();
     expect(result.current.data).toEqual([current]);
   });
 

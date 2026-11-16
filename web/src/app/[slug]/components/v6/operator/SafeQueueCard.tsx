@@ -30,7 +30,6 @@ import {
   type ReviewedRelayrRequest,
 } from "@/hooks/useReviewedRelayr";
 import { mapConcurrentChecks } from "@/lib/concurrent-checks";
-import { getEnsPublicClient } from "@/lib/ensPublicClient";
 import { readHandleAuthority, unprovenSafeMessage } from "@/lib/handle-authority";
 import { recordSubmittedWrite, settleSubmittedWrite } from "@/lib/held-rows";
 import type { RelayrPostBundleResponse } from "@/lib/nana/types";
@@ -218,7 +217,7 @@ function QueuedCallSummary({ chainId, tx }: { chainId: number; tx: SafeQueuedTra
 async function requireLiveSafeAuthority(
   row: Pick<QueueRow, "chainId" | "safe" | "authorityRows" | "handleOnly">,
 ): Promise<void> {
-  const mainnetClient = getEnsPublicClient();
+  const mainnetClient = publicClientFor(PROJECT_HANDLE_CHAIN_ID);
   let hasLiveAuthority = false;
   let unprovenCreation = false;
   for (const authorityRow of row.authorityRows) {

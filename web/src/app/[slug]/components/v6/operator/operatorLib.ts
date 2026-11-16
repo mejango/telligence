@@ -2,6 +2,8 @@ import { chainDisplayName, chainSortIndex } from "@/app/constants";
 import type { ReviewedAction, ReviewedActionInput } from "@/hooks/useReviewedAction";
 import { projectRefsWhere } from "@/lib/bendystraw/projectRefs";
 import type { PermissionHolder, PermissionHolderFilter } from "@/lib/bendystraw/types";
+import { getEnsPublicClient } from "@/lib/ensPublicClient";
+import { PROJECT_HANDLE_CHAIN_ID } from "@/lib/projectHandles";
 import { rolloutAddress, rolloutChain } from "@/lib/protocol-rollout";
 import { requireDone, reviewedCall } from "@/lib/reviewed-call";
 import { wagmiConfig } from "@/lib/wagmiConfig";
@@ -52,6 +54,8 @@ export function v6ContractAddress(
 // Typed as a plain viem PublicClient: wagmi's per-chain client union makes
 // simulateContract's generics explode past TS's union-size limit (TS2590).
 export function publicClientFor(chainId: JBChainId): PublicClient {
+  // Telligence's wallet network is Base alone; Ethereum is read for ENS handles only.
+  if (chainId === PROJECT_HANDLE_CHAIN_ID) return getEnsPublicClient();
   return getPublicClient(wagmiConfig, { chainId }) as unknown as PublicClient;
 }
 

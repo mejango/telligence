@@ -14,21 +14,18 @@ const getNormalizedIndexedSuckerGroup = cache(
     projectId: number | undefined,
   ): Promise<IndexedReadResult<NonNullable<SuckerGroupQuery["suckerGroup"]>>> => {
     if (!suckerGroupId) return { data: null, status: "not-checked" };
-    if (chainId !== COMPUTE_CHAIN_ID) return { data: null, status: "missing" };
     try {
       return await cachedIndexedDisplay(["group", chainId, suckerGroupId, projectId], async () => {
         const result = await queryBendystraw(chainId, SuckerGroupOperation, { id: suckerGroupId });
-        // These deployments feed chain selectors and transaction tabs. Indexer
-        // peers must not expand Telligence's supported transaction network.
-        const group = result.suckerGroup && {
-          ...result.suckerGroup,
-          projects: result.suckerGroup.projects && {
-            ...result.suckerGroup.projects,
-            items: result.suckerGroup.projects.items.filter(
-              (project) => project.chainId === COMPUTE_CHAIN_ID,
-            ),
-          },
-        };
+        // These deployments feed chain selectors and transaction tabs. Indexer peers must not
+        // expand Telligence's transaction network: a Base page sees Base deployments only, and a
+        // group with none is missing. Routes resolve Base alone (resolveProjectRoute).
+        const read = result.suckerGroup;
+        if (chainId !== COMPUTE_CHAIN_ID || !read?.projects)
+          return { data: read, status: indexedGroupStatus(read, projectId, chainId) };
+        const items = read.projects.items.filter((project) => project.chainId === COMPUTE_CHAIN_ID);
+        if (!items.length) return { data: null, status: "missing" };
+        const group = { ...read, projects: { ...read.projects, items } };
         return { data: group, status: indexedGroupStatus(group, projectId, chainId) };
       });
     } catch {

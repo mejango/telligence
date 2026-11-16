@@ -4,7 +4,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "How compute fundraising works · Telligence",
+  title: "How compute fundraising works | Telligence",
   description:
     "Follow a contribution from a purpose to recurring inference. Understand capacity, supporter rights, and the contracts underneath.",
 };

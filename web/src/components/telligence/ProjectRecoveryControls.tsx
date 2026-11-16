@@ -199,6 +199,43 @@ function hasAuthority(snapshot: RecoverySnapshot, account?: Address) {
   );
 }
 
+type RecoveryStep = Pick<WriteRequest, "functionName" | "args">;
+
+/** Refuses a recovery step the project's current onchain state no longer allows `account`. */
+export async function assertRecoveryStep(
+  props: ProjectRecoveryControlsProps,
+  request: RecoveryStep,
+  account: Address,
+): Promise<void> {
+  const fresh = await readRecovery(props);
+  const name = request.functionName;
+  if (
+    name === "announceWinddown" ||
+    name === "setAllocationPaused" ||
+    name === "setAuthenticationEnabled"
+  ) {
+    if (!hasAuthority(fresh, account))
+      throw new ReviewRefusal(
+        "Only the project's creator or recovery wallet has authority for this action.",
+      );
+    if (name === "setAuthenticationEnabled") {
+      if (request.args?.length !== 1 || request.args[0] !== false)
+        throw new ReviewRefusal("This emergency control can only disable API authentication.");
+      if (!fresh.authenticationEnabled)
+        throw new ReviewRefusal(
+          "API authentication is already disabled. Refresh its onchain state.",
+        );
+    } else if (fresh.state !== 0 || fresh.windingDown)
+      throw new ReviewRefusal("Closure has already started. Refresh the recovery state.");
+    if (name === "setAllocationPaused" && request.args?.[0] === fresh.paused)
+      throw new ReviewRefusal("Allocation state changed. Review this action again.");
+  } else {
+    const action = withdrawalAction(fresh);
+    if (!action || name !== action.functionName || !action.ready)
+      throw new ReviewRefusal("This recovery step is not ready on Base. Refresh its cooldown.");
+  }
+}
+
 export function ProjectRecoveryControls(props: ProjectRecoveryControlsProps) {
   const { address } = useAccount();
   const headingId = useId();
@@ -222,36 +259,10 @@ export function ProjectRecoveryControls(props: ProjectRecoveryControlsProps) {
   const [failure, setFailure] = useState<{ scope: string; message: string } | null>(null);
   const { run } = useReviewedAction();
   /** The step is still allowed for this account on the project it was reviewed for. */
-  const reverify = async (request: WriteRequest, account: Address) => {
+  const reverify = async (request: RecoveryStep, account: Address) => {
     if (activeScope.current !== scope)
       throw new ReviewRefusal("The project changed. Review its recovery again.");
-    const fresh = await readRecovery(props);
-    const name = request.functionName;
-    if (
-      name === "announceWinddown" ||
-      name === "setAllocationPaused" ||
-      name === "setAuthenticationEnabled"
-    ) {
-      if (!hasAuthority(fresh, account))
-        throw new ReviewRefusal(
-          "Only the project's creator or recovery wallet has authority for this action.",
-        );
-      if (name === "setAuthenticationEnabled") {
-        if (request.args?.length !== 1 || request.args[0] !== false)
-          throw new ReviewRefusal("This emergency control can only disable API authentication.");
-        if (!fresh.authenticationEnabled)
-          throw new ReviewRefusal(
-            "API authentication is already disabled. Refresh its onchain state.",
-          );
-      } else if (fresh.state !== 0 || fresh.windingDown)
-        throw new ReviewRefusal("Closure has already started. Refresh the recovery state.");
-      if (name === "setAllocationPaused" && request.args?.[0] === fresh.paused)
-        throw new ReviewRefusal("Allocation state changed. Review this action again.");
-    } else {
-      const action = withdrawalAction(fresh);
-      if (!action || name !== action.functionName || !action.ready)
-        throw new ReviewRefusal("This recovery step is not ready on Base. Refresh its cooldown.");
-    }
+    await assertRecoveryStep(props, request, account);
     if (activeScope.current !== scope)
       throw new ReviewRefusal("The project changed. Review its recovery again.");
   };

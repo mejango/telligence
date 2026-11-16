@@ -327,7 +327,7 @@ export function ComputeCreateForm() {
                   }
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="0x… · a wallet separate from your creator wallet"
+                  placeholder="0x…, a wallet separate from your creator wallet"
                   className="mt-3 h-12"
                 />
                 {errorFor("recoveryAddress")}

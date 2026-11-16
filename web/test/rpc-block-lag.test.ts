@@ -1,7 +1,7 @@
 import { jbCenterRpcTransport } from "@/lib/jbcenter-rpc";
 import { createPublicClient, erc20Abi } from "viem";
 import { base } from "viem/chains";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** JB Center load balances reads across RPC nodes. A read pinned to a block one
  * node has already imported can land on a sibling that has not, and the sibling
@@ -22,8 +22,11 @@ afterEach(() => {
 });
 
 describe("RPC block lag", () => {
-  it("carries a pinned read through a lagging backend on the wired transport", async () => {
+  beforeEach(() => {
     vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://telligence.money");
+  });
+
+  it("carries a pinned read through a lagging backend on the wired transport", async () => {
     let calls = 0;
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
       const { id } = JSON.parse(String(init.body)) as { id: number };

@@ -26,7 +26,6 @@ import {
   useReviewedAction,
   type WriteRequest,
 } from "@/hooks/useReviewedAction";
-import { getEnsPublicClient } from "@/lib/ensPublicClient";
 import { readHandleAuthority, unprovenSafeMessage } from "@/lib/handle-authority";
 import {
   ENS_NAME_WRAPPER_ADDRESS,
@@ -295,7 +294,7 @@ export function ProjectHandleEditor({
       readHandleAuthority({
         sourceChainId: project.chainId,
         sourceClient: publicClientFor(project.chainId),
-        mainnetClient: getEnsPublicClient(),
+        mainnetClient: publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId),
         authority: operator!,
       }),
   });
@@ -320,7 +319,12 @@ export function ProjectHandleEditor({
     enabled: Boolean(operator && authorityAllowed),
     staleTime: 15_000,
     queryFn: () =>
-      readExactProjectHandle(getEnsPublicClient(), project.chainId, project.projectId, operator!),
+      readExactProjectHandle(
+        publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId),
+        project.chainId,
+        project.projectId,
+        operator!,
+      ),
   });
   const currentHandle = useMemo(
     () => (currentHandleQuery.data ? canonicalProjectHandle(currentHandleQuery.data) : null),
@@ -357,7 +361,13 @@ export function ProjectHandleEditor({
     ],
     enabled: Boolean(parsed.handle),
     staleTime: 10_000,
-    queryFn: () => readHandleSetup(getEnsPublicClient(), parsed.handle!, project, operator),
+    queryFn: () =>
+      readHandleSetup(
+        publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId),
+        parsed.handle!,
+        project,
+        operator,
+      ),
   });
 
   const expectedRecord = projectHandleRecord(project.chainId, project.projectId);
@@ -392,7 +402,7 @@ export function ProjectHandleEditor({
   };
   /** The ENS name's resolver is still exactly the one the record is written to. */
   const reverifyEnsText = async (resolver: Address, node: Hex, account: Address) => {
-    const client = getEnsPublicClient();
+    const client = publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId);
     const liveResolver = await client.readContract({
       address: ENS_REGISTRY_ADDRESS,
       abi: ensRegistryAbi,
@@ -418,12 +428,12 @@ export function ProjectHandleEditor({
     const authority = await readHandleAuthority({
       sourceChainId: project.chainId,
       sourceClient: publicClientFor(project.chainId),
-      mainnetClient: getEnsPublicClient(),
+      mainnetClient: publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId),
       authority: account,
     });
     if (!authority.allowed) throw new ReviewRefusal(authorityStatusMessage(authority.status));
 
-    const mainnetClient = getEnsPublicClient();
+    const mainnetClient = publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId);
     const blockNumber = await mainnetClient.getBlockNumber();
     const node = namehash(handle.ensName);
     const resolver = await mainnetClient.readContract({
@@ -447,7 +457,7 @@ export function ProjectHandleEditor({
     account: Address,
   ) => {
     const sourceClient = publicClientFor(project.chainId);
-    const mainnetClient = getEnsPublicClient();
+    const mainnetClient = publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId);
     if (!operator || !(await isLiveRevnetOperator(sourceClient, project, operator))) {
       throw new ReviewRefusal("The operator changed before the Safe deployment was submitted.");
     }
@@ -507,7 +517,7 @@ export function ProjectHandleEditor({
         throw new Error("Connect a current EOA owner of the operator Safe to deploy it.");
       }
       const sourceClient = publicClientFor(project.chainId);
-      const mainnetClient = getEnsPublicClient();
+      const mainnetClient = publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId);
       if (!(await isLiveRevnetOperator(sourceClient, project, operator))) {
         throw new Error("The revnet operator changed before Safe deployment.");
       }
@@ -597,7 +607,7 @@ export function ProjectHandleEditor({
     setError(null);
     setStatus("Step 1 of 2: checking the ENS resolver on Ethereum…");
     try {
-      const client = getEnsPublicClient();
+      const client = publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId);
       const fresh = await readHandleSetup(client, parsed.handle, project, operator);
       if (!fresh.resolver) {
         throw new Error(
@@ -701,12 +711,12 @@ export function ProjectHandleEditor({
       const liveAuthority = await readHandleAuthority({
         sourceChainId: project.chainId,
         sourceClient: liveProjectClient,
-        mainnetClient: getEnsPublicClient(),
+        mainnetClient: publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId),
         authority: liveCandidate,
       });
       if (!liveAuthority.allowed) throw new Error(authorityStatusMessage(liveAuthority.status));
 
-      const client = getEnsPublicClient();
+      const client = publicClientFor(PROJECT_HANDLE_CHAIN_ID as JBChainId);
       const fresh = await readHandleSetup(client, parsed.handle, project, liveCandidate);
       if (fresh.textRecord !== expectedRecord) {
         throw new Error(`Set the ENS juicebox record to ${expectedRecord} before publishing.`);

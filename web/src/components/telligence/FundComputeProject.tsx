@@ -8,6 +8,7 @@ import {
   SAFE_PROPOSAL_PENDING_LINE,
   useReviewedAction,
 } from "@/hooks/useReviewedAction";
+import { erc20ApproveAbi } from "@/lib/erc20-approve";
 import { isSafeConnection } from "@/lib/safe-connector";
 import { gatewayRequest } from "@/lib/telligence/api";
 import { computeFactoryAbi, computeReadAbi } from "@/lib/telligence/factory";
@@ -180,7 +181,7 @@ export function FundComputeProject({ project }: { project: ProjectSnapshot }) {
                   {
                     chainId: 8453,
                     address: VVV_ADDRESS,
-                    abi: erc20Abi,
+                    abi: erc20ApproveAbi,
                     functionName: "approve",
                     args: [deployment.canonicalTerminal, value],
                   },
@@ -263,7 +264,7 @@ export function FundComputeProject({ project }: { project: ProjectSnapshot }) {
         project’s Revnet terms; it does not buy a guaranteed amount of credit.
       </p>
       <label htmlFor={`fund-${project.id}`} className="mt-6 block text-xs">
-        Contribution · VVV on Base
+        Contribution in VVV on Base
       </label>
       <Input
         id={`fund-${project.id}`}

@@ -1,6 +1,5 @@
 import { useCreatorSession } from "@/hooks/useCreatorSession";
 import { useReviewedCreatorSignature } from "@/hooks/useReviewedCreatorSignature";
-import { registerTransactionReviewHandler } from "@/lib/transaction-review";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { type Address } from "viem";
 import { createSiweMessage } from "viem/siwe";
@@ -13,18 +12,24 @@ const mocks = vi.hoisted(() => ({
     chainId: 8453 as number | undefined,
   },
   getAccount: vi.fn(),
-  getWalletClient: vi.fn(),
-  switchChain: vi.fn(),
+  signReviewed: vi.fn(),
   signMessage: vi.fn(),
 }));
 vi.mock("wagmi", () => ({
   useAccount: () => mocks.account,
   useConfig: () => mocks.config,
-  useSwitchChain: () => ({ switchChainAsync: mocks.switchChain }),
 }));
-vi.mock("wagmi/actions", () => ({
-  getAccount: mocks.getAccount,
-  getWalletClient: mocks.getWalletClient,
+vi.mock("wagmi/actions", () => ({ getAccount: mocks.getAccount }));
+// Core's reviewed signature, reduced to its contract with sign-in: the review of the exact
+// message, the recheck, the wallet, then the adapter's check that the wallet did not change.
+vi.mock("@/hooks/useReviewedAction", () => ({
+  loadEngine: async () => ({ signReviewed: mocks.signReviewed }),
+  reviewedWalletAdapter: (_config: unknown, account: Address) => ({
+    requireUnchanged: () => {
+      if (mocks.account.address !== account)
+        throw new Error("The connected account changed. Review again.");
+    },
+  }),
 }));
 const ADDRESS = "0x1111111111111111111111111111111111111111" as Address;
 const SIGNATURE = `0x${"11".repeat(65)}`;
@@ -55,42 +60,28 @@ beforeEach(() => {
   window.localStorage.clear();
   mocks.account = { address: ADDRESS, chainId: 8453 };
   mocks.getAccount.mockImplementation(() => mocks.account);
-  mocks.switchChain.mockImplementation(async ({ chainId }: { chainId: number }) => {
-    mocks.account = { ...mocks.account, chainId };
-  });
+  mocks.signMessage.mockReset();
   mocks.signMessage.mockResolvedValue(SIGNATURE);
-  mocks.getWalletClient.mockResolvedValue({
-    account: { address: ADDRESS },
-    signMessage: mocks.signMessage,
-  });
+  mocks.signReviewed.mockReset();
+  mocks.signReviewed.mockImplementation(
+    async (signatures: { message: string }[], action: { reverify?: () => Promise<void> }) => {
+      await action.reverify?.();
+      return [await mocks.signMessage(signatures[0]!.message)];
+    },
+  );
 });
 
 describe("reviewed creator authentication boundary", () => {
   // wallet-action:telligence-creator-signature
   it("reviews the exact Base SIWE authorization before signing", async () => {
-    const events: string[] = [];
     const payload = challenge();
-    const dispose = registerTransactionReviewHandler(async (review) => {
-      events.push("review");
-      expect(review).toMatchObject({
-        kind: "authorization",
-        calls: [],
-        authorization: { type: "EIP-4361 Sign-In with Ethereum", message: payload.message },
-      });
-      return true;
-    });
-    mocks.signMessage.mockImplementation(async () => {
-      events.push("sign");
-      return SIGNATURE;
-    });
     const { result } = renderHook(useReviewedCreatorSignature);
     await expect(result.current.signCreatorMessageAsync(payload)).resolves.toBe(SIGNATURE);
-    expect(events).toEqual(["review", "sign"]);
-    expect(mocks.signMessage).toHaveBeenCalledWith({
-      account: { address: ADDRESS },
-      message: payload.message,
-    });
-    dispose();
+    expect(mocks.signReviewed).toHaveBeenCalledTimes(1);
+    const [signatures, action] = mocks.signReviewed.mock.calls[0]!;
+    expect(signatures).toEqual([{ kind: "message", chainId: 8453, message: payload.message }]);
+    expect(action).toMatchObject({ account: ADDRESS, title: "Sign in to Telligence" });
+    expect(mocks.signMessage).toHaveBeenCalledWith(payload.message);
   });
 
   it.each([
@@ -106,20 +97,18 @@ describe("reviewed creator authentication boundary", () => {
     await expect(result.current.signCreatorMessageAsync(challenge(override))).rejects.toThrow(
       "sign-in message",
     );
-    expect(mocks.signMessage).not.toHaveBeenCalled();
+    expect(mocks.signReviewed).not.toHaveBeenCalled();
   });
 
   it("withholds signatures after an account switch while the wallet prompt is open", async () => {
-    const dispose = registerTransactionReviewHandler(async () => true);
     mocks.signMessage.mockImplementationOnce(async () => {
       mocks.account = { ...mocks.account, address: "0x2222222222222222222222222222222222222222" };
       return SIGNATURE;
     });
     const { result } = renderHook(useReviewedCreatorSignature);
     await expect(result.current.signCreatorMessageAsync(challenge())).rejects.toThrow(
-      "account or network changed",
+      "account changed",
     );
-    dispose();
   });
 
   it("does not verify a stale signature after the wallet changes", async () => {
@@ -128,7 +117,6 @@ describe("reviewed creator authentication boundary", () => {
       .mockResolvedValueOnce(json({ error: { message: "Sign in" } }, 401))
       .mockResolvedValueOnce(json(challenge()));
     vi.stubGlobal("fetch", request);
-    const dispose = registerTransactionReviewHandler(async () => true);
     mocks.signMessage.mockImplementationOnce(async () => {
       mocks.account = { ...mocks.account, address: "0x2222222222222222222222222222222222222222" };
       return SIGNATURE;
@@ -142,7 +130,6 @@ describe("reviewed creator authentication boundary", () => {
       false,
     );
     expect(result.current.session).toBeNull();
-    dispose();
   });
 
   it("clears the creator session at expiry without waiting for another request", async () => {

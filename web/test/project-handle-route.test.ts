@@ -67,7 +67,8 @@ vi.mock("@/lib/ensPublicClient.server", () => ({
     readContract: mocks.mainnetRead,
     request: mocks.mainnetRequest,
     getBlockNumber: mocks.mainnetBlockNumber,
-    getBytecode: mocks.mainnetBytecode,
+    getCode: mocks.mainnetCode,
+    getStorageAt: mocks.mainnetStorage,
   }),
 }));
 vi.mock("@/app/[slug]/getSuckerGroup", () => ({ getSuckerGroup: async () => null }));

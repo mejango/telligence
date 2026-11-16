@@ -3,7 +3,7 @@ import { RecoveryLookup } from "@/components/telligence/RecoveryLookup";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Recover compute backing · Telligence",
+  title: "Recover compute backing | Telligence",
   description:
     "Read and recover your compute position directly from its Base contracts, even when the gateway is unavailable.",
 };

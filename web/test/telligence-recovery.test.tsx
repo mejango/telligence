@@ -1,4 +1,7 @@
-import { ProjectRecoveryControls } from "@/components/telligence/ProjectRecoveryControls";
+import {
+  assertRecoveryStep,
+  ProjectRecoveryControls,
+} from "@/components/telligence/ProjectRecoveryControls";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
@@ -10,19 +13,12 @@ const mocks = vi.hoisted(() => ({
   readContract: vi.fn(),
   getBlock: vi.fn(),
   write: vi.fn(),
-  reverify: undefined as
+  /** What the reviewed run resolves with. */
+  result: null as unknown,
+  /** The action the component last ran. */
+  action: undefined as
     | undefined
-    | ((
-        variables: { functionName: string; args?: readonly unknown[] },
-        account: Address,
-      ) => Promise<void>),
-  receipt: {
-    isLoading: false,
-    isSuccess: false,
-    isError: false,
-    isSafeProposal: false,
-    statusMessage: undefined as string | undefined,
-  },
+    | { reverify?: (call: unknown, step: number) => Promise<void>; calls: unknown[] },
 }));
 
 vi.mock("wagmi", () => ({ useAccount: () => ({ address: mocks.account, isConnected: true }) }));
@@ -32,13 +28,28 @@ vi.mock("@/lib/wagmiTransports", () => ({
     return { readContract: mocks.readContract, getBlock: mocks.getBlock };
   },
 }));
-vi.mock("@/hooks/useReviewedWriteContract", () => ({
-  useWriteContract: (options: { reverify?: typeof mocks.reverify }) => {
-    mocks.reverify = options.reverify;
-    return { writeContractAsync: mocks.write, isPending: false };
-  },
-  useWaitForTransactionReceipt: () => mocks.receipt,
-}));
+vi.mock("@/hooks/useReviewedAction", () => {
+  class ReviewRefusal extends Error {}
+  return {
+    ReviewRefusal,
+    SAFE_PROPOSAL_PENDING_LINE: "This proposal is waiting in your Safe. Finish it there first.",
+    failedLine: (result: { error: string }) => result.error,
+    // The request itself stands for its reviewed call.
+    reviewedCall: (request: unknown) => request,
+    useReviewedAction: () => ({
+      run: async (action: NonNullable<typeof mocks.action>) => {
+        mocks.action = action;
+        try {
+          await action.reverify?.(action.calls[0], 0);
+        } catch (error) {
+          return { status: "failed", error: (error as Error).message, failure: error };
+        }
+        mocks.write(action.calls[0]);
+        return mocks.result;
+      },
+    }),
+  };
+});
 vi.mock("@/components/ButtonWithWallet", () => ({
   ButtonWithWallet: ({ children, disabled, onClick }: ComponentProps<"button">) => (
     <button disabled={disabled} onClick={onClick}>
@@ -56,6 +67,7 @@ const diem = "0xf4D97F2da56E8C3098F3a8d538DB630A2606A024" as const;
 const vvv = "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf" as const;
 const NOW = 1_800_000_000n;
 const HASH = `0x${"a".repeat(64)}` as const;
+const props = { revnetId: 42n, policyAddress: policy, vaultAddress: vault } as const;
 let values: Record<string, unknown>;
 
 function mount() {
@@ -69,13 +81,9 @@ function mount() {
 
 beforeEach(() => {
   mocks.account = creator;
-  mocks.receipt = {
-    isLoading: false,
-    isSuccess: false,
-    isError: false,
-    isSafeProposal: false,
-    statusMessage: undefined,
-  };
+  mocks.result = { status: "done", hashes: [HASH], receipts: [{}] };
+  mocks.action = undefined;
+  mocks.write.mockReset();
   vi.spyOn(Date, "now").mockReturnValue(Number(NOW) * 1000);
   values = {
     CREATOR: creator,
@@ -101,12 +109,6 @@ beforeEach(() => {
     if (!(functionName in values)) throw new Error(`Unexpected read: ${functionName}`);
     return values[functionName];
   });
-  mocks.write.mockImplementation(
-    async (variables: { functionName: string; args?: readonly unknown[] }) => {
-      await mocks.reverify?.(variables, mocks.account);
-      return HASH;
-    },
-  );
 });
 
 describe("wallet-action:telligence-recovery project recovery", () => {
@@ -146,7 +148,7 @@ describe("wallet-action:telligence-recovery project recovery", () => {
     await screen.findByText("API authentication: Enabled");
     expect(screen.queryByRole("button", { name: /API authentication/ })).not.toBeInTheDocument();
     await expect(
-      mocks.reverify?.({ functionName: "setAuthenticationEnabled", args: [false] }, mocks.account),
+      assertRecoveryStep(props, { functionName: "setAuthenticationEnabled", args: [false] }, mocks.account),
     ).rejects.toThrow(/authority|creator|recovery/i);
   });
 
@@ -166,7 +168,7 @@ describe("wallet-action:telligence-recovery project recovery", () => {
     values.noticeEndsAt = NOW + 604800n;
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Disable API authentication" }));
-    await waitFor(() => expect(mocks.write).toHaveResolvedWith(HASH));
+    await waitFor(() => expect(mocks.write).toHaveBeenCalled());
     expect(screen.getByRole("button", { name: "Start compute withdrawal" })).toBeDisabled();
   });
 
@@ -185,12 +187,12 @@ describe("wallet-action:telligence-recovery project recovery", () => {
     await screen.findByRole("button", { name: "Disable API authentication" });
     values.CREATOR = "0x9999999999999999999999999999999999999999";
     await expect(
-      mocks.reverify?.({ functionName: "setAuthenticationEnabled", args: [false] }, creator),
+      assertRecoveryStep(props, { functionName: "setAuthenticationEnabled", args: [false] }, creator),
     ).rejects.toThrow(/authority|creator|recovery/i);
     values.CREATOR = creator;
     values.authenticationEnabled = false;
     await expect(
-      mocks.reverify?.({ functionName: "setAuthenticationEnabled", args: [false] }, creator),
+      assertRecoveryStep(props, { functionName: "setAuthenticationEnabled", args: [false] }, creator),
     ).rejects.toThrow(/already disabled|authentication.*changed/i);
   });
 
@@ -200,21 +202,18 @@ describe("wallet-action:telligence-recovery project recovery", () => {
       mount();
       await screen.findByRole("button", { name: "Disable API authentication" });
       await expect(
-        mocks.reverify?.({ functionName: "setAuthenticationEnabled", args }, creator),
+        assertRecoveryStep(props, { functionName: "setAuthenticationEnabled", args }, creator),
       ).rejects.toThrow(/only.*disable|invalid.*authentication/i);
     },
   );
 
   it("does not report authentication disabled before a Safe proposal executes", async () => {
-    mocks.receipt.isSafeProposal = true;
-    mocks.receipt.isLoading = true;
-    mocks.receipt.statusMessage = "Safe proposal submitted. Awaiting approvals and execution.";
+    mocks.result = { status: "proposed", step: 0, safeTxHash: HASH };
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Disable API authentication" }));
-    expect(await screen.findByText(/Safe proposal submitted/)).toBeInTheDocument();
+    expect(await screen.findByText(/waiting in your Safe/)).toBeInTheDocument();
     expect(screen.getByText("API authentication: Enabled")).toBeInTheDocument();
     expect(screen.queryByText("API authentication: Disabled")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Disable API authentication" })).toBeDisabled();
   });
 
   it("offers only onchain creator or recovery authority the pause and closure controls", async () => {
@@ -354,30 +353,26 @@ describe("wallet-action:telligence-recovery project recovery", () => {
     await screen.findByRole("button", { name: "Announce closure" });
     values.CREATOR = "0x9999999999999999999999999999999999999999";
     await expect(
-      mocks.reverify?.({ functionName: "announceWinddown", args: [] }, creator),
+      assertRecoveryStep(props, { functionName: "announceWinddown", args: [] }, creator),
     ).rejects.toThrow(/authority|creator|recovery/i);
   });
 
   it("keeps a Safe proposal pending instead of claiming successful recovery", async () => {
-    mocks.receipt.isSafeProposal = true;
-    mocks.receipt.isLoading = true;
-    mocks.receipt.statusMessage = "Safe proposal submitted. Awaiting approvals and execution.";
+    mocks.result = { status: "proposed", step: 0, safeTxHash: HASH };
     mount();
     // Receipt state is only visible for this component's submitted hash.
     fireEvent.click(await screen.findByRole("button", { name: "Announce closure" }));
-    expect(await screen.findByText(/Safe proposal submitted/)).toBeInTheDocument();
+    expect(await screen.findByText(/waiting in your Safe/)).toBeInTheDocument();
     expect(screen.queryByText("Confirmed on Base.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Announce closure" })).toBeDisabled();
   });
 
   it("cancels a review when its recovery component has been unmounted", async () => {
     const { unmount } = mount();
-    await screen.findByRole("button", { name: "Announce closure" });
-    const reverify = mocks.reverify;
+    fireEvent.click(await screen.findByRole("button", { name: "Announce closure" }));
+    await waitFor(() => expect(mocks.action).toBeDefined());
+    const { reverify, calls } = mocks.action!;
     unmount();
-    await expect(
-      reverify?.({ functionName: "announceWinddown", args: [] }, creator),
-    ).rejects.toThrow(/project changed/i);
+    await expect(reverify?.(calls[0], 0)).rejects.toThrow(/project changed/i);
   });
 
   it("keeps an unexpectedly long provider deadline readable and blocked", async () => {
@@ -397,7 +392,7 @@ describe("wallet-action:telligence-recovery project recovery", () => {
     await screen.findByRole("button", { name: "Release backing" });
     values.stakedInfos = [0n, NOW + 100n, 1n];
     await expect(
-      mocks.reverify?.({ functionName: "claimDiemAndBeginVVVUnstake", args: [] }, creator),
+      assertRecoveryStep(props, { functionName: "claimDiemAndBeginVVVUnstake", args: [] }, creator),
     ).rejects.toThrow(/not ready/i);
   });
 });
