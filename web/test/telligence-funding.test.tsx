@@ -159,7 +159,7 @@ type Action = {
 };
 const action = () => m.run.mock.calls[0][0] as Action;
 
-describe("wallet-action:telligence-funding reviewed compute contributions", () => {
+describe("reviewed compute contributions", () => {
   it.each(["1", "2"])(
     "reviews the exact approval and the stock terminal payment as one action for policy version %s",
     async (policyVersion) => {
@@ -186,7 +186,7 @@ describe("wallet-action:telligence-funding reviewed compute contributions", () =
       expect(m.refresh).toHaveBeenCalled();
     },
   );
-  it("sends the payment alone when the allowance already covers it", async () => {
+  it("wallet-action:telligence-funding sends the payment alone when the allowance already covers it", async () => {
     const original = m.read.getMockImplementation()!;
     m.read.mockImplementation(async (arg) =>
       arg.functionName === "allowance" ? 2n * 10n ** 18n : original(arg),

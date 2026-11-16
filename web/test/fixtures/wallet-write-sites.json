@@ -70,7 +70,13 @@
           1
         ],
         ["reviewed-action-hook", "src/app/create/RevnetCreate.tsx", "Page", "useReviewedAction", 1],
-        ["reviewed-relayr-quote-hook", "src/app/create/RevnetCreate.tsx", "Page", "useGetRelayrTxQuote", 1]
+        [
+          "reviewed-relayr-quote-hook",
+          "src/app/create/RevnetCreate.tsx",
+          "Page",
+          "useGetRelayrTxQuote",
+          1
+        ]
       ]
     },
     {
@@ -626,13 +632,6 @@
           "useCreatorSession",
           "useReviewedCreatorSignature",
           1
-        ],
-        [
-          "raw-wallet-call",
-          "src/hooks/useReviewedCreatorSignature.ts",
-          "signCreatorMessageAsync",
-          "signMessage",
-          1
         ]
       ]
     },
@@ -640,18 +639,12 @@
       "id": "telligence-funding",
       "label": "Compute contributions",
       "sites": [
+        ["reviewed-action", "src/components/telligence/FundComputeProject.tsx", "fund", "run", 1],
         [
-          "reviewed-write",
-          "src/components/telligence/FundComputeProject.tsx",
-          "fund",
-          "writeContractAsync",
-          2
-        ],
-        [
-          "reviewed-write-hook",
+          "reviewed-action-hook",
           "src/components/telligence/FundComputeProject.tsx",
           "FundComputeProject",
-          "useWriteContract",
+          "useReviewedAction",
           1
         ]
       ]
@@ -661,17 +654,17 @@
       "label": "Compute project launch",
       "sites": [
         [
-          "reviewed-write",
+          "reviewed-action",
           "src/components/telligence/LaunchComputeProjectButton.tsx",
           "prepare",
-          "writeContractAsync",
+          "run",
           1
         ],
         [
-          "reviewed-write-hook",
+          "reviewed-action-hook",
           "src/components/telligence/LaunchComputeProjectButton.tsx",
           "LaunchComputeProjectButton",
-          "useWriteContract",
+          "useReviewedAction",
           1
         ]
       ]
@@ -681,17 +674,17 @@
       "label": "Compute backing recovery",
       "sites": [
         [
-          "reviewed-write",
+          "reviewed-action",
           "src/components/telligence/ProjectRecoveryControls.tsx",
           "submit",
-          "writeContractAsync",
-          4
+          "run",
+          1
         ],
         [
-          "reviewed-write-hook",
+          "reviewed-action-hook",
           "src/components/telligence/ProjectRecoveryControls.tsx",
           "ProjectRecoveryControls",
-          "useWriteContract",
+          "useReviewedAction",
           1
         ]
       ]

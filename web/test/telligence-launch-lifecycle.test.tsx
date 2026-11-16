@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   push: vi.fn(),
   activity: vi.fn(),
   viewAs: vi.fn(),
+  /** The SDK's cross-tab locks; each test's default runs the work at once. */
+  locks: vi.fn(),
   /** The wallet is a Safe app: a sent step is a proposal, not an execution. */
   safe: false,
   /** The final synchronous gate of the last reviewed action. */
@@ -76,6 +78,10 @@ vi.mock("@/hooks/useReviewedAction", () => ({
       }
     },
   }),
+}));
+vi.mock("@bananapus/nana-sdk-core/review", async (original) => ({
+  ...(await original<object>()),
+  browserLocks: () => mocks.locks(),
 }));
 vi.mock("@/lib/reviewed-call", () => ({
   revertedStep: (failure: { name?: string; step?: number } | null) =>
@@ -193,6 +199,9 @@ function callsTo(path: string) {
 
 beforeEach(() => {
   localStorage.clear();
+  mocks.locks.mockReturnValue({
+    request: (_name: string, work: (lock: null) => Promise<unknown>) => work(null),
+  });
   mocks.safe = false;
   mocks.address = CREATOR;
   mocks.session = { address: CREATOR, csrfToken: "csrf" };
@@ -223,8 +232,8 @@ beforeEach(() => {
   mocks.activity.mockReturnValue(undefined);
 });
 
-describe("wallet-action:telligence-launch compute launch wallet lifecycle", () => {
-  it("registers only the confirmed factory identity and exact creator", async () => {
+describe("compute launch wallet lifecycle", () => {
+  it("wallet-action:telligence-launch registers only the confirmed factory identity and exact creator", async () => {
     render(component());
     clickLaunch();
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/compute/project-7/keys"));
@@ -488,11 +497,11 @@ describe("wallet-action:telligence-launch compute launch wallet lifecycle", () =
   });
   it("waits on the creator launch lock and rereads submission state before preparing", async () => {
     const release = deferred<void>();
-    const request = vi.fn(async (_name: string, callback: () => Promise<unknown>) => {
+    const request = vi.fn(async (_name: string, work: (lock: null) => Promise<unknown>) => {
       await release.promise;
-      return callback();
+      return work(null);
     });
-    vi.stubGlobal("navigator", { locks: { request } });
+    mocks.locks.mockReturnValue({ request });
     render(component());
     clickLaunch();
     await waitFor(() =>

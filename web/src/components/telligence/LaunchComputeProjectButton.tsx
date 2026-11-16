@@ -8,8 +8,8 @@ import {
   SAFE_PROPOSAL_PENDING_LINE,
   useReviewedAction,
 } from "@/hooks/useReviewedAction";
-import { revertedStep } from "@/lib/reviewed-call";
 import { jbCenterIpfs } from "@/lib/jbcenter-ipfs";
+import { revertedStep } from "@/lib/reviewed-call";
 import { gatewayRequest } from "@/lib/telligence/api";
 import { computeFactoryAbi, computeReadAbi } from "@/lib/telligence/factory";
 import {
@@ -37,7 +37,12 @@ import { transactionActivityForHash } from "@/lib/transaction-activity";
 import { requireNoViewAs } from "@/lib/view-as";
 import { getViemPublicClient } from "@/lib/wagmiTransports";
 import { waitForReceiptWithRetry } from "@/lib/waitForReceipt";
-import { intent as intentValue, writeIntentKey } from "@bananapus/nana-sdk-core/review";
+import {
+  browserLocks,
+  intent as intentValue,
+  writeIntentKey,
+  type LockHandle,
+} from "@bananapus/nana-sdk-core/review";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { bytesToHex, isAddress, zeroAddress, type TransactionReceipt } from "viem";
@@ -116,7 +121,7 @@ export function LaunchComputeProjectButton({
     try {
       assertCreator();
       if (!creator) throw new Error("Connect a wallet first.");
-      const prepare = async () => {
+      const prepare = async (lock: LockHandle | null) => {
         assertCreator();
         // Reread at action time: another tab may have submitted since this component rendered.
         const rawPending = localStorage.getItem(pendingLaunchKey(creator));
@@ -252,6 +257,7 @@ export function LaunchComputeProjectButton({
                 }),
               }),
             ],
+            locks: lock ? [lock] : undefined,
             assertWriteState: assertCreator,
             // The hash is saved before its receipt is awaited, so a reload resumes registration.
             onSubmitted: (_call, _step, hash) => {
@@ -283,10 +289,10 @@ export function LaunchComputeProjectButton({
       };
       // Different drafts/salts still represent one unresolved launch for this creator. Release only after its hash is durable,
       // before waiting for a receipt, so the next tab resumes that saved intent instead of opening a second wallet request.
-      const locks = navigator.locks;
-      const prepared = locks
-        ? await locks.request(`telligence:launch:8453:${creator.toLowerCase()}`, prepare)
-        : await prepare();
+      const prepared = await browserLocks().request(
+        `telligence:launch:8453:${creator.toLowerCase()}`,
+        prepare,
+      );
       // The review was closed with nothing sent.
       if (!prepared) return;
       const { intent, deployment, client } = prepared;

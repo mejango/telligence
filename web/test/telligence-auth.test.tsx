@@ -72,8 +72,7 @@ beforeEach(() => {
 });
 
 describe("reviewed creator authentication boundary", () => {
-  // wallet-action:telligence-creator-signature
-  it("reviews the exact Base SIWE authorization before signing", async () => {
+  it("wallet-action:telligence-creator-signature reviews the exact Base SIWE message before signing", async () => {
     const payload = challenge();
     const { result } = renderHook(useReviewedCreatorSignature);
     await expect(result.current.signCreatorMessageAsync(payload)).resolves.toBe(SIGNATURE);

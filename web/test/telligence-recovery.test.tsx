@@ -17,8 +17,7 @@ const mocks = vi.hoisted(() => ({
   result: null as unknown,
   /** The action the component last ran. */
   action: undefined as
-    | undefined
-    | { reverify?: (call: unknown, step: number) => Promise<void>; calls: unknown[] },
+    undefined | { reverify?: (call: unknown, step: number) => Promise<void>; calls: unknown[] },
 }));
 
 vi.mock("wagmi", () => ({ useAccount: () => ({ address: mocks.account, isConnected: true }) }));
@@ -111,7 +110,7 @@ beforeEach(() => {
   });
 });
 
-describe("wallet-action:telligence-recovery project recovery", () => {
+describe("project recovery", () => {
   it.each([creator, recovery])(
     "lets authorized wallet %s disable authentication through its fixed policy",
     async (account) => {
@@ -148,7 +147,11 @@ describe("wallet-action:telligence-recovery project recovery", () => {
     await screen.findByText("API authentication: Enabled");
     expect(screen.queryByRole("button", { name: /API authentication/ })).not.toBeInTheDocument();
     await expect(
-      assertRecoveryStep(props, { functionName: "setAuthenticationEnabled", args: [false] }, mocks.account),
+      assertRecoveryStep(
+        props,
+        { functionName: "setAuthenticationEnabled", args: [false] },
+        mocks.account,
+      ),
     ).rejects.toThrow(/authority|creator|recovery/i);
   });
 
@@ -187,12 +190,20 @@ describe("wallet-action:telligence-recovery project recovery", () => {
     await screen.findByRole("button", { name: "Disable API authentication" });
     values.CREATOR = "0x9999999999999999999999999999999999999999";
     await expect(
-      assertRecoveryStep(props, { functionName: "setAuthenticationEnabled", args: [false] }, creator),
+      assertRecoveryStep(
+        props,
+        { functionName: "setAuthenticationEnabled", args: [false] },
+        creator,
+      ),
     ).rejects.toThrow(/authority|creator|recovery/i);
     values.CREATOR = creator;
     values.authenticationEnabled = false;
     await expect(
-      assertRecoveryStep(props, { functionName: "setAuthenticationEnabled", args: [false] }, creator),
+      assertRecoveryStep(
+        props,
+        { functionName: "setAuthenticationEnabled", args: [false] },
+        creator,
+      ),
     ).rejects.toThrow(/already disabled|authentication.*changed/i);
   });
 
@@ -257,7 +268,7 @@ describe("wallet-action:telligence-recovery project recovery", () => {
     );
   });
 
-  it("keeps closure irreversible and bound to its own policy", async () => {
+  it("wallet-action:telligence-recovery keeps closure irreversible and bound to its own policy", async () => {
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Announce closure" }));
     await waitFor(() =>

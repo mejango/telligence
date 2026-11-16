@@ -306,8 +306,7 @@ export function ProjectRecoveryControls(props: ProjectRecoveryControlsProps) {
         calls: [reviewedCall(request)],
       });
       if (result?.status === "failed") setFailure({ scope, message: failedLine(result) });
-      if (result?.status === "proposed")
-        setConfirmed({ scope, line: SAFE_PROPOSAL_PENDING_LINE });
+      if (result?.status === "proposed") setConfirmed({ scope, line: SAFE_PROPOSAL_PENDING_LINE });
       if (result?.status === "done") {
         setConfirmed({ scope, line: "Confirmed on Base." });
         void refetch();
