@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   write: vi.fn(),
   /** What the reviewed run resolves with. */
   result: null as unknown,
+  /** A sent step whose receipt is still awaited, and the call that ends the wait. */
+  following: false,
+  dismiss: vi.fn(),
   /** What changes onchain while the review is open. */
   duringReview: undefined as undefined | (() => void),
   /** The action the component last ran. */
@@ -38,6 +41,8 @@ vi.mock("@/hooks/useReviewedAction", () => {
     // The request itself stands for its reviewed call.
     reviewedCall: (request: unknown) => request,
     useReviewedAction: () => ({
+      following: mocks.following,
+      dismiss: mocks.dismiss,
       run: async (action: NonNullable<typeof mocks.action>) => {
         mocks.action = action;
         mocks.duringReview?.();
@@ -86,6 +91,7 @@ beforeEach(() => {
   mocks.result = { status: "done", hashes: [HASH], receipts: [{}] };
   mocks.action = undefined;
   mocks.duringReview = undefined;
+  mocks.following = false;
   mocks.write.mockReset();
   vi.spyOn(Date, "now").mockReturnValue(Number(NOW) * 1000);
   values = {
@@ -369,6 +375,20 @@ describe("project recovery", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Announce closure" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/authority|creator|recovery/i);
     expect(mocks.write).not.toHaveBeenCalled();
+  });
+
+  it("frees the other recovery actions once a stuck confirmation wait is ended", async () => {
+    mocks.following = true;
+    // Core ends the wait with null and keeps following what was sent.
+    mocks.result = null;
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Announce closure" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop waiting" }));
+    expect(mocks.dismiss).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Announce closure" })).toBeEnabled(),
+    );
+    expect(screen.queryByText("Confirmed on Base.")).not.toBeInTheDocument();
   });
 
   it("keeps a Safe proposal pending instead of claiming successful recovery", async () => {

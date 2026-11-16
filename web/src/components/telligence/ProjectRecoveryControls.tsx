@@ -257,7 +257,7 @@ export function ProjectRecoveryControls(props: ProjectRecoveryControlsProps) {
   const [confirmed, setConfirmed] = useState<{ scope: string; line: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [failure, setFailure] = useState<{ scope: string; message: string } | null>(null);
-  const { run } = useReviewedAction();
+  const { run, following, dismiss } = useReviewedAction();
   /** The step is still allowed for this account on the project it was reviewed for. */
   const reverify = async (request: RecoveryStep, account: Address) => {
     if (activeScope.current !== scope)
@@ -461,6 +461,14 @@ export function ProjectRecoveryControls(props: ProjectRecoveryControlsProps) {
             </p>
           )}
         </div>
+      )}
+      {following && (
+        <p role="status" className="mt-4 text-sm leading-7 text-melon-700">
+          Waiting for confirmation on Base.{" "}
+          <button type="button" className="compute-text-link" onClick={() => dismiss()}>
+            Stop waiting
+          </button>
+        </p>
       )}
       {confirmed?.scope === scope && (
         <p role="status" className="mt-4 text-sm leading-7 text-melon-700">

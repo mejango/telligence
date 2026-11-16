@@ -20,8 +20,16 @@ Bring the Telligence webclient up to the current Revnet Money baseline (UX, DX, 
 - [x] 5. Copy review of Telligence-owned surfaces against the canon (no middots, plain facts, money-risk caveats only, balance sheet, cash out, holders, JBP6, no inline glossary, short hints)
 - [x] 6. Agent and developer surfaces: llms.txt, AGENTS.md, README/TESTING/DEPLOYMENT, CI workflows at the repo root
 - [x] 7. Render desktop and phone against live data, fix what shows
-- [ ] 8. Codex review, fix, open PR (no merge without jango's go-ahead)
+- [x] 8. Codex review, fix, open PR (no merge without jango's go-ahead)
 
 ## Review
 
-(filled in at the end)
+- Merged Revnet Money `6dc9564e` into `web/` (SDK core 2.3.2 to 6.10.0, Next 16.4.2, Node 26.13.1). Telligence's home, discover, create, compute, recover and how-it-works pages, Base scope and gateway proxy are kept.
+- Funding, launch, recovery and creator sign-in now run through the SDK's reviewed run (`useReviewedAction`, `signReviewed`). Funding is one run (approval when needed, then payment) held by the pay intent. The launch lock uses `browserLocks()`. Each flow can end a stuck receipt wait with "Stop waiting"; what was sent stays followed.
+- Ethereum is read for ENS handles only, through `publicClientFor`, so the handle editor and Safe queue files match upstream.
+- Agent surfaces: `/llms.txt` and `/skill.md` describe Telligence. Titles on the 404, account and project pages say Telligence.
+- Copy: "cash out", "balance" and "holders" per the canon, the home's fourth step states what happens to revenue, the recovery wallet hint is two sentences.
+- Verification: `npm --prefix web run check` passes (3,638 unit tests, wallet inventory, build, standalone, bundle budgets with Telligence's routes, 178 browser tests). Rendered home, how-it-works, discover, create, recover, learn and `/base:1` at 1280 and 390 against live Base data; no horizontal overflow.
+- Codex gpt-6.1-sol, two passes. Fixed: launch record lost when storage fails after sending, stuck receipt waits in all three flows, recovery tests that bypassed the component. Not done: reading pre-merge pending-contribution records, since production never enabled funding.
+- Decisions for jango: the inherited Revnet guides (`/learn`, `/build`, `/audit`) still describe revnet.money's launch form; `src/app/create/RevnetCreate.tsx` stays only for inherited tests. The dev server alone crashes on the 404 page's button (production renders it).
+- Not exercised: the gateway, a funded contribution, a launch or a recovery against live contracts.
