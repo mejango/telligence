@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   write: vi.fn(),
   /** What the reviewed run resolves with. */
   result: null as unknown,
+  /** What changes onchain while the review is open. */
+  duringReview: undefined as undefined | (() => void),
   /** The action the component last ran. */
   action: undefined as
     undefined | { reverify?: (call: unknown, step: number) => Promise<void>; calls: unknown[] },
@@ -38,6 +40,7 @@ vi.mock("@/hooks/useReviewedAction", () => {
     useReviewedAction: () => ({
       run: async (action: NonNullable<typeof mocks.action>) => {
         mocks.action = action;
+        mocks.duringReview?.();
         try {
           await action.reverify?.(action.calls[0], 0);
         } catch (error) {
@@ -82,6 +85,7 @@ beforeEach(() => {
   mocks.account = creator;
   mocks.result = { status: "done", hashes: [HASH], receipts: [{}] };
   mocks.action = undefined;
+  mocks.duringReview = undefined;
   mocks.write.mockReset();
   vi.spyOn(Date, "now").mockReturnValue(Number(NOW) * 1000);
   values = {
@@ -187,15 +191,13 @@ describe("project recovery", () => {
 
   it("rechecks authentication and authority after review before disabling", async () => {
     mount();
-    await screen.findByRole("button", { name: "Disable API authentication" });
-    values.CREATOR = "0x9999999999999999999999999999999999999999";
-    await expect(
-      assertRecoveryStep(
-        props,
-        { functionName: "setAuthenticationEnabled", args: [false] },
-        creator,
-      ),
-    ).rejects.toThrow(/authority|creator|recovery/i);
+    // Authority moves while the review is open: the submitted step is refused, nothing is sent.
+    mocks.duringReview = () => {
+      values.CREATOR = "0x9999999999999999999999999999999999999999";
+    };
+    fireEvent.click(await screen.findByRole("button", { name: "Disable API authentication" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/authority|creator|recovery/i);
+    expect(mocks.write).not.toHaveBeenCalled();
     values.CREATOR = creator;
     values.authenticationEnabled = false;
     await expect(
@@ -361,11 +363,12 @@ describe("project recovery", () => {
 
   it("rechecks the role and state after review before signing", async () => {
     mount();
-    await screen.findByRole("button", { name: "Announce closure" });
-    values.CREATOR = "0x9999999999999999999999999999999999999999";
-    await expect(
-      assertRecoveryStep(props, { functionName: "announceWinddown", args: [] }, creator),
-    ).rejects.toThrow(/authority|creator|recovery/i);
+    mocks.duringReview = () => {
+      values.CREATOR = "0x9999999999999999999999999999999999999999";
+    };
+    fireEvent.click(await screen.findByRole("button", { name: "Announce closure" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/authority|creator|recovery/i);
+    expect(mocks.write).not.toHaveBeenCalled();
   });
 
   it("keeps a Safe proposal pending instead of claiming successful recovery", async () => {
@@ -400,10 +403,11 @@ describe("project recovery", () => {
     values.windingDown = true;
     values.stakedInfos = [0n, NOW, 1n];
     mount();
-    await screen.findByRole("button", { name: "Release backing" });
-    values.stakedInfos = [0n, NOW + 100n, 1n];
-    await expect(
-      assertRecoveryStep(props, { functionName: "claimDiemAndBeginVVVUnstake", args: [] }, creator),
-    ).rejects.toThrow(/not ready/i);
+    mocks.duringReview = () => {
+      values.stakedInfos = [0n, NOW + 100n, 1n];
+    };
+    fireEvent.click(await screen.findByRole("button", { name: "Release backing" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/not ready/i);
+    expect(mocks.write).not.toHaveBeenCalled();
   });
 });

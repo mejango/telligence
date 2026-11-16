@@ -49,6 +49,8 @@ vi.mock("@/hooks/useReviewedAction", () => ({
   failedLine: (result: { error: string }) => result.error,
   reviewedCall: (request: object, options: object) => ({ ...request, ...options }),
   useReviewedAction: () => ({
+    following: false,
+    dismiss: () => true,
     run: async (action: Action) => {
       mocks.assertWriteState = action.assertWriteState;
       const failed = (error: unknown, failure: unknown = error) => ({
@@ -60,10 +62,13 @@ vi.mock("@/hooks/useReviewedAction", () => ({
       try {
         action.assertWriteState?.();
         hash = await mocks.write(action.calls[0]);
-        await action.onSubmitted?.(action.calls[0], 0, hash, { safe: mocks.safe, adopted: false });
       } catch (error) {
         return failed(error);
       }
+      // As core does: a callback that throws is logged and never changes the run.
+      try {
+        await action.onSubmitted?.(action.calls[0], 0, hash, { safe: mocks.safe, adopted: false });
+      } catch {}
       if (mocks.safe) return { status: "proposed", step: 0, safeTxHash: hash };
       try {
         const receipt = await mocks.receipt(undefined, hash);
@@ -428,6 +433,28 @@ describe("compute launch wallet lifecycle", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("matching deployment event");
     expect(callsTo("/v1/projects")).toHaveLength(0);
     expect(localStorage.getItem(pendingLaunchKey(CREATOR))).not.toBeNull();
+  });
+
+  it("shows the submitted hash when its record cannot be saved and registration fails", async () => {
+    const setItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+      if (String(value).includes(HASH)) throw new Error("quota");
+      setItem.call(this, key, value);
+    });
+    mocks.gateway.mockImplementation(async (path: string) => {
+      if (path === "/v1/config") return CONFIG;
+      if (path === "/v1/projects/prepare")
+        return {
+          preparationId: PREPARATION_ID,
+          inferenceSigner: OTHER,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        };
+      throw new Error("Registration is unavailable.");
+    });
+    render(component());
+    clickLaunch();
+    expect(await screen.findByRole("alert")).toHaveTextContent(`Launch submitted as ${HASH}`);
+    vi.mocked(Storage.prototype.setItem).mockRestore();
   });
 
   it("allows another attempt only after a mined revert proves no project was created", async () => {

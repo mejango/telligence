@@ -10,6 +10,8 @@ const m = vi.hoisted(() => ({
   gateway: vi.fn(),
   read: vi.fn(),
   run: vi.fn(),
+  following: false,
+  dismiss: vi.fn(),
   preview: vi.fn(),
   refresh: vi.fn(),
 }));
@@ -36,7 +38,7 @@ vi.mock("@/hooks/useReviewedAction", () => ({
   failedLine: (result: { error: string }) => result.error,
   // The request and its hold options stand for the reviewed call.
   reviewedCall: (request: object, options: object) => ({ ...request, ...options }),
-  useReviewedAction: () => ({ run: m.run }),
+  useReviewedAction: () => ({ run: m.run, following: m.following, dismiss: m.dismiss }),
 }));
 vi.mock("@/lib/safe-connector", () => ({ isSafeConnection: () => false }));
 vi.mock("@/lib/telligence/api", () => ({
@@ -131,6 +133,7 @@ beforeEach(() => {
   localStorage.clear();
   m.address = project.creatorAddress;
   m.gateway.mockResolvedValue(config);
+  m.following = false;
   m.run.mockReset();
   m.run.mockResolvedValue({ status: "done", hashes: [hash, hash], receipts: [{}, paidReceipt()] });
   m.preview.mockResolvedValue({
@@ -255,6 +258,24 @@ describe("reviewed compute contributions", () => {
     render(<FundComputeProject project={project} />);
     contribute();
     await screen.findByText(/waiting in your Safe/);
+    expect(screen.queryByText(/Contribution confirmed/)).not.toBeInTheDocument();
+  });
+  it("lets a supporter stop waiting on a sent payment without calling it confirmed or unsent", async () => {
+    const wait = Promise.withResolvers<null>();
+    m.following = true;
+    m.run.mockImplementation(
+      async (running: { onSubmitted: (call: object, step: number) => void }) => {
+        running.onSubmitted({}, 1);
+        return wait.promise;
+      },
+    );
+    render(<FundComputeProject project={project} />);
+    contribute();
+    fireEvent.click(await screen.findByRole("button", { name: "Stop waiting" }));
+    expect(m.dismiss).toHaveBeenCalled();
+    // Core ends the wait with null and keeps following the payment.
+    await act(async () => wait.resolve(null));
+    expect(await screen.findByText(/Your contribution was sent/)).toBeInTheDocument();
     expect(screen.queryByText(/Contribution confirmed/)).not.toBeInTheDocument();
   });
   it("shows a failed run's own line, and nothing for a closed review", async () => {

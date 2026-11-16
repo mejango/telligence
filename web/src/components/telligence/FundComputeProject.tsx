@@ -35,7 +35,7 @@ const policyTerminalAbi = parseAbi(["function TERMINAL() view returns (address)"
 export function FundComputeProject({ project }: { project: ProjectSnapshot }) {
   const { address } = useAccount();
   const wallet = useConfig();
-  const { run } = useReviewedAction();
+  const { run, following, dismiss } = useReviewedAction();
   const router = useRouter();
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
@@ -170,6 +170,7 @@ export function FundComputeProject({ project }: { project: ProjectSnapshot }) {
       // Held by the project and supporter alone: one contribution at a time, whatever the amount.
       const intent = payIntent({ chainId: 8453, project: projectId, beneficiary: supporter });
       const approval = allowance < value;
+      let sent = false;
       const result = await run({
         account: supporter,
         title: "Review your contribution",
@@ -215,11 +216,16 @@ export function FundComputeProject({ project }: { project: ProjectSnapshot }) {
               : "Confirm your contribution in the wallet…",
           ),
         onSubmitted: (_call, step) => {
-          if (!approval || step === 1) setMessage("Waiting for your contribution to confirm…");
+          if (approval && step === 0) return;
+          sent = true;
+          setMessage("Waiting for your contribution to confirm…");
         },
       });
       if (!result) {
-        setMessage("");
+        // Closed before sending, or the wait was ended: a sent payment is still followed.
+        setMessage(
+          sent ? "Your contribution was sent. Check your wallet for its confirmation." : "",
+        );
         return;
       }
       if (result.status === "failed") throw new Error(failedLine(result));
@@ -292,7 +298,12 @@ export function FundComputeProject({ project }: { project: ProjectSnapshot }) {
       </p>
       {message && (
         <p role="status" className="mt-4 text-xs leading-6">
-          {message}
+          {message}{" "}
+          {following && (
+            <button type="button" className="compute-text-link" onClick={() => dismiss()}>
+              Stop waiting
+            </button>
+          )}
         </p>
       )}
       {error && (

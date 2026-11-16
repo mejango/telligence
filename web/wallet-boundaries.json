@@ -59,7 +59,7 @@
     },
     {
       "file": "src/components/telligence/LaunchComputeProjectButton.tsx",
-      "line": 292,
+      "line": 297,
       "api": "request",
       "boundary": "The SDK's browserLocks().request (Web Locks) holds one launch per creator across tabs, never a wallet RPC.",
       "test": "test/telligence-launch-lifecycle.test.tsx"

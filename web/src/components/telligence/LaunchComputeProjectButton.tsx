@@ -62,7 +62,7 @@ export function LaunchComputeProjectButton({
   const wallet = useConfig();
   const router = useRouter();
   const auth = useCreatorSession();
-  const { run } = useReviewedAction();
+  const { run, following, dismiss } = useReviewedAction();
   const [pending, setPending] = useState<PendingLaunch | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -102,6 +102,8 @@ export function LaunchComputeProjectButton({
     working.current = true;
     setBusy(true);
     setError(null);
+    /** The line for a sent launch whose record this browser could not save. */
+    let unsaved: string | undefined;
     const creator = getAccount(wallet).address;
     const generation = lifecycle.current;
     const csrfToken = auth.session.csrfToken;
@@ -266,17 +268,20 @@ export function LaunchComputeProjectButton({
               try {
                 localStorage.setItem(pendingLaunchKey(creator), JSON.stringify(intent));
               } catch {
-                throw new Error(
-                  `Launch submitted as ${hash}. Browser storage failed; keep this hash to recover registration. Do not launch again.`,
-                );
+                // The run goes on whatever this callback does, so the line is shown if it ends short of registration.
+                unsaved = `Launch submitted as ${hash}. Browser storage failed; keep this hash to recover registration. Do not launch again.`;
               }
             },
           });
-          if (!result) return null;
+          if (!result) {
+            if (unsaved) throw new Error(unsaved);
+            return null;
+          }
           if (result.status === "failed") {
             if (revertedStep(result.failure) === 0) {
               localStorage.removeItem(pendingLaunchKey(creator));
               setPending(null);
+              unsaved = undefined;
               throw new Error("The launch reverted. No project was created; review and try again.");
             }
             throw new Error(failedLine(result));
@@ -335,9 +340,10 @@ export function LaunchComputeProjectButton({
       router.push(`/compute/${project.id}/keys`);
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "The project could not be launched. Try again.",
+        unsaved ??
+          (failure instanceof Error
+            ? failure.message
+            : "The project could not be launched. Try again."),
       );
     } finally {
       working.current = false;
@@ -377,7 +383,12 @@ export function LaunchComputeProjectButton({
       )}
       {busy && (
         <p role="status" className="text-xs leading-6 text-melon-700">
-          {message}
+          {message}{" "}
+          {following && (
+            <button type="button" className="compute-text-link" onClick={() => dismiss()}>
+              Stop waiting
+            </button>
+          )}
         </p>
       )}
       {(error || auth.error) && (
