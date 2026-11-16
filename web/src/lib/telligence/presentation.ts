@@ -167,7 +167,7 @@ export function validateComputeDraft(draft: ComputeProjectDraft, creator?: strin
     draft.cashOutTaxBps < 0 ||
     draft.cashOutTaxBps >= 10_000
   )
-    errors.cashOutTaxBps = "The cash-out tax must be at least 0% and below 100%.";
+    errors.cashOutTaxBps = "The cash out tax must be at least 0% and below 100%.";
   if (
     !draft.recoveryAddress ||
     (creator !== undefined && draft.recoveryAddress.toLowerCase() === creator.toLowerCase())

@@ -86,7 +86,7 @@ test("compute launch leads with purpose and keeps network policy fixed", async (
   await expect(page.getByText("VVV", { exact: true })).toBeVisible();
   await expect(page.getByText("40%", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("Cash-out tax", { exact: true }).locator("..").getByText("10%", { exact: true }),
+    page.getByText("Cash out tax", { exact: true }).locator("..").getByText("10%", { exact: true }),
   ).toBeVisible();
   await expect(page.locator('a[href*="/undefined/"]')).toHaveCount(0);
   await expectContained(page, [

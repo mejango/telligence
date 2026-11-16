@@ -287,7 +287,7 @@ export function FundComputeProject({ project }: { project: ProjectSnapshot }) {
       </ButtonWithWallet>
       <p className="mt-4 text-[11px] leading-5 text-melon-700">
         Normal Revnet issuance and buybacks apply. You receive participation tokens in your wallet.
-        Cash-out value varies; compute backing has withdrawal delays. The payment quote allows up to
+        Cash out value varies; compute backing has withdrawal delays. The payment quote allows up to
         1% slippage.
       </p>
       {message && (

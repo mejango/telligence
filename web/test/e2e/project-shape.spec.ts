@@ -508,7 +508,7 @@ test("home and discover shells stay contained and deterministic", async ({ page 
       exact: true,
     }),
   ).toBeVisible();
-  await expect(page.getByText("04 / Share the rewards", { exact: true })).toBeVisible();
+  await expect(page.getByText("04 / Share what comes back", { exact: true })).toBeVisible();
   await expect(
     page.getByText("Return rewards to the revnet for supporters to share.", { exact: true }),
   ).toBeVisible();

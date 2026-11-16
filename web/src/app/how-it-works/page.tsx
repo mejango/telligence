@@ -52,16 +52,15 @@ export default function Page() {
                 What your contribution does
               </h2>
               <p className="mt-5">
-                The revnet accepts funding on Base, with VVV as its accounting and reserve asset.
-                Normal Revnet issuance and market buybacks stay in place. Supporters receive
-                participation in the revnet; a fixed production split goes to the project&apos;s
-                policy wrapper.
+                The revnet accepts funding on Base in VVV, and holds its balance in VVV. Normal
+                Revnet issuance and market buybacks stay in place. Supporters receive participation
+                in the revnet; a fixed production split goes to the project&apos;s policy wrapper.
               </p>
               <p className="mt-4">
                 The wrapper can cash out its production allocation for VVV and send the proceeds to
-                the compute vault. Cash-out taxes, available reserves, market routing, and execution
-                affect how much VVV arrives. A 40% production split is a share of tokens produced,
-                not a promise that 40% of money contributed becomes compute.
+                the compute vault. The cash out tax, the revnet&apos;s balance, market routing, and
+                execution affect how much VVV arrives. A 40% production split is a share of tokens
+                produced, not a promise that 40% of money contributed becomes compute.
               </p>
               <p className="mt-4">
                 The vault stakes VVV, locks the resulting sVVV for DIEM, and stakes that DIEM. It
@@ -112,9 +111,9 @@ export default function Page() {
             <section>
               <h2 className="text-2xl tracking-[-0.04em] text-melon-950">Understand the way out</h2>
               <p className="mt-5">
-                Compute backing is not part of the liquid reserve supporters can immediately cash
-                out. Unwinding a position follows the provider&apos;s sequential cooldowns and the
-                vault&apos;s recovery policy. Cooldowns can change; recovery is not instant.
+                Compute backing is not part of the balance holders can cash out at once. Unwinding a
+                position follows the provider&apos;s sequential cooldowns and the vault&apos;s
+                recovery policy. Cooldowns can change; recovery is not instant.
               </p>
               <p className="mt-4">
                 Recovered VVV returns to the revnet through its balance-return path. That benefits

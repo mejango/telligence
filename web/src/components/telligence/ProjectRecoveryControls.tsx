@@ -330,8 +330,8 @@ export function ProjectRecoveryControls(props: ProjectRecoveryControlsProps) {
         Project recovery
       </h2>
       <p className="mt-4 text-sm leading-7 text-melon-800">
-        Backing returns to this project&apos;s revnet under its cashout rules. Original contributors
-        are not individually refunded.
+        Backing returns to this project&apos;s revnet under its cash out rules. Original
+        contributors are not individually refunded.
       </p>
       {query.isPending && (
         <p role="status" className="mt-4 text-sm text-melon-700">

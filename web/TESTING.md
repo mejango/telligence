@@ -142,9 +142,10 @@ Base fork proof and separately authorized live creation/stream qualification.
 
 <!-- wallet-inventory:telligence-creator-signature -->
 Telligence creator authentication uses `useReviewedCreatorSignature.ts`. The exact
-EIP-4361 sign-in message is reviewed before signing, bound to this site's origin,
-the connected wallet, Base, and a five-minute nonce. Account, network, expiry, and
-View as state are checked before and after the wallet prompt. Executable coverage
+EIP-4361 sign-in message is reviewed and signed through the SDK's `signReviewed`,
+bound to this site's origin, the connected wallet, Base, and a five-minute nonce.
+Account, network, expiry, and View as state are checked before and after the wallet
+prompt. Executable coverage
 in `test/telligence-auth.test.tsx` rejects altered domains, authority, resources,
 expired messages, and account changes. `test/telligence-keys.test.tsx` covers
 project-bound creation and revocation, one-time secrets, CSRF, budget validation,
@@ -152,17 +153,20 @@ loading failures, and wallet/project change races.
 
 
 <!-- wallet-inventory:telligence-funding -->
-Telligence contributions use `FundComputeProject.tsx`. The action test pins an exact
-VVV approval, fresh stock-route payment quote, canonical factory/vault/terminal
-bindings, and the confirmed payment event. Account, project, unmount, uncertain
-receipt, and pending transaction changes stop a duplicate or stale submission.
+Telligence contributions use `FundComputeProject.tsx`. One reviewed run carries the
+exact VVV approval, when the allowance needs it, and the stock terminal payment,
+held by the SDK's pay intent so a retry adopts the first attempt. The action test
+pins the canonical factory/vault/terminal bindings, the payment's own event as the
+confirmation, a Safe proposal staying pending, and refusal after an account, project,
+unmount, or wind-down change.
 
 <!-- wallet-inventory:telligence-launch -->
 Telligence launches use `LaunchComputeProjectButton.tsx`. The action suite binds the
 reviewed factory and immutable policy to the signed transaction, preserves submitted
 intent through reloads and account changes, refuses corrupt recovery records, and
 registers only the unique matching confirmed deployment event. A per-creator lock
-prevents two tabs from preparing concurrent submissions.
+from the SDK's `browserLocks()` prevents two tabs from preparing concurrent
+submissions, and a Safe proposal stays saved until the Safe executes it.
 
 <!-- wallet-inventory:telligence-recovery -->
 Compute recovery uses `ProjectRecoveryControls.tsx` and the generated contract ABIs.

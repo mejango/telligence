@@ -73,9 +73,9 @@ export default function Page() {
             </p>
           </div>
           <div className="border-t border-melon-300 pt-6 md:pt-8 md:pl-8 lg:border-t-0 lg:pt-0">
-            <p className="compute-eyebrow">04 / Share the rewards</p>
+            <p className="compute-eyebrow">04 / Share what comes back</p>
             <p className="mt-3 text-sm leading-7">
-              Return rewards to the revnet for supporters to share.
+              Revenue paid into the revnet adds to the balance its holders share.
             </p>
           </div>
         </section>

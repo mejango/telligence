@@ -85,8 +85,8 @@ Preserve these existing boundaries:
 
 | Source module | Purpose |
 |---|---|
-| `src/lib/transaction-review.ts`, `src/hooks/useReviewedWriteContract.ts` | Reviewed, simulated wallet writes |
-| `src/lib/waitForReceipt.ts`, `src/lib/transaction-activity.ts` | Submission/proposal/execution tracking |
+| `src/hooks/useReviewedAction.ts`, `src/lib/reviewed-call.ts` | Reviewed, simulated wallet writes |
+| `src/lib/transaction-activity.ts` | Submission/proposal/execution tracking |
 | `src/lib/bendystraw/*` | Registered and validated query transport |
 | `src/app/[slug]/*` route resolution/fallback | Stable project identity and onchain fallback |
 | Metadata/IPFS helpers | Bounded metadata and media handling |

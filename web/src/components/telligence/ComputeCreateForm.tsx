@@ -156,13 +156,13 @@ export function ComputeCreateForm() {
               <TokenAllocation draft={draft} />
               <p className="mt-4 text-xs leading-6 text-melon-700">
                 These shares are fixed at launch. Operator tokens go to your creator wallet and have
-                the same transfer and cash-out rights as funder tokens.
+                the same transfer and cash out rights as funder tokens.
               </p>
             </div>
             <div className="mt-8 border border-melon-300 bg-melon-50 p-5 text-xs leading-6">
               <p>
                 This launches a Base revnet with a {draft.productionSplitBps / 100}% compute
-                production split and a {draft.cashOutTaxBps / 100}% cash-out tax. The production
+                production split and a {draft.cashOutTaxBps / 100}% cash out tax. The production
                 split is a share of project tokens, not a fixed share of your supporters&apos;
                 money.
               </p>
@@ -332,10 +332,8 @@ export function ComputeCreateForm() {
                 />
                 {errorFor("recoveryAddress")}
                 <p className="mt-3 text-xs leading-6 text-melon-700">
-                  Choose a separate recovery wallet. If the creator wallet is lost, this address is
-                  the only way to start recovery: it can pause allocation and begin the published
-                  wind-down. Recovered backing returns to the revnet. This authority is fixed at
-                  launch.
+                  Fixed at launch. It can pause allocation and start the wind-down, which returns
+                  backing to the revnet.
                 </p>
               </div>
               <details className="mt-5 border-y border-melon-300 py-5">
@@ -350,13 +348,13 @@ export function ComputeCreateForm() {
                     <dd>VVV</dd>
                   </div>
                   <div className="flex justify-between gap-4">
-                    <dt>Cash-out tax</dt>
+                    <dt>Cash out tax</dt>
                     <dd>{draft.cashOutTaxBps / 100}%</dd>
                   </div>
                 </dl>
                 <p className="mt-5 text-xs leading-6 text-melon-700">
                   Normal issuance and buybacks apply. A 40% production split does not mean 40% of
-                  money raised becomes compute. Cash-out economics and execution affect the actual
+                  money raised becomes compute. Cash out economics and execution affect the actual
                   amount. Recovered backing returns to the revnet for current holders under its
                   rules.
                 </p>
