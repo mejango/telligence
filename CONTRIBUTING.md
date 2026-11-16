@@ -48,6 +48,12 @@ inheritance cannot block it. Root and web keep `allow-git=none`. Do not broaden
 this to `all`; update the explicit pins and dependency-policy regression test
 when a reviewed source change is required.
 
+To take Revnet Money's changes into `web/`, merge its history so shared files
+stay recognizable: `git remote add revnet-money https://github.com/mejango/revnet-money`,
+`git fetch revnet-money`, then `git merge -X subtree=web revnet-money/main`. Keep
+Telligence's pages and Base scope in the conflicts, run `npm --prefix web run check`,
+and record the merged commit in the README.
+
 `contracts/lib/*/UPSTREAM` records imported source revisions. Preserve those
 files when updating stock source. Do not modify vendored implementations in a
 feature PR. Upstream deployment addresses are independently pinned in the

@@ -41,6 +41,7 @@ docs/                      Architecture, evidence, and implementation records
 
 The frontend history starts at Revnet Money commit
 `e23a69e7ce060672d131bee461778179bcb026bf`; its files were moved under `web/`.
+It was last merged with Revnet Money `6dc9564e` on 2026-11-16.
 The separate `plugin/` application is outside this repository.
 
 ## Develop

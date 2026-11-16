@@ -13,13 +13,13 @@ Bring the Telligence webclient up to the current Revnet Money baseline (UX, DX, 
 
 ## Work items
 
-- [ ] 1. Merge upstream into web/, resolve the 43 conflicts
-- [ ] 2. Install on Node 26 / npm 12, fix typecheck in Telligence-owned code
-- [ ] 3. Lint, unit tests, wallet-write inventory, source and protocol checks
-- [ ] 4. Browser build, bundle and standalone checks, Playwright
-- [ ] 5. Copy review of Telligence-owned surfaces against the canon (no middots, plain facts, money-risk caveats only, balance sheet, cash out, holders, JBP6, no inline glossary, short hints)
-- [ ] 6. Agent and developer surfaces: llms.txt, AGENTS.md, README/TESTING/DEPLOYMENT, CI workflows at the repo root
-- [ ] 7. Render desktop and phone against live data, fix what shows
+- [x] 1. Merge upstream into web/, resolve the 43 conflicts
+- [x] 2. Install on Node 26 / npm 12, fix typecheck in Telligence-owned code
+- [x] 3. Lint, unit tests, wallet-write inventory, source and protocol checks
+- [x] 4. Browser build, bundle and standalone checks, Playwright
+- [x] 5. Copy review of Telligence-owned surfaces against the canon (no middots, plain facts, money-risk caveats only, balance sheet, cash out, holders, JBP6, no inline glossary, short hints)
+- [x] 6. Agent and developer surfaces: llms.txt, AGENTS.md, README/TESTING/DEPLOYMENT, CI workflows at the repo root
+- [x] 7. Render desktop and phone against live data, fix what shows
 - [ ] 8. Codex review, fix, open PR (no merge without jango's go-ahead)
 
 ## Review
