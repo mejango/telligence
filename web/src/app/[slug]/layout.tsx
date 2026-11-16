@@ -88,7 +88,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
   const route = await resolveProjectRoute(encodedSlug ?? "");
   if (!route) {
-    const title = "Revnet";
+    const title = "Telligence";
     const description = REVNET_ONE_LINER;
     const imageUrl = new URL("/assets/img/revnet-social.png", assetOrigin).href;
     return buildMetadata({
@@ -127,7 +127,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   }
 
   return buildMetadata({
-    title: project?.name ? `${project.name} | REVNET` : "Revnet",
+    title: project?.name ? `${project.name} | Telligence` : "Telligence",
     description:
       projectPreviewSlogan(project?.projectTagline, project?.description) || REVNET_ONE_LINER,
     imageUrl,

@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import type { Metadata } from "next";
 import { NotFoundMessage, NotFoundNav } from "./NotFoundMessage";
 
-export const metadata: Metadata = { title: "Not found | Revnet" };
+export const metadata: Metadata = { title: "Not found | Telligence" };
 
 export default function NotFound() {
   return (

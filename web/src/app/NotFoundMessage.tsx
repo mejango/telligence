@@ -29,7 +29,7 @@ function messageFor(pathname: string) {
 export function NotFoundMessage() {
   // The metadata of the layout that threw overwrites this page's own title after hydration.
   useEffect(() => {
-    document.title = "Not found | Revnet";
+    document.title = "Not found | Telligence";
   }, []);
   // The prebuilt 404 is rendered for "/_not-found", so the path is named once the browser knows it.
   const hydrated = useHydrated();

@@ -19,9 +19,9 @@ describe("not-found page", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Not found");
     expect(screen.getByRole("link", { name: "Return Home" })).toHaveAttribute("href", "/");
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    expect(metadata.title).toBe("Not found | Revnet");
+    expect(metadata.title).toBe("Not found | Telligence");
     // The metadata of the layout that threw would otherwise replace it after hydration.
-    expect(document.title).toBe("Not found | Revnet");
+    expect(document.title).toBe("Not found | Telligence");
   });
 
   it.each([
